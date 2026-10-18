@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Ban, CircleCheck, CircleDot, CircleDashed, CircleMinus, CircleSlash, CircleX, FilePlus, type LucideIcon } from 'lucide-react';
+import { ArrowRight, Ban, CircleCheck, CircleDot, CircleDashed, CircleMinus, CircleSlash, CircleX, FilePlus, type LucideIcon } from 'lucide-react';
 import { requestJson } from '../../lib/api';
 import { apiErrorMessage } from '../../lib/error-messages';
 import { buildDetailHref } from '../../lib/route-params';
@@ -50,17 +50,22 @@ function CheckList({ category, mode }: { category: CoverageCategory; mode: 'cata
   if (!category.checks.length) return <span className="rc-muted">No check</span>;
   const visible = category.checks.slice(0, MAX_VISIBLE_CHECKS);
   const hidden = category.checks.slice(MAX_VISIBLE_CHECKS);
-  const item = (check: CoverageCategory['checks'][number]) => (
-    <li key={check.checkId}>
-      {check.present
-        ? <a className="detail-entity-link" href={buildDetailHref('check-detail', check.checkId)}>{plainCheckName(check.name)}</a>
-        : <span>{check.checkId} <span className="rc-muted">(not in this catalog)</span></span>}
-      <span className="rc-check-meta">
-        {ASSURANCE_META[check.assurance as keyof typeof ASSURANCE_META]?.label ?? 'Missing'}
-        {mode === 'target' ? ` · ${check.stale ? 'Older than the freshness window' : check.statusLabel || 'Not run'}${check.observedAt && !check.stale ? `, ${formatDate(check.observedAt)}` : ''}` : ''}
-      </span>
-    </li>
-  );
+  const item = (check: CoverageCategory['checks'][number]) => {
+    const assurance = check.assurance === category.assurance ? '' : ASSURANCE_META[check.assurance as keyof typeof ASSURANCE_META]?.label ?? 'Missing';
+    const statusText = check.stale ? 'Older than the freshness window' : check.statusLabel || 'Not run';
+    const status = mode !== 'target' || (!check.stale && !check.observedAt && statusText === category.statusLabel)
+      ? ''
+      : `${statusText}${check.observedAt && !check.stale ? `, ${formatDate(check.observedAt)}` : ''}`;
+    const meta = [assurance, status].filter(Boolean).join(' · ');
+    return (
+      <li key={check.checkId}>
+        {check.present
+          ? <a className="detail-entity-link" href={buildDetailHref('check-detail', check.checkId)}>{plainCheckName(check.name)}</a>
+          : <span>{check.checkId} <span className="rc-muted">(not in this catalog)</span></span>}
+        {meta ? <span className="rc-check-meta">{meta}</span> : null}
+      </li>
+    );
+  };
   return (
     <>
       <ul className="rc-checks">{visible.map(item)}</ul>
@@ -89,9 +94,10 @@ function NextStep({ category, mode, targetId, canWrite }: { category: CoverageCa
   if (mode === 'target' && category.missingWithoutCta) return <span className="rc-reason">Needs {category.missingWithoutCta} on this target.</span>;
   if (mode === 'catalog' && category.requiredSentence) return <span className="rc-reason">Needs on each target: {category.requiredSentence}.</span>;
   if (category.assurance === 'soc_only') return <span className="rc-reason">Request through AstraNull SOC. <a className="detail-entity-link" href="#support">Contact SOC</a></span>;
-  if (mode === 'target' && category.status === 'not_run') return <span className="rc-reason">Run the covering checks from the Validate tab.</span>;
-  if (mode === 'target' && category.status === 'covered_fail') return <span className="rc-reason">Review the failing check and its finding on the Validate and Findings tabs.</span>;
-  if (mode === 'target' && category.status === 'inconclusive') return <span className="rc-reason">Open the inconclusive check on the Validate tab to see why it could not conclude.</span>;
+  const validateHref = `${buildDetailHref('target-detail', targetId)}&tab=validate`;
+  if (mode === 'target' && category.status === 'not_run') return <a className="rc-link" href={validateHref}>Run covering checks<ArrowRight size={13} aria-hidden="true" /></a>;
+  if (mode === 'target' && category.status === 'covered_fail') return <a className="rc-link" href={validateHref}>Review failing check<ArrowRight size={13} aria-hidden="true" /></a>;
+  if (mode === 'target' && category.status === 'inconclusive') return <a className="rc-link" href={validateHref}>See why it is inconclusive<ArrowRight size={13} aria-hidden="true" /></a>;
   return <span className="rc-muted">—</span>;
 }
 
@@ -233,7 +239,7 @@ export function RuleCoveragePanel({ config, session, targetId = '', canWrite = f
         <Heading id={titleId}>Rule coverage</Heading>
         <p>
           {mode === 'target'
-            ? 'For each WAF and network-firewall rule family: the most AstraNull can conclude from outside, what this target\'s fresh results show, and what to declare or run next.'
+            ? 'What AstraNull can conclude from outside for each WAF and network-firewall rule family, and what to declare or run next.'
             : 'For each WAF and network-firewall rule family: the most AstraNull can conclude from outside-in evidence and which checks cover it. Pick a target to see its current status.'}
         </p>
       </header>

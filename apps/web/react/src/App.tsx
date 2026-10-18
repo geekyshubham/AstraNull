@@ -276,10 +276,13 @@ export default function App() {
         e.preventDefault();
         const currentFull = window.location.pathname + window.location.search + window.location.hash;
         if (currentFull !== href) {
+          const previousHash = window.location.hash;
           window.history.pushState(null, '', href);
           setPath(window.location.pathname);
           setSearch(window.location.search);
           setRoute(getRouteFromLocation());
+          // pushState never fires hashchange, so same-route detail→detail links (e.g. a subdomain under its parent) would otherwise keep the stale entity id.
+          if (window.location.hash !== previousHash) window.dispatchEvent(new Event('hashchange'));
         }
       }
     }

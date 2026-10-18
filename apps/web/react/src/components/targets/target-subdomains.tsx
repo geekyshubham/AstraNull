@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Network, RefreshCw } from 'lucide-react';
+import { Network, RefreshCw, Search } from 'lucide-react';
 import { requestDiscoveryStream, requestJson } from '../../lib/api';
 import { apiErrorMessage } from '../../lib/error-messages';
 import { buildDetailHref } from '../../lib/route-params';
-import { formatDate } from '../../lib/utils';
+import { countLabel, formatDate } from '../../lib/utils';
 import { providerName } from '../../lib/domain-checks.mjs';
 import { ConfirmModal } from '../../lib/crud-ui';
 import type { DataItem, PortalConfig, Session } from '../../lib/types';
@@ -178,41 +178,45 @@ export function TargetSubdomains({ target, config, session, canWrite, canStart }
 
   if (parentId) return <section className="td-section"><h2>Subdomains</h2><p>This host was imported under its parent domain. <a href={`${buildDetailHref('target-detail', parentId)}&tab=subdomains`}>Review the parent&apos;s subdomains</a>.</p></section>;
   if (target.kind !== 'fqdn') return <EmptyState icon={Network} title="Domain target required" body="Subdomain enumeration is available on declared domain targets." />;
-  return <section className="td-section" aria-labelledby="subdomain-title">
-    <header className="td-section-head"><div><h2 id="subdomain-title">Subdomains</h2><p>Review declared and imported hosts under this domain. Provider fingerprints do not establish WAF effectiveness.</p></div>
+  const sourceNote = inventory && sourceConfigured && sourceLabel ? `Source: ${sourceLabel}. Only hostnames strictly under ${text(target.value)} are imported; the lookup sends no traffic to them.` : '';
+  return <section className="td-section td-subdomains" aria-labelledby="subdomain-title">
+    <header className="td-section-head"><div><h2 id="subdomain-title">Subdomains</h2><p>Declared and imported hosts under <span className="mono">{text(target.value)}</span>. Provider fingerprints do not establish WAF effectiveness.</p></div>
       <div className="td-actions">
-        <Button variant="secondary" disabled={busy} onClick={() => { setError(''); setRefresh((value) => value + 1); }}><RefreshCw size={16} aria-hidden="true" />Refresh</Button>
-        {canWrite ? <Button variant="secondary" disabled={!inventory || !sourceConfigured || busy} onClick={() => setReview('enumerate')}>Discover and add subdomains</Button> : null}
-        {canStart ? <Button disabled={!canDetect || busy || pending.length > 0} onClick={() => setReview('detect')}>Detect unchecked hosts</Button> : null}
+        <Button variant="ghost" size="sm" className="td-icon-button" aria-label="Refresh subdomains" title="Refresh" disabled={busy} onClick={() => { setError(''); setRefresh((value) => value + 1); }}><RefreshCw size={16} aria-hidden="true" /></Button>
+        {canWrite ? <Button variant="secondary" disabled={!inventory || !sourceConfigured || busy} title={sourceNote || undefined} onClick={() => setReview('enumerate')}>Discover and add subdomains</Button> : null}
+        {canStart && unchecked.length ? <Button disabled={!canDetect || busy || pending.length > 0} onClick={() => setReview('detect')}>Detect unchecked hosts</Button> : null}
       </div>
     </header>
-    {error ? <p role="alert" className="text-danger">{error}</p> : null}
-    {message ? <p role="status">{message}</p> : null}
-    {busy && runningAction === 'enumerate' ? <div>
+    {error ? <p role="alert" className="form-banner error">{error}</p> : null}
+    {message ? <p role="status" className="form-banner info">{message}</p> : null}
+    {busy && runningAction === 'enumerate' ? <div className="td-sub-progress">
       <p role="status">{progress.phase === 'declaring'
         ? `Declaring hostnames: ${Number(progress.completed) || 0} of ${Number(progress.total) || 0}.`
         : `Discovering hostnames under ${text(target.value)}. ${Number(progress.records) > 0 ? `${Number(progress.records)} source records read.` : 'Waiting for source results.'}`}</p>
-      <Button variant="secondary" onClick={stopDiscovery}>Stop discovery</Button>
+      <Button size="sm" variant="secondary" onClick={stopDiscovery}>Stop discovery</Button>
     </div> : null}
-    {pending.length ? <p role="status">Following {pending.length} queued observations. Detection results will appear per host.</p> : null}
-    {inventory && !sourceConfigured ? <p role="note">{NOT_CONFIGURED[text(source.reason)] ?? NOT_CONFIGURED_FALLBACK} Declared subdomains and existing observations are still available.</p> : null}
-    {inventory && sourceConfigured && sourceLabel ? <p className="td-muted">Discovery source: {sourceLabel}. Only hostnames strictly under {text(target.value)} are imported.</p> : null}
-    {record(inventory?.meta).truncated === true ? <p role="status">This is a partial inventory. Additional declared hosts can be reviewed in the Targets inventory.</p> : null}
-    {inventory && record(inventory.parent).ownership_verified !== true ? <p>Verify the parent domain before testing newly imported hosts. The server checks each host&apos;s ownership and testing limits.</p> : null}
-    {!canWrite ? <p>Your role can review subdomains; importing hosts requires write access.</p> : null}
+    {pending.length ? <p role="status" className="td-muted">Following {pending.length} queued observations. Detection results will appear per host.</p> : null}
+    {inventory && !sourceConfigured ? <p role="note" className="td-muted">{NOT_CONFIGURED[text(source.reason)] ?? NOT_CONFIGURED_FALLBACK} Declared subdomains and existing observations are still available.</p> : null}
+    {record(inventory?.meta).truncated === true ? <p role="status" className="td-muted">This is a partial inventory. Additional declared hosts can be reviewed in the Targets inventory.</p> : null}
+    {inventory && record(inventory.parent).ownership_verified !== true ? <p className="td-muted">Verify the parent domain before testing newly imported hosts. The server checks each host&apos;s ownership and testing limits.</p> : null}
+    {!canWrite ? <p className="td-muted">Your role can review subdomains; importing hosts requires write access.</p> : null}
     {!inventory && !error ? <EmptyState icon={Network} title="Loading subdomains" body="Reading this domain&apos;s declared hosts and recorded observations." variant="skeleton" /> : null}
-    {inventory ? <>
-      <label className="field"><span>Filter subdomains</span><input className="input" type="search" value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="Hostname" /></label>
-      <p>{visible.length} of {items.length} hosts shown. {unchecked.length} have not been checked.</p>
+    {inventory && items.length ? <>
+      <div className="td-sub-toolbar">
+        <label className="td-sub-filter"><Search size={15} aria-hidden="true" /><span className="sr-only">Filter subdomains</span><input type="search" value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="Filter by hostname" /></label>
+        <span className="td-muted tabular-nums">{filter ? `${visible.length} of ${items.length} hosts` : countLabel(items.length, 'host')}{unchecked.length ? ` · ${unchecked.length} not checked` : ''}</span>
+      </div>
       {visible.length ? <DataTable<DataItem> columns={columns} items={visible} getRowId={(row) => text(row.target_id)} empty={null} />
-        : <EmptyState icon={Network} title={items.length ? 'No matching subdomains' : 'No subdomains recorded'} body={items.length ? 'Change the hostname filter to see more hosts.' : 'Declare a child hostname or use the configured passive source to add subdomains. Initial provider detection is queued automatically; further checks are available in each host’s target workspace.'} />}
+        : <EmptyState icon={Network} title="No matching subdomains" body="Change the hostname filter to see more hosts." />}
+      {sourceNote ? <p className="td-muted td-sub-source">{sourceNote}</p> : null}
     </> : null}
+    {inventory && !items.length ? <EmptyState icon={Network} title="No subdomains recorded" body={`${sourceNote ? `${sourceNote} ` : ''}Initial provider detection is queued automatically for each host you add; further checks are available in each host’s target workspace.`} /> : null}
     <ConfirmModal open={review !== null} busy={busy} onCancel={() => setReview(null)} onConfirm={() => void confirm()}
       title={review === 'enumerate' ? 'Discover and declare subdomains?' : 'Start subdomain provider detection?'}
       confirmLabel={review === 'enumerate' ? 'Discover and add' : 'Start bounded detection'}
       description={review === 'enumerate'
-        ? <p>{sourceLabel || 'The configured passive source'} will look for hostnames strictly under {text(target.value)}. No traffic is sent to those hosts by this lookup. Newly found hostnames become declared child targets. Initial WAF/CDN detection is queued automatically and runs after ownership and safety requirements are met. You can follow progress and stop discovery from this page.</p>
-        : <p>Queues a bounded batch of unchecked child targets. Each fingerprint observation uses its own ownership, signed-worker, rate and safety checks. Provider detection does not test enforcement or capacity.</p>}
+        ? <p>Finds hostnames under {text(target.value)} from passive sources — no traffic is sent to them. New hosts are added as child targets and queued for WAF/CDN detection. You can stop discovery any time.</p>
+        : <p>Queues WAF/CDN detection for unchecked hosts. Each host runs its own safety checks; detection does not test enforcement or capacity.</p>}
     />
   </section>;
 }

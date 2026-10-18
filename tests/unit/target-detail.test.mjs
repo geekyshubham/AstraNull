@@ -178,7 +178,7 @@ describe('target-detail tag + ownership-step helpers', () => {
 
 describe('target-detail React contract', () => {
   it('leads with a stateful validation path and explicit check selection', () => {
-    assert.match(DETAIL_SOURCE, /Validate this target/);
+    assert.match(DETAIL_SOURCE, /aria-label="Start the selected check"/);
     assert.match(DETAIL_SOURCE, /review\.checkId !== startCheckId/);
     assert.match(DETAIL_SOURCE, /const reviewedCheckId = review\.checkId/);
     assert.match(DETAIL_SOURCE, /body: \{ target_id: entityId, check_id: reviewedCheckId \}/);

@@ -5,8 +5,11 @@ import './check-class-chips.css';
 
 type CheckLike = Record<string, unknown> | null | undefined;
 
-export function CheckClassChips({ check, className }: { check: CheckLike; className?: string }) {
-  const { layer, controls, declaration_only: declarationOnly } = classifyCheck(check);
+export function CheckClassChips({ check, className, omitLayer = false, omitControls = [], omitDeclaration = false }: { check: CheckLike; className?: string; omitLayer?: boolean; omitControls?: string[]; omitDeclaration?: boolean }) {
+  const classified = classifyCheck(check);
+  const layer = omitLayer ? null : classified.layer;
+  const controls = classified.controls.filter((control) => !omitControls.includes(control.id));
+  const declarationOnly = !omitDeclaration && classified.declaration_only;
   if (!layer && controls.length === 0 && !declarationOnly) return null;
   return (
     <span className={`check-class-chips${className ? ` ${className}` : ''}`} data-check-class="">

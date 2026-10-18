@@ -49,7 +49,7 @@ describe('portal accessibility hardening', () => {
     const landing = read('apps/web/react/src/pages/public-pages.tsx');
     const css = read('apps/web/react/src/styles.css');
 
-    assert.match(target, /className="table-wrap" tabIndex=\{0\} role="region" aria-label="Target facts, scrollable"/);
+    assert.match(target, /className="td-dimensions" role="region" aria-label="Coverage by readiness dimension" tabIndex=\{0\}/);
     assert.match(finding, /className="code" tabIndex=\{0\} role="region" aria-label="Finding custody chain YAML"/);
     assert.match(proof, /className="truth-table-viz" tabIndex=\{0\} role="region" aria-labelledby="truth-table-heading"/);
     assert.match(heatmap, /className="heatmap"\s*tabIndex=\{0\}\s*role="region"\s*aria-label="Vector coverage summary matrix, scrollable"/m);

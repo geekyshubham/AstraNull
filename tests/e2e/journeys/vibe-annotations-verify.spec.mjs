@@ -115,29 +115,28 @@ test.describe('Vibe annotations verification', () => {
       await expect(cluster.getByRole('heading', { level: 1, name: 'checkout.acme.com' })).toBeVisible();
       await expect(cluster).toContainText('Validation unlocked');
 
-      // Unified workspace geometry: one column; title, then tabs, then the panel, then target facts,
-      // all on the same left edge and inside the viewport.
+      // Unified workspace geometry: one column; title, then tabs, then the panel, all on the same
+      // left edge and inside the viewport. Target facts live in the header, not a trailing table.
       const geometry = await page.evaluate(() => {
         const rect = (node) => node?.getBoundingClientRect() ?? null;
         const h1 = rect(document.querySelector('#portal-main h1'));
         const tabs = rect(document.querySelector('#portal-main [role="tablist"]'));
         const panel = rect(document.querySelector('#portal-main [role="tabpanel"]'));
-        const facts = rect(document.querySelector('#portal-main section.td-facts'));
+        const facts = document.querySelector('#portal-main section.td-facts');
         return {
-          h1, tabs, panel, facts,
+          h1, tabs, panel, facts: Boolean(facts),
           viewport: document.documentElement.clientWidth,
           overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
         };
       });
-      for (const key of ['h1', 'tabs', 'panel', 'facts']) expect(geometry[key], key).not.toBeNull();
+      for (const key of ['h1', 'tabs', 'panel']) expect(geometry[key], key).not.toBeNull();
+      expect(geometry.facts, 'no duplicate target facts table').toBe(false);
       expect(geometry.tabs.top).toBeGreaterThan(geometry.h1.bottom);
       expect(geometry.panel.top).toBeGreaterThanOrEqual(geometry.tabs.bottom);
-      expect(geometry.facts.top).toBeGreaterThanOrEqual(geometry.panel.bottom);
-      for (const key of ['tabs', 'panel', 'facts']) {
+      for (const key of ['tabs', 'panel']) {
         expect(Math.abs(geometry[key].left - geometry.h1.left), `${key} shares the title's left edge`).toBeLessThanOrEqual(1);
         expect(geometry[key].right, `${key} stays inside the viewport`).toBeLessThanOrEqual(geometry.viewport + 1);
       }
-      expect(Math.abs(geometry.facts.width - geometry.panel.width)).toBeLessThanOrEqual(1);
       expect(geometry.overflow).toBeLessThanOrEqual(1);
 
       await page.screenshot({ path: `/tmp/vibe-3-target-detail-${viewport.width}.png` });

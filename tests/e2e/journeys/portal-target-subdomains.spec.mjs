@@ -44,7 +44,7 @@ for (const [theme, width] of [['dark', 1440], ['light', 375]]) {
     await expect(panel.getByRole('button', { name: 'Discover and add subdomains' })).toBeEnabled();
     const before = sourceCalls;
     await panel.getByRole('button', { name: 'Discover and add subdomains' }).click();
-    await expect(page.getByRole('dialog')).toContainText('Initial WAF/CDN detection is queued automatically');
+    await expect(page.getByRole('dialog')).toContainText('queued for WAF/CDN detection');
     await page.getByRole('dialog').getByRole('button', { name: 'Discover and add', exact: true }).click();
     await expect(panel.getByRole('status')).toContainText('Added');
     await expect(panel.locator('tbody')).toContainText('api.');
@@ -52,7 +52,7 @@ for (const [theme, width] of [['dark', 1440], ['light', 375]]) {
     await expect(panel.locator('tbody')).toContainText('Verified through parent');
     await expect(panel.locator('tbody')).not.toContainText(/Protected|Exposed/);
     await panel.getByRole('button', { name: 'Detect unchecked hosts' }).click();
-    await expect(page.getByRole('dialog')).toContainText('own ownership, signed-worker, rate and safety checks');
+    await expect(page.getByRole('dialog')).toContainText('runs its own safety checks');
     await page.getByRole('dialog').getByRole('button', { name: 'Start bounded detection' }).click();
     await expect(panel.getByRole('status').first()).toContainText('Queued 1');
     await expect(panel.locator('tbody a').first()).toHaveAttribute('href', /target-detail\?id=/);
@@ -61,14 +61,18 @@ for (const [theme, width] of [['dark', 1440], ['light', 375]]) {
     const axe = await new AxeBuilder({ page }).include('#td-panel-subdomains').analyze();
     expect(axe.violations).toEqual([]);
     await page.screenshot({ path: `/tmp/astranull-subdomains-${theme}-${width}.png`, fullPage: true });
+    const subHref = await panel.locator('tbody a').first().getAttribute('href');
+    const subId = subHref?.match(/id=([^&]+)/)?.[1] ?? '';
+    expect(subId).not.toBe(PORTAL_BASELINE_IDS.targetId);
     await panel.locator('tbody a').first().click();
     await waitForPortalRouteSettled(page);
+    await expect(page).toHaveURL(new RegExp(`id=${subId}`));
     await expect(page.getByRole('tab', { name: /Validate/ })).toBeVisible();
     await expect(page.getByRole('tab', { name: 'Findings' })).toBeVisible();
     await expect(page.getByRole('tab', { name: 'Changes & history' })).toBeVisible();
     await page.getByRole('tab', { name: /Validate/ }).click();
     await expect(page.locator('.td-checks')).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Plan validation' })).toBeEnabled();
+    await expect(page.locator('.td-checks').getByRole('button', { name: /^Review all \d+$/ })).toBeVisible();
   });
 }
 

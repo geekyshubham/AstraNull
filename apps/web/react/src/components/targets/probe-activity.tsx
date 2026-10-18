@@ -50,11 +50,11 @@ function describe(item: DataItem) {
   return `${stageLabel(item)}.${identity} The fields below are the recorded facts for this event.`;
 }
 
-function CaptureBlock({ label, value, empty = 'Empty recorded value' }: { label: string; value: unknown; empty?: string }) {
+export function CaptureBlock({ label, value, empty = 'Empty recorded value' }: { label: string; value: unknown; empty?: string }) {
   return <div className="probe-exchange-field"><h5>{label}</h5>{value == null ? <p className="probe-exchange-missing">Not recorded by worker</p> : <pre>{safeCaptureText(value) || empty}</pre>}</div>;
 }
 
-function ExchangeSide({ side, item, exchange }: { side: 'request' | 'response'; item: DataItem | null; exchange: RecordedExchange }) {
+export function ExchangeSide({ side, item, exchange }: { side: 'request' | 'response'; item: DataItem | null; exchange: RecordedExchange }) {
   const headers = captureHeaders(item?.[`${side}_headers`]);
   const title = side === 'request' ? 'Request' : 'Response';
   const available = item?.[`${side}_payload_available`];
@@ -176,7 +176,7 @@ export function ProbeActivityView({ runId, checkName, running: fallbackRunning, 
         {['max_probe_requests', 'max_destination_resolver_attempts', 'max_total_operations', 'timeout_ms', 'not_after', 'authority_version'].map((key) => <div key={key}><dt>{key.replaceAll('_', ' ')}</dt><dd>{(snapshot.authorized_bounds as DataItem | null)?.[key] != null ? String((snapshot.authorized_bounds as DataItem)[key]) : 'Not recorded'}</dd></div>)}
       </dl><p>These are signed authorization limits, not observed requests or duration. Worker identity is not a verified geographic or network perspective. Port, SNI and address family are shown only when an event recorded them.</p></details> : null}
       <div className="probe-exchanges" role="region" aria-label="Correlated request and response exchanges">
-        <h3>Request / Response</h3><p className="probe-exchange-intro">Inspect the recorded request and response together. Sensitive values are hidden; older logs may not include all details.</p>
+        {exchanges.length || search || filter !== 'all' ? <><h3>Request / Response</h3><p className="probe-exchange-intro">Inspect the recorded request and response together. Sensitive values are hidden; older logs may not include all details.</p></> : null}
         {exchanges.map((exchange, index) => <ExchangeInspector key={exchange.id} exchange={exchange} open={expandedExchange === exchange.id || expandedExchange === null && index === 0} onToggle={() => setExpandedExchange(expandedExchange === exchange.id || expandedExchange === null && index === 0 ? '' : exchange.id)} />)}
         {!exchanges.length ? <p className="probe-exchange-empty">{search || filter !== 'all' ? 'No recorded exchanges match these filters.' : !runId ? 'Select a check to inspect its recorded exchange.' : grouped.lifecycle.length ? 'Correlated exchange capture was not recorded by this worker. Legacy lifecycle events remain available below and are not paired.' : running ? 'Waiting for worker-recorded exchanges. Planned requests are not shown as sent.' : 'No exchange capture recorded. A final summary does not reconstruct requests or responses.'}</p> : null}
       </div>
@@ -206,7 +206,7 @@ export function ProbeActivityView({ runId, checkName, running: fallbackRunning, 
         </table>
       </div>
       </details>
-      <p className="probe-activity-note">Expand an exchange or event for the recorded method, endpoint, protocol, vector, status and bounded payload. Previews retain up to 2 KiB and may be partial; credentials and declared private query values are redacted. Missing port, SNI, address family or source perspective remain not recorded. Informational activity never substitutes for verdict evidence or internal-origin visibility.</p>
+      <details className="probe-activity-authority probe-activity-about"><summary>About recorded activity</summary><p>Expand an exchange or event for the recorded method, endpoint, protocol, vector, status and bounded payload. Previews retain up to 2 KiB and may be partial; credentials and declared private query values are redacted. Missing port, SNI, address family or source perspective remain not recorded. Informational activity never substitutes for verdict evidence or internal-origin visibility.</p></details>
     </section>
   );
 }

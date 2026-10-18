@@ -30,13 +30,18 @@ async function chooseFirstRealOption(scope, label) {
 // catalog to that vector's check(s); expand the surfaced groups, then act on the nested vector row.
 async function openVectorAction(page, vectorId, actionLabel) {
   await page.getByPlaceholder('Name, ID, protocol, exposure, control').fill(vectorId);
-  const groups = page.locator('.vector-check-group');
-  await expect(groups.first()).toBeVisible({ timeout: 20_000 });
+  // Runnable vectors sit inside check groups; expand those that surfaced.
   const toggles = page.locator('.vector-check-toggle');
+  await expect
+    .poll(async () => (await toggles.count()) + (await page.getByRole('button', { name: /not mapped to a runnable check/ }).count()))
+    .toBeGreaterThan(0);
   for (let index = 0, total = await toggles.count(); index < total; index += 1) {
     const toggle = toggles.nth(index);
     if ((await toggle.getAttribute('aria-expanded')) !== 'true') await toggle.click();
   }
+  // Non-runnable vectors (SOC-gated, monitor-only) sit in the "not mapped to a runnable check" group.
+  const unmapped = page.getByRole('button', { name: /not mapped to a runnable check/ });
+  if ((await unmapped.count()) && (await unmapped.getAttribute('aria-expanded')) !== 'true') await unmapped.click();
   await page.getByRole('button', { name: actionLabel, exact: true }).click();
 }
 

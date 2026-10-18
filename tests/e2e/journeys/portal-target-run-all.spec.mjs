@@ -249,7 +249,7 @@ test.describe('target workspace: recorded attribution, checks and reviewed runs 
 
     await observations.getByRole('button', { name: 'Detect WAF and CDN' }).click();
     let dialog = page.locator('dialog.modal-confirm[open]');
-    await expect(dialog).toContainText('One bounded fingerprint run against this exact target');
+    await expect(dialog).toContainText('One bounded fingerprint run');
     await expect(dialog).toContainText('It identifies providers only');
     await dialog.getByRole('button', { name: 'Cancel' }).click();
     expect(edgePosts, 'cancelling the review sends nothing').toEqual([]);
@@ -264,7 +264,7 @@ test.describe('target workspace: recorded attribution, checks and reviewed runs 
     await expect.poll(() => edgePosts.length).toBe(1);
     expect(edgePosts[0]).toEqual({ target_id: VERIFIED_FRESH_TARGET });
     await expect(page.getByRole('tab', { name: /^Validate/ })).toHaveAttribute('aria-selected', 'true');
-    await expect(page.locator('.probe-activity')).toBeVisible();
+    await expect(page.locator('.td-check[data-selected="true"][data-focus-key="check-waf.fingerprint.safe"] .td-check-open')).toBeVisible();
     await expect(page.locator('.td-check[data-selected="true"][data-focus-key="check-waf.fingerprint.safe"]')).toHaveCount(1);
     await expect(page.locator('input[name=target-run-check][value="waf.fingerprint.safe"]')).not.toBeChecked();
     await expect(page.locator('.td-checks')).toContainText('WAF and CDN Fingerprint');
@@ -342,7 +342,7 @@ test.describe('target workspace: recorded attribution, checks and reviewed runs 
     await expect(panel.locator('.td-live-text')).toContainText('Last scan completed');
     await expect(page.locator('.td-scan-terminal')).toHaveCount(0);
     await expect(page.locator('.td-validate .probe-activity')).toHaveCount(0);
-    await expect(page.locator('.td-start-bar')).toContainText('No check selected');
+    await expect(page.locator('.td-start-bar')).toHaveCount(0);
 
     await page.goto(`${getPortalPlaywrightBaseUrl()}/app#target-detail?id=${VERIFIED_FRESH_TARGET}&tab=validate&check=l7.cors_posture.safe`);
     await page.locator('.td-start-bar').getByRole('button', { name: 'Review and start', exact: true }).click();
@@ -385,7 +385,7 @@ test.describe('target workspace: recorded attribution, checks and reviewed runs 
     await page.locator('.td-start-bar').getByRole('button', { name: `Review and start ${notRunIds.length}`, exact: true }).click();
     const dialog = page.locator('dialog.modal-confirm[open]');
     await expect(dialog).toContainText(`Start ${notRunIds.length} selected checks on`);
-    await expect(dialog).toContainText('one at a time inside your safe-run limits');
+    await expect(dialog).toContainText('one at a time within your safe-run limits');
     await expect(dialog).toContainText('What your team will see');
     expect(scanBodies).toEqual([]);
     await dialog.getByRole('button', { name: `Start ${notRunIds.length} checks`, exact: true }).click();
@@ -455,8 +455,8 @@ test.describe('target workspace: recorded attribution, checks and reviewed runs 
       await expect(row).toContainText(label);
       await row.locator('.td-check-summary').click();
       await expect(row).toContainText('Before it can run');
-      await expect(row).toContainText('Not run on this target yet.');
-      await expect(row).toContainText('No recorded result to inspect yet.');
+      await expect(row.locator('.td-check-badges')).toContainText('Not run yet');
+      await expect(row.locator('.td-check-links')).toHaveCount(0);
       await expect(page.locator('.td-start-bar').getByRole('button', { name: 'Review and start', exact: true })).toBeDisabled();
       await expect(page.locator('dialog.modal-confirm[open]')).toHaveCount(0);
     }
@@ -538,12 +538,12 @@ test.describe('target workspace: recorded attribution, checks and reviewed runs 
     await page.getByRole('tab', { name: /Validate/ }).click();
     const panel = page.locator('.td-checks');
     const catalog = await page.request.get(`${getPortalPlaywrightBaseUrl()}/v1/checks?scope=all`, { headers: { 'x-tenant-id': PORTAL_BASELINE_IDS.tenantId, 'x-user-id': 'usr_owner', 'x-role': 'owner' } }).then((response) => response.json());
-    await expect(panel).toContainText(`${catalog.items.length} checks in the catalog.`);
+    await expect(panel.locator('.td-checks-stats')).toContainText(`${catalog.items.length} in the catalog`);
     await expect(panel.getByRole('group', { name: 'Filter checks by result' }).getByRole('button', { name: `All ${catalog.items.length}`, exact: true })).toBeVisible();
     await expect(panel.locator('.td-check')).toHaveCount(catalog.items.length);
     const displayedIds = await panel.locator('input[name=target-run-check]').evaluateAll((inputs) => inputs.map((input) => input.value));
     expect([...displayedIds].sort()).toEqual(catalog.items.map((check) => check.check_id).sort());
-    await expect(panel).toContainText('eligible for selection on this target');
+    await expect(panel.locator('.td-checks-stats')).toContainText('eligible here');
     await expect(panel.locator('input[name=target-run-check][value="origin.direct_bypass.safe"]')).toBeDisabled();
     await expect(panel.locator('.td-check').filter({ hasText: 'SOC only' }).first()).toHaveCount(1);
     await expect(panel.locator('input[name=target-run-check][value="dns.authoritative_response.safe"]')).toHaveCount(1);
@@ -553,7 +553,7 @@ test.describe('target workspace: recorded attribution, checks and reviewed runs 
     await panel.getByRole('button', { name: /^Review all/ }).click();
     const dialog = page.locator('dialog.modal-confirm[open]');
     await expect(dialog).toContainText(/Start \d+ checks on checkout\.acme\.com\?/);
-    await expect(dialog).toContainText('one at a time inside your safe-run limits');
+    await expect(dialog).toContainText('one at a time within your safe-run limits');
     await expect(dialog).toContainText('The server re-checks ownership');
     await expect(dialog).toContainText('Runs every eligible check for this target');
     const excludedSummary = await dialog.locator('.td-requirements > summary').textContent();
@@ -573,7 +573,7 @@ test.describe('target workspace: recorded attribution, checks and reviewed runs 
         await page.screenshot({ path: `/tmp/astranull-inventory-review-${theme}-${width}.png` });
       }
     }
-    await expect(dialog).toContainText("holds this target's execution slot");
+    await expect(dialog).toContainText("hold this target's execution slot");
     await expect(dialog).toContainText('What your team will see');
     const acceptedResponse = page.waitForResponse((response) => response.request().method() === 'POST' && new URL(response.url()).pathname === '/v1/validation-scans');
     await dialog.getByRole('button', { name: 'Start all checks' }).click();

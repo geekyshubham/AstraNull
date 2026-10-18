@@ -169,9 +169,12 @@ test.describe('portal executive clarity', () => {
     const heading = page.getByRole('heading', { level: 1, name: 'checkout.acme.com' });
     await expect(heading).toBeVisible();
     await expect(main).toContainText('Validation unlocked');
+    // Declared context is listed once: set fields as terms, unset ones named in a single line.
+    const context = main.locator('.td-context-row');
     for (const term of ['Purpose', 'Service roles', 'Owner', 'Criticality']) {
-      await expect(main.getByRole('term').filter({ hasText: new RegExp(`^${term}$`) })).toBeVisible();
+      await expect(context).toContainText(new RegExp(term, 'i'));
     }
+    await expect(context).not.toContainText('Unassigned');
     await expect(page.getByRole('link', { name: /^Group:/ })).toHaveCount(0);
     // Identity and declared context come before the workspace tabs.
     const order = await page.evaluate(() => {
@@ -182,9 +185,10 @@ test.describe('portal executive clarity', () => {
     expect(order).toBe(true);
 
     // Proof of ownership is recorded fact, not inferred.
-    const facts = page.getByRole('region', { name: 'Target facts' });
-    await expect(facts.getByRole('row', { name: /Ownership method DNS TXT record/ })).toBeVisible();
-    await expect(facts.getByRole('row', { name: /Declaration source Manual declaration/ })).toBeVisible();
+    const facts = page.locator('.td-metaline');
+    await expect(facts).toContainText('Ownership via DNS TXT record');
+    await expect(facts).toContainText('Manual declaration');
+    await expect(page.locator('section.td-facts')).toHaveCount(0);
 
     // Detection is never proof of blocking.
     const observations = page.getByRole('region', { name: 'Protection observations' });
@@ -193,9 +197,10 @@ test.describe('portal executive clarity', () => {
 
     await page.getByRole('tab', { name: /^Validate/ }).click();
     const checks = page.getByRole('region', { name: 'Checks for this target' });
-    await expect(checks).toContainText(/\d+ checks in the catalog\. \d+ are eligible for selection on this target, including observation checks\./);
+    await expect(checks.locator('.td-checks-stats')).toContainText(/\d+ in the catalog/);
+    await expect(checks.locator('.td-checks-stats')).toContainText(/\d+ eligible here/);
     await expect(checks).toContainText('Availability is separate from recorded results.');
-    await expect(checks).toContainText('The server re-checks authorization before starting.');
+    await expect(checks).toContainText('the server re-checks authorization before starting.');
     await expect(checks.getByRole('button', { name: /^Review (?:and run )?all \d+$/ })).toBeVisible();
 
     // A recorded run of a declaration-only (E1) check never reads as live traffic.

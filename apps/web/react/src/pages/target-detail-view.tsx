@@ -50,10 +50,10 @@ import { Badge, type BadgeProps } from '../components/ui/badge';
 import { NotTestedBadge } from '../components/runs/not-tested-note';
 import { requiredInputMissing } from '../lib/missing-input.mjs';
 import { Tabs } from '../components/ui/tabs';
+import { Progress } from '../components/ui/progress';
 import { Toast } from '../components/ui/toast';
 import { canStartRun } from '../lib/run-permissions.mjs';
 import { requestJson, sessionIdentity } from '../lib/api';
-import { activityItemsToEvents } from '../lib/recorded-activity.mjs';
 import { useRecordedActivity } from '../components/evidence/use-recorded-activity';
 import { prefersReducedMotion } from '../lib/motion';
 import { apiErrorMessage } from '../lib/error-messages';
@@ -95,7 +95,6 @@ import { TargetAuthorization } from '../components/targets/target-authorization'
 import { OriginRelations } from '../components/targets/origin-relations';
 import { OriginExposure } from '../components/targets/origin-exposure';
 import { DeclaredEntryPaths, FirewallChangeComparison } from '../components/targets/entry-paths';
-import { ProbeActivity } from '../components/targets/probe-activity';
 import { OwnershipProof } from '../components/targets/ownership-proof';
 import { DECLARATION_LIMITS, validateDeclarationDraft } from '../lib/domain-checks.mjs';
 import { CancelScanDialog } from '../components/runs/validation-scans-table';
@@ -251,10 +250,10 @@ function TagEditor({ tags, canEdit, onChange }: { tags: string[]; canEdit: boole
     if (result.tags.length !== tags.length) await commit(result.tags);
   }
 
+  if (!tags.length && !canEdit) return null;
   return (
     <div className="td-tag-block">
       <div className="td-tags">
-        {tags.length === 0 ? <span className="td-tag-empty">No tags</span> : null}
         {tags.map((tag) => (
           <span key={tag} className="td-tag badge-identifier">
             {tag}
@@ -636,19 +635,6 @@ export function TargetDetailView({
   const effectiveness = useMemo(() => markerEffectiveness(profileInput), [detail?.protection_profile, edgeDetection]); // eslint-disable-line react-hooks/exhaustive-deps
   const scanActive = isScanActive(scan);
   const activeStandalone = targetRuns.find((run) => ['running', 'collecting', 'planned'].includes(getString(run, ['status'], ''))) ?? null;
-  const activeCheckRow = checkRows.find((row) => row.status === 'running' && row.runId) ?? null;
-  const currentScanStep = Array.isArray(scan?.steps) ? (scan.steps as DataItem[]).find((step) => ['running', 'collecting', 'starting'].includes(getString(step, ['status'], '')) && getString(step, ['test_run_id'], '')) ?? null : null;
-  const activityRow = selectedRow ?? activeCheckRow ?? null;
-  const activityPinnedRow = selectedRow?.runId ? selectedRow : null;
-  const exactAcceptedRun = acceptedRun?.scope === executionScope && (!selectedRow || selectedRow.checkId === acceptedRun.checkId) ? acceptedRun : null;
-  const activityRunId = exactAcceptedRun?.id || (activityPinnedRow ? activityPinnedRow.runId : getString(currentScanStep, ['test_run_id'], '') || getString(activeStandalone, ['id'], '') || activityRow?.runId || '');
-  const activityRunning = exactAcceptedRun ? ['planned', 'running', 'collecting'].includes(getString(targetRuns.find((run) => run.id === exactAcceptedRun.id), ['status'], getString(exactAcceptedRun.record, ['status'], ''))) : activityPinnedRow ? activityPinnedRow.status === 'running' : Boolean(currentScanStep || activeStandalone);
-  const activityCheckName = exactAcceptedRun ? displayCheckName(exactAcceptedRun.checkId) : activityPinnedRow?.name || (currentScanStep ? displayCheckName(getString(currentScanStep, ['check_id'], '')) : activeStandalone ? displayCheckName(getString(activeStandalone, ['check_id'], '')) : activityRow?.name || '');
-  const showActivity = Boolean(selectedRow || exactAcceptedRun || currentScanStep || activeStandalone || activeCheckRow);
-  const inspectingActivityRun = Boolean(
-    (inspected?.entry === 'check_result' && activityRunId && inspected.test_run_id === activityRunId)
-    || (inspected?.entry === 'validation_scan' && scanActive && inspected.scan_id && inspected.scan_id === getString(scan, ['id'], '')),
-  );
   const scanId = getString(scan, ['id'], '');
   const fingerprintStep = Array.isArray(scan?.steps)
     ? (scan!.steps as DataItem[]).find((step) => getString(step, ['check_id'], '') === EDGE_DETECTION_CHECK_ID) ?? null
@@ -791,7 +777,6 @@ export function TargetDetailView({
   }, [scanId, scanReader.record, scanReader.snapshot, reload, loadTargetActivity, onRefresh]);
 
   const selectedActivityReader = useRecordedActivity({ config, session, id: selectedRow?.runId || '' });
-  const selectedRunEvents = useMemo(() => activityItemsToEvents(selectedActivityReader.snapshot) as DataItem[], [selectedActivityReader.snapshot]);
 
   const queueEdgeDetection = useCallback(async () => {
     if (!entityId) return;
@@ -1238,9 +1223,35 @@ export function TargetDetailView({
   })();
   const proveOwnershipFirst = canStartBoundedRun && !ownershipDone && !scanActive && !activeStandalone;
 
+  function renderContext() {
+    if (!declared) return <p className="td-muted td-context-missing">Declared purpose, owner and criticality are not reported by this server yet.</p>;
+    const facts = [
+      { label: 'Owner', value: declared.owner.source ? declared.owner.text : '', source: declared.owner.source },
+      { label: 'Criticality', value: declared.criticality.source ? declared.criticality.text : '', source: declared.criticality.source },
+      { label: 'Purpose', value: declared.purpose, source: declared.purposeSource },
+      { label: 'Service roles', value: declared.roles.join(' + '), source: declared.rolesSource },
+    ];
+    const set = facts.filter((fact) => fact.value);
+    const unset = facts.filter((fact) => !fact.value).map((fact) => fact.label.toLowerCase());
+    return (
+      <div className="td-context-row">
+        {set.length ? (
+          <dl className="td-context-list" aria-label="Declared context">
+            {set.map((fact) => <div key={fact.label}><dt>{fact.label}</dt><dd>{fact.value}{fact.source === 'inherited' ? <small> · inherited</small> : null}</dd></div>)}
+          </dl>
+        ) : null}
+        {unset.length ? <span className="td-muted td-context-unset">{set.length ? 'Not declared' : 'No declared context'}: {unset.join(', ')}</span> : null}
+        {canWrite && !editingContext ? (
+          <Button size="sm" variant="ghost" className="td-context-edit" onClick={() => setEditingContext(true)}><Pencil size={13} aria-hidden="true" />Edit context</Button>
+        ) : null}
+      </div>
+    );
+  }
+
   function renderHeader() {
     const hasTarget = Boolean(target);
     const title = hasTarget ? targetDisplayValue(target) : entityId;
+    const expected = getString(target, ['expected_behavior', 'expected'], '');
     return (
       <header className="page-head td-page-head">
         <div className="td-identity">
@@ -1252,29 +1263,25 @@ export function TargetDetailView({
                 <Badge tone={targetEligible ? 'success' : 'warn'} title={`Reported eligibility ${eligibility}; ownership ${verificationState}`}>
                   {targetEligible ? 'Validation unlocked' : 'Ownership pending · checks locked'}
                 </Badge>
-                <Badge tone="muted">{formatLabel(kind)}</Badge>
               </div>
             ) : null}
           </div>
           {hasTarget ? (
-            <div className="td-context">
-              {declared ? (
-                <dl className="td-context-list" aria-label="Declared context">
-                  <div><dt>Purpose</dt><dd>{declared.purpose || 'Not declared'}{declared.purposeSource ? <small> · {declared.purposeSource}</small> : null}</dd></div>
-                  <div><dt>Service roles</dt><dd>{declared.roles.length ? declared.roles.join(' + ') : 'Unclassified'}{declared.rolesSource ? <small> · {declared.rolesSource}</small> : null}</dd></div>
-                  <div><dt>Owner</dt><dd>{declared.owner.text}{declared.owner.source ? <small> · {declared.owner.source}</small> : null}</dd></div>
-                  <div><dt>Criticality</dt><dd>{declared.criticality.text}{declared.criticality.source ? <small> · {declared.criticality.source}</small> : null}</dd></div>
-                </dl>
-              ) : (
-                <p className="td-muted td-context-missing">Declared purpose, owner and criticality are not reported by this server yet.</p>
-              )}
-              <div className="td-metaline">
-                <span>Expected: {formatLabel(getString(target, ['expected_behavior', 'expected'], 'Not reported'))}</span>
-                <span className="dot" aria-hidden="true">·</span>
+            <>
+              <p className="td-metaline">
+                <span>{formatLabel(kind)}</span>
+                <span className="mono td-meta-id">{entityId}</span>
+                <span>{plainCheckName(targetDeclarationProvenanceLabel(target))}</span>
+                {ownershipDone ? <span>Ownership via {ownershipMethodText(verification)}</span> : null}
+                {detail?.loa ? <span>LOA {formatLabel(getString(detail.loa, ['state'], 'Not reported')).toLowerCase()}</span> : null}
+                {expected ? <span>Expected: {formatLabel(expected)}</span> : null}
                 <span className="td-last-check">{lastCheckAt ? <>Last check <time dateTime={lastCheckAt}>{formatDate(lastCheckAt)}</time></> : 'No checks recorded yet'}</span>
+              </p>
+              <div className="td-context">
+                {renderContext()}
+                <TagEditor tags={tags} canEdit={canWrite} onChange={saveTags} />
               </div>
-              <TagEditor tags={tags} canEdit={canWrite} onChange={saveTags} />
-            </div>
+            </>
           ) : null}
         </div>
         {hasTarget ? (
@@ -1284,8 +1291,8 @@ export function TargetDetailView({
                 <ShieldCheck size={15} aria-hidden="true" />Prove ownership
               </Button>
             ) : null}
-            {canStartBoundedRun ? (
-              <Button variant={proveOwnershipFirst ? 'secondary' : 'default'} onClick={() => { setTab('validate'); window.requestAnimationFrame(() => document.getElementById(scanActive || activeStandalone ? 'probe-activity-title' : 'td-all-checks')?.scrollIntoView({ behavior: prefersReducedMotion() ? 'auto' : 'smooth', block: 'start' })); }}>
+            {canStartBoundedRun && (tab !== 'validate' || scanActive || activeStandalone) ? (
+              <Button variant={proveOwnershipFirst ? 'secondary' : 'default'} onClick={() => { setTab('validate'); window.requestAnimationFrame(() => document.getElementById('td-all-checks')?.scrollIntoView({ behavior: prefersReducedMotion() ? 'auto' : 'smooth', block: 'start' })); }}>
                 <Play size={15} aria-hidden="true" />{scanActive || activeStandalone ? 'View activity' : 'Plan validation'}
               </Button>
             ) : null}
@@ -1293,9 +1300,6 @@ export function TargetDetailView({
               <Button variant="danger" onClick={() => scanActive ? setStopOpen(true) : setStopSingleRun({ id: getString(activeStandalone, ['id'], ''), name: displayCheckName(getString(activeStandalone, ['check_id'], '')) })}>
                 <Square size={14} aria-hidden="true" />{scanActive ? 'Stop scan' : 'Stop current check'}
               </Button>
-            ) : null}
-            {declared && canWrite && !editingContext ? (
-              <Button variant="secondary" onClick={() => setEditingContext(true)}><Pencil size={14} aria-hidden="true" />Edit context</Button>
             ) : null}
           </div>
         ) : null}
@@ -1376,10 +1380,10 @@ export function TargetDetailView({
     if (!ownershipDone) {
       return (
         <section className="td-next" data-kind="ownership" aria-labelledby="td-next-title">
+          <span className="td-eyebrow">Next step</span>
           <div className="td-next-head">
             <h2 id="td-next-title" tabIndex={-1}>Prove ownership to unlock validation</h2>
             <Badge tone={ownershipStep.tone}>{ownershipStep.label}</Badge>
-            <Badge tone="muted">Next step</Badge>
           </div>
           {renderOwnershipPanel()}
         </section>
@@ -1390,16 +1394,16 @@ export function TargetDetailView({
       const hasEvidence = Array.isArray(topFinding.evidence_ids) && (topFinding.evidence_ids as unknown[]).some((value) => typeof value === 'string' && value.trim());
       return (
         <section className="td-next" data-kind="finding" aria-labelledby="td-next-title">
+          <span className="td-eyebrow">Highest-priority open finding</span>
           <div className="td-next-head">
             <h2 id="td-next-title">{plainFindingTitle(topFinding, [target], checks)}</h2>
             <Badge tone={severityTone(getString(topFinding, ['severity'], ''))}>{formatSeverityLabel(getString(topFinding, ['severity'], 'unknown'))}</Badge>
-            <Badge tone="muted">Highest-priority open finding</Badge>
-            {hasEvidence ? <Badge tone="muted">Evidence attached</Badge> : <Badge tone="warn">No evidence recorded</Badge>}
+            {hasEvidence ? null : <Badge tone="warn">No evidence recorded</Badge>}
           </div>
           <p className="td-copy">
             Opened {formatDate(topFinding.created_at ?? topFinding.opened_at)}
-            {openFindings.length > 1 ? `. ${openFindings.length - 1} more open on this target.` : '.'}
-            {' '}A later passing check does not close it; {hasEvidence ? 'review the original evidence first.' : 'no supporting evidence is recorded for it yet; open the full finding to review its run.'}
+            {openFindings.length > 1 ? ` · ${openFindings.length - 1} more open on this target` : ''}.
+            {' '}A later passing check does not close it{hasEvidence ? '; review the original evidence first.' : '; open the full finding to review its run.'}
           </p>
           <div className="td-actions">
             <Button size="sm" variant="secondary" data-focus-key={`finding-${id}`} onClick={() => inspectFinding(topFinding)}><Eye size={14} aria-hidden="true" />View evidence</Button>
@@ -1412,9 +1416,9 @@ export function TargetDetailView({
     if (recordedResults === 0) {
       return (
         <section className="td-next" data-kind="plan" aria-labelledby="td-next-title">
+          <span className="td-eyebrow">Next step</span>
           <div className="td-next-head">
             <h2 id="td-next-title">No recorded check results yet</h2>
-            <Badge tone="muted">Next step</Badge>
           </div>
           <p className="td-copy">Ownership is verified. Choose a compatible check, review its bounds, then start it. Nothing runs until you do.</p>
           <div className="td-actions">
@@ -1425,9 +1429,9 @@ export function TargetDetailView({
     }
     return (
       <section className="td-next" data-kind="results" aria-labelledby="td-next-title">
+        <span className="td-eyebrow">Latest recorded results</span>
         <div className="td-next-head">
           <h2 id="td-next-title">No open findings on this target</h2>
-          <Badge tone="muted">Latest recorded results</Badge>
         </div>
         <p className="td-copy">
           Passed checks show behavior in their recorded scenario only. {countLabel(rowCounts.not_run ?? 0, 'compatible check')} {pluralize(rowCounts.not_run ?? 0, 'has', 'have')} no result yet.
@@ -1447,8 +1451,21 @@ export function TargetDetailView({
       const planTitle = `Server applicability plan ${getString(coverage, ['plan_version'], 'version not recorded')}`;
       const countText = (value: unknown) => (value === null || value === undefined || value === '' || !Number.isFinite(Number(value)) ? 'Not recorded' : String(value));
       const cell = (label: string, key: string) => (
-        <div key={key}><dt>{label}</dt><dd className="tabular-nums">{countText(coverage[key])}</dd></div>
+        <div key={key} data-zero={Number(coverage[key]) === 0 || undefined}><dt>{label}</dt><dd className="tabular-nums">{countText(coverage[key])}</dd></div>
       );
+      const conclusiveCount = Number.isFinite(conclusive) ? conclusive : 0;
+      const conclusivePercent = applicable > 0 ? Math.round((conclusiveCount / applicable) * 100) : 0;
+      const retainedGroups = [...retainedPairs.reduce((map, pair) => {
+        const retained = asDataItem(pair.retained);
+        const reason = PAIR_REASON_LABELS[getString(pair, ['pair_reason'], '')] ?? formatLabel(getString(pair, ['pair_reason'], 'not_recorded'));
+        const detail = retained
+          ? `retained ${formatLabel(getString(retained, ['verdict'], 'result'))}, ${getString(retained, ['provenance'], '') ? `${formatLabel(getString(retained, ['provenance'], ''))} source` : 'source not recorded'}${retained.observed_at ? `, ${formatDate(retained.observed_at)}` : ''}`
+          : '';
+        const key = `${reason}|${detail}`;
+        const group = map.get(key) ?? { reason, detail, names: [] as string[] };
+        group.names.push(displayCheckName(getString(pair, ['check_id'], '')));
+        return map.set(key, group);
+      }, new Map<string, { reason: string; detail: string; names: string[] }>()).values()];
       return (
         <section className="td-coverage" aria-labelledby="td-coverage-title">
           <header className="td-section-head">
@@ -1459,23 +1476,27 @@ export function TargetDetailView({
               </p>
             </div>
           </header>
-          <p className="td-copy td-coverage-summary" title={planTitle}>
-            {applicable > 0
-              ? `${Number.isFinite(conclusive) ? conclusive : 0} of ${applicable} readiness-scored checks have a conclusive result.`
-              : 'No readiness-scored checks for this target.'}
-          </p>
-          <dl className="td-count-grid">
-            {cell('Scored for readiness', 'applicable_count')}
-            {cell('Evaluated', 'evaluated_count')}
-            {cell('Conclusive', 'conclusive_count')}
-            {cell('Inconclusive', 'inconclusive_count')}
-            {cell('Not run', 'not_run_count')}
-            {cell('Stale', 'stale_count')}
-            {cell('Unknown', 'unknown_count')}
-            {cell('Partial', 'partial_count')}
-          </dl>
+          <div className="td-coverage-body">
+            <div className="td-coverage-hero" title={planTitle}>
+              {applicable > 0 ? (
+                <>
+                  <p className="td-coverage-ratio tabular-nums"><strong>{conclusiveCount}</strong><span>/ {applicable}</span></p>
+                  <p className="td-coverage-caption">readiness-scored checks have a conclusive result</p>
+                  <Progress value={conclusivePercent} size="sm" tone={conclusivePercent >= 80 ? 'success' : 'accent'} label="Readiness-scored checks conclusive" className="td-coverage-meter" />
+                </>
+              ) : <p className="td-coverage-caption">No readiness-scored checks for this target.</p>}
+            </div>
+            <dl className="td-count-grid">
+              {cell('Evaluated', 'evaluated_count')}
+              {cell('Inconclusive', 'inconclusive_count')}
+              {cell('Not run', 'not_run_count')}
+              {cell('Stale', 'stale_count')}
+              {cell('Unknown', 'unknown_count')}
+              {cell('Partial', 'partial_count')}
+            </dl>
+          </div>
           {observationOnly > 0 ? (
-            <p className="td-copy">{String(observationOnly)} runnable checks are observations only; they run under Validate but are not scored for readiness.</p>
+            <p className="td-muted td-coverage-note">{String(observationOnly)} runnable checks are observations only; they run under Validate but are not scored for readiness.</p>
           ) : null}
           {Array.isArray(coverage.inconclusive_reasons) && coverage.inconclusive_reasons.length > 0 ? (
             <div className="td-retained" role="note">
@@ -1490,24 +1511,6 @@ export function TargetDetailView({
               <Button size="sm" variant="secondary" onClick={() => setTab('validate')}>Review check evidence</Button>
             </div>
           ) : null}
-          {retainedPairs.length ? (
-            <div className="td-retained" role="note">
-              <strong>Recorded, not counted as current live coverage</strong>
-              <p className="td-muted">These records are simulated, manual, stale, unfinished, or lack the version, completion time, or cited evidence needed for current coverage. Current external inconclusive results count as evaluated checks.</p>
-              <ul>
-                {retainedPairs.map((pair) => {
-                  const retained = asDataItem(pair.retained);
-                  return (
-                    <li key={getString(pair, ['check_id'], '')}>
-                      <span>{displayCheckName(getString(pair, ['check_id'], ''))}</span>
-                      <span className="td-muted"> · {PAIR_REASON_LABELS[getString(pair, ['pair_reason'], '')] ?? formatLabel(getString(pair, ['pair_reason'], 'not_recorded'))}</span>
-                      {retained ? <span className="td-muted"> · retained {formatLabel(getString(retained, ['verdict'], 'result'))}, {getString(retained, ['provenance'], '') ? `${formatLabel(getString(retained, ['provenance'], ''))} source` : 'source not recorded'}{retained.observed_at ? `, ${formatDate(retained.observed_at)}` : ''}</span> : null}
-                    </li>
-                  );
-                })}
-              </ul>
-            </div>
-          ) : null}
           {dimensions.length ? (
             <div className="td-dimensions" role="region" aria-label="Coverage by readiness dimension" tabIndex={0}>
               <table className="data-table">
@@ -1519,20 +1522,40 @@ export function TargetDetailView({
                     const dimensionId = getString(dimension, ['id'], '');
                     const notAssessableReason = getString(dimension, ['not_assessable_reason', 'reason'], '') || DIMENSION_NOT_ASSESSABLE[dimensionId] || DIMENSION_NOT_ASSESSABLE.other;
                     return (
-                      <tr key={dimensionId}>
+                      <tr key={dimensionId} data-assessable={applicableCount > 0 || undefined}>
                         <th scope="row">{DIMENSION_LABELS[dimensionId] ?? formatLabel(dimensionId)}</th>
-                        <td>{applicableCount > 0 ? formatLabel(getString(dimension, ['status'], 'not_recorded')) : <span className="td-not-assessable"><strong>Not assessable</strong><small>{notAssessableReason}</small></span>}</td>
-                        <td className="tabular-nums">{applicableCount > 0 ? `${dimension.evaluated_count ?? 0} of ${applicableCount}` : 'None scored'}</td>
-                        <td className="tabular-nums">{String(dimension.conclusive_count ?? 'Not recorded')}</td>
-                        <td className="tabular-nums">{String(dimension.not_run_count ?? 'Not recorded')}</td>
-                        <td className="tabular-nums">{dimension.unknown_count === undefined && dimension.partial_count === undefined ? 'Not recorded' : `${dimension.unknown_count ?? 0} / ${dimension.partial_count ?? 0}`}</td>
-                        <td className="tabular-nums">{String(dimension.stale_count ?? 'Not recorded')}</td>
+                        {applicableCount > 0 ? (
+                          <>
+                            <td>{formatLabel(getString(dimension, ['status'], 'not_recorded'))}</td>
+                            <td className="tabular-nums">{`${dimension.evaluated_count ?? 0} of ${applicableCount}`}</td>
+                            <td className="tabular-nums">{String(dimension.conclusive_count ?? 'Not recorded')}</td>
+                            <td className="tabular-nums">{String(dimension.not_run_count ?? 'Not recorded')}</td>
+                            <td className="tabular-nums">{dimension.unknown_count === undefined && dimension.partial_count === undefined ? 'Not recorded' : `${dimension.unknown_count ?? 0} / ${dimension.partial_count ?? 0}`}</td>
+                            <td className="tabular-nums">{String(dimension.stale_count ?? 'Not recorded')}</td>
+                          </>
+                        ) : (
+                          <td colSpan={6}><span className="td-not-assessable"><strong>Not assessable</strong><small>{notAssessableReason}</small></span></td>
+                        )}
                       </tr>
                     );
                   })}
                 </tbody>
               </table>
             </div>
+          ) : null}
+          {retainedPairs.length ? (
+            <details className="td-retained" role="note">
+              <summary><strong>Recorded, not counted as current live coverage</strong><span className="td-muted tabular-nums">{countLabel(retainedPairs.length, 'check')}</span></summary>
+              <p className="td-muted">These records are simulated, manual, stale, unfinished, or lack the version, completion time, or cited evidence needed for current coverage. Current external inconclusive results count as evaluated checks.</p>
+              <ul className="td-retained-groups">
+                {retainedGroups.map((group) => (
+                  <li key={`${group.reason}|${group.detail}`}>
+                    <span className="td-retained-reason"><strong>{group.reason}</strong>{group.detail ? <span className="td-muted"> · {group.detail}</span> : null}</span>
+                    <span className="td-retained-names">{group.names.join(', ')}</span>
+                  </li>
+                ))}
+              </ul>
+            </details>
           ) : null}
           <details className="td-coverage-about">
             <summary>About these numbers</summary>
@@ -1551,9 +1574,9 @@ export function TargetDetailView({
                 ))}
               </ul>
             ) : null}
+            <p className="td-copy">Coverage shows which readiness-scored checks have results, not whether they passed. Launch gates are re-evaluated by the server when you start a check.</p>
             <p className="td-muted" title={planTitle}>Counts come from the server applicability plan.</p>
           </details>
-          <p className="td-muted">Coverage shows which readiness-scored checks have results, not whether they passed. Launch gates are re-evaluated by the server when you start a check.</p>
         </section>
       );
     }
@@ -1904,31 +1927,20 @@ export function TargetDetailView({
 
         {tab === 'validate' ? (
           <div className="td-validate">
-            <section className="td-validate-head" aria-labelledby="td-validate-title">
-              <div>
-                <h2 id="td-validate-title">Validate this target</h2>
-                <p className="td-copy">Select a check, review its bounds, then start it. Results and evidence stay on this check; the selection does not move when new results arrive.</p>
-              </div>
-              <div className="td-validate-gates">
-                <Badge tone={ownershipStep.tone}>{ownershipDone ? 'Ownership verified' : ownershipStep.label}</Badge>
-                {!canStartBoundedRun ? <Badge tone="muted">Read-only role</Badge> : null}
-              </div>
-            </section>
-            {!ownershipDone ? renderOwnershipPanel(true) : null}
+            {!canStartBoundedRun ? <p className="td-muted td-readonly-note" role="note">Read-only role: you can inspect checks and evidence but cannot start them.</p> : null}
+            {!ownershipDone ? (
+              <section className="td-next" data-kind="ownership" aria-labelledby="td-validate-ownership-title">
+                <div className="td-next-head">
+                  <h2 id="td-validate-ownership-title">Prove ownership to start checks</h2>
+                  <Badge tone={ownershipStep.tone}>{ownershipStep.label}</Badge>
+                </div>
+                {renderOwnershipPanel(true)}
+              </section>
+            ) : null}
             {selectedCheckMissing ? (
               <div className="form-banner" role="status">
                 The linked check <span className="mono">{selectedCheckId}</span> is not in the loaded catalog. No other check was selected.
               </div>
-            ) : null}
-            {showActivity ? (
-              <ProbeActivity
-                config={config} session={session} runId={activityRunId}
-                checkName={activityCheckName}
-                running={activityRunning} canStop={canStartBoundedRun && Boolean(activityRunId) && !inspectingActivityRun}
-                onStop={() => setStopSingleRun({ id: activityRunId, name: activityCheckName || 'Current check' })}
-                onFollowActive={selectedRow && activeCheckRow && selectedRow.checkId !== activeCheckRow.checkId ? () => selectCheck(activeCheckRow.checkId) : undefined}
-                notSent={activityRow && !activityRunId && ['blocked', 'skipped', 'cancelled'].includes(activityRow.status) ? { reason: activityRow.reason, at: activityRow.finishedAt || activityRow.startedAt } : null}
-              />
             ) : null}
             <CheckQueue
               rows={checkRows}
@@ -1946,7 +1958,6 @@ export function TargetDetailView({
               onRunAll={() => setReview({ mode: 'all' })}
               onStop={() => setStopOpen(true)}
               onStopCheck={canStartBoundedRun ? openStopCheck : undefined}
-              onActivity={(row) => { selectCheck(row.checkId); window.requestAnimationFrame(() => document.getElementById('probe-activity-title')?.scrollIntoView({ behavior: prefersReducedMotion() ? 'auto' : 'smooth', block: 'start' })); }}
               runAllDisabledReason={runAllDisabledReason}
               runAllBlockedReason={runAllBlockedReason}
               recommendedRow={activeStandalone ? null : recommendedRow}
@@ -1979,10 +1990,10 @@ export function TargetDetailView({
                 </details> : null}
               </>}
               scanActivity={scanActivity}
-              selectedRunEvents={selectedRunEvents}
+              selectedRunItems={(selectedActivityReader.snapshot?.items as DataItem[]) ?? []}
               targetValue={targetDisplayValue(target)}
             />
-            {canStartBoundedRun && !scanActive && !activeStandalone ? (
+            {canStartBoundedRun && !scanActive && !activeStandalone && (startRow || multiSelected || !ownershipDone) ? (
               <div className="td-start-bar" role="region" aria-label="Start the selected check">
                 <span className="td-start-copy">
                   {multiSelected
@@ -2187,24 +2198,6 @@ export function TargetDetailView({
         ) : null}
       </div>
 
-      {tab === 'overview' ? (
-        <section className="td-facts" aria-labelledby="td-facts-title">
-          <header className="td-section-head"><div><h2 id="td-facts-title">Target facts</h2></div></header>
-          <div className="table-wrap" tabIndex={0} role="region" aria-label="Target facts, scrollable">
-            <table className="data-table">
-              <tbody>
-                <tr><th scope="row">Target ID</th><td><span className="mono">{entityId}</span></td></tr>
-                <tr><th scope="row">Declared value</th><td><span className="mono">{targetDisplayValue(target)}</span></td></tr>
-                <tr><th scope="row">Kind</th><td>{formatLabel(kind)}</td></tr>
-                <tr><th scope="row">Declaration source</th><td>{plainCheckName(targetDeclarationProvenanceLabel(target))}</td></tr>
-                <tr><th scope="row">Ownership method</th><td><span className="mono">{ownershipMethodText(verification)}</span></td></tr>
-                {detail.loa ? <tr><th scope="row">Authorization</th><td>{formatLabel(getString(detail.loa, ['state'], 'Not reported'))}</td></tr> : null}
-              </tbody>
-            </table>
-          </div>
-        </section>
-      ) : null}
-
       <ConfirmModal
         open={review !== null}
         title={review?.mode === 'detect'
@@ -2218,9 +2211,8 @@ export function TargetDetailView({
           <div className="stack-tight scan-review">
             {review?.mode === 'detect' ? (
               <>
-                <p>One bounded fingerprint run against this exact target: DNS resolution plus benign HTTP requests from the signed worker.</p>
+                <p>One bounded fingerprint run — DNS plus benign HTTP requests from the signed worker. It identifies providers only; it does not test blocking or capacity.</p>
                 <p>Upper bound: {detectBound !== null ? `${detectBound} requests` : 'not recorded in the catalog'}. Ownership: {ownershipDone ? 'verified' : 'not verified'}.</p>
-                <p>It identifies providers only. It does not test blocking or capacity.</p>
                 <p className="td-review-traffic"><strong>What your team will see:</strong> {trafficNotice(detectBound !== null ? `at most ${detectBound} requests` : 'shown above')}</p>
               </>
             ) : review?.mode === 'all' || review?.mode === 'selected' ? (
@@ -2245,8 +2237,7 @@ export function TargetDetailView({
                     {impactSentence(selectedInvasiveCount, reviewSelectedRows.length)}
                   </>
                 )}
-                <p>They run one at a time inside your safe-run limits; if an hourly limit is reached the scan pauses and shows when it resumes. While it runs it holds this target&apos;s execution slot, so no other check can start on this target until it finishes. You can stop it at any time.</p>
-                <p>The server re-checks ownership, safe windows, rate and concurrency gates when you start.</p>
+                <p>They run one at a time within your safe-run limits and hold this target&apos;s execution slot until finished; if an hourly limit is reached the scan pauses and shows when it resumes. You can stop it any time. The server re-checks ownership, safe windows, rate and concurrency gates when you start.</p>
                 <p className="td-review-traffic"><strong>What your team will see:</strong> {trafficNotice(`at most ${review.mode === 'all' ? runAllRequestBound : selectedRequestBound} requests`)}</p>
                 {!ownershipDone ? <p className="td-form-error" role="alert">{OWNERSHIP_LOCKED_REASON}</p> : reviewSlotReason ? <p className="td-form-error" role="alert">{reviewSlotReason}</p> : null}
               </>

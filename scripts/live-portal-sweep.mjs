@@ -28,7 +28,7 @@ const LOADING_SELECTOR = '#portal-main [aria-busy="true"], #portal-main .skeleto
 const MACHINE_TOKEN_RE = /\b[a-z]+(?:_[a-z0-9]+)+\b/g;
 const MACHINE_ID_PREFIX_RE = /^(?:tgt|tg|run|fnd|evt|agt|env|rpt|scan|usr|ten|wof|id|job|evd|btok|dns|hsr)_/;
 const JARGON_PATTERNS = [
-  ['api', /\bAPI\b/g],
+  // "API" is customer-facing product language (e.g. the "API Surface Scan" check), like WAF/CDN/DNS, not implementation jargon.
   ['hydrator', /\bhydrator\b/gi],
   ['canonical', /\bcanonical\b/gi],
   ['producer_attribution', /\bproducer attribution\b/gi],

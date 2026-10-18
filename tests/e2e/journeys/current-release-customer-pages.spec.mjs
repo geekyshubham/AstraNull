@@ -712,6 +712,10 @@ test.describe('current-release customer pages', () => {
   test('check library: review returns focus on Escape and read-only roles get no launch controls', async ({ page }) => {
     await injectPortalDevHeadersSession(page, VIEWER_SESSION);
     await page.goto(`${sourceBaseUrl}/app#checks?target=${PORTAL_BASELINE_IDS.targetId}`, { waitUntil: 'networkidle' });
+    // Checks-first catalog: vectors live inside check groups, so expand one before acting on a vector.
+    const firstCheckToggle = page.locator('.vector-check-toggle').first();
+    await expect(firstCheckToggle).toBeVisible({ timeout: 20_000 });
+    await firstCheckToggle.click();
     const review = page.getByRole('button', { name: /^Review / }).first();
     await review.click();
     const dialog = page.locator('dialog.form-modal[open]');

@@ -55,8 +55,11 @@ describe('target detail findings count', () => {
     assert.match(detail, /\{ id: 'findings' as const, label: 'Findings', count: openFindings\.length \}/);
   });
 
-  it('shows target facts only on the overview tab', () => {
+  it('carries target facts once, in the header, instead of a duplicate facts table', () => {
     const detail = readFileSync(new URL('../../apps/web/react/src/pages/target-detail-view.tsx', import.meta.url), 'utf8');
-    assert.match(detail, /\{tab === 'overview' \? \(\n\s*<section className="td-facts"/);
+    assert.doesNotMatch(detail, /className="td-facts"/);
+    assert.match(detail, /<span className="mono td-meta-id">\{entityId\}<\/span>/);
+    assert.match(detail, /plainCheckName\(targetDeclarationProvenanceLabel\(target\)\)/);
+    assert.match(detail, /Ownership via \{ownershipMethodText\(verification\)\}/);
   });
 });

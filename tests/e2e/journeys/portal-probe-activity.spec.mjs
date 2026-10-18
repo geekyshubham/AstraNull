@@ -43,11 +43,14 @@ async function fixture(page, role = 'owner', logs = LOGS) {
     return route.fulfill({ json: { id: RUN, status: 'cancelled' } });
   });
   await injectPortalDevHeadersSession(page, { ...PORTAL_SESSION, role });
-  await gotoPortalRoute(page, 'target-detail', getPortalPlaywrightBaseUrl(), { entityIds: { 'target-detail': TARGET } });
-  await page.getByRole('tab', { name: /Validate/ }).click();
-  await expect(page.locator('.probe-activity')).toContainText('HTTP 418');
-  return { cancels, reads: () => reads };
+  await page.goto(`${getPortalPlaywrightBaseUrl()}/app#target-detail?id=${TARGET}&tab=validate&check=${CHECK}`, { waitUntil: 'domcontentloaded' });
+  const activity = page.locator('.td-check[data-selected=true] .ual');
+  await expect(activity).toContainText('HTTP 418');
+  return { cancels, reads: () => reads, activity };
 }
+
+/** The per-check activity stream (UnifiedActivityLog) of the selected check. */
+function checkActivity(page) { return page.locator('.td-check[data-selected=true] .ual'); }
 
 const LOCAL_TARGET = 'tgt_local_activity';
 const LOCAL_CHECK = 'waf.entry_path_api_marker.safe';
@@ -92,50 +95,41 @@ test.afterAll(async () => {
   if (wireServer) await new Promise((resolve) => wireServer.close(resolve));
 });
 
-test('recorded requests, omitted attempts, details, search, pause, and standalone Stop work', async ({ page }) => {
+test('recorded requests, omitted attempts, row details, search, filter, and per-check Stop work', async ({ page }) => {
   const state = await fixture(page);
-  const panel = page.locator('.probe-activity');
+  const panel = checkActivity(page);
   await expect(panel).toContainText('17 ms');
   await expect(panel).not.toContainText('HTTP 200');
-  await panel.getByRole('button', { name: 'Details for event log_response' }).click();
-  await expect(panel.getByRole('button', { name: 'Details for event log_response' })).toHaveAttribute('aria-expanded', 'true');
-  await expect(panel.locator('.probe-activity-detail')).toContainText('signed_worker');
-  await expect(panel.locator('.probe-activity-detail')).toContainText('Recorded format: text/html');
-  await panel.getByRole('button', { name: 'Details for event log_start' }).click();
-  await expect(panel.locator('.probe-activity-detail')).toContainText('astranull-inert');
-  await expect(panel.locator('.probe-activity-detail')).toContainText('sqli_plain_marker');
-  await panel.getByRole('button', { name: 'Details for event log_payload' }).click();
-  await expect(panel.locator('.probe-activity-detail')).toContainText('<html>Request blocked</html>');
-  await panel.getByRole('searchbox', { name: 'Search execution activity' }).fill('no-match');
-  await expect(panel).toContainText('No recorded events match these filters');
-  await panel.getByRole('searchbox', { name: 'Search execution activity' }).fill('');
-  await panel.getByRole('combobox', { name: 'Activity severity' }).selectOption('warning');
+  // Each row collapses by default and expands to its recorded facts.
+  const responseRow = panel.locator('.ual-line', { hasText: 'HTTP 418' }).first();
+  await responseRow.click();
+  await expect(responseRow).toHaveAttribute('aria-expanded', 'true');
+  await expect(panel.locator('.ual-facts')).toContainText('text/html');
+  await panel.getByRole('searchbox', { name: 'Search activity' }).fill('no-match');
+  await expect(panel).toContainText('No activity matches this filter');
+  await panel.getByRole('searchbox', { name: 'Search activity' }).fill('');
+  // The Issues filter surfaces the not-sent attempt and hides ordinary traffic.
+  await panel.getByRole('button', { name: 'Issues' }).click();
   await expect(panel).toContainText(/outside request budget/i);
   await expect(panel).not.toContainText('HTTP 418');
-  await panel.getByRole('combobox', { name: 'Activity severity' }).selectOption('all');
-  await panel.getByRole('button', { name: 'Pause updates' }).click();
-  const before = state.reads();
-  await page.waitForTimeout(2800);
-  expect(state.reads()).toBe(before);
-  await expect(panel).toContainText('Updates paused; execution continues');
-  await panel.getByRole('button', { name: 'Resume updates' }).click();
-  await expect.poll(state.reads).toBeGreaterThan(before);
-  await page.getByRole('button', { name: 'Stop current check', exact: true }).click();
+  await panel.getByRole('button', { name: 'All' }).click();
+  // Per-check Stop cancels only this check and keeps recorded activity.
+  const selected = page.locator('.td-check[data-selected=true]');
+  await selected.getByRole('button', { name: /^Stop/ }).click();
   const dialog = page.getByRole('dialog', { name: /^Stop / });
   await dialog.getByRole('button', { name: 'Stop check', exact: true }).click();
   await expect.poll(() => state.cancels.length).toBe(1);
   expect(state.cancels[0].reason).toBe('Stopped from target execution activity');
-  await expect(page.getByRole('button', { name: 'Stop current check', exact: true })).toHaveCount(0);
+  await expect(selected.getByRole('button', { name: /^Stop/ })).toHaveCount(0);
 });
 
-test('only one Stop is offered for the run the Inspector is already showing', async ({ page }) => {
+test('a running check offers Stop, and the Inspector for that run offers its own Stop', async ({ page }) => {
   await fixture(page);
-  const activity = page.locator('.td-validate .probe-activity');
-  await expect(activity.getByRole('button', { name: /^Stop/ })).toHaveCount(1);
+  const selected = page.locator('.td-check[data-selected=true]');
+  await expect(selected.getByRole('button', { name: /^Stop/ })).toHaveCount(1);
   await mockContext(page);
   await page.evaluate(({ target, check, run }) => { const params = new URLSearchParams(location.hash.split('?')[1]); params.set('inspect', 'check_result'); params.set('ev_target', target); params.set('ev_check', check); params.set('ev_run', run); location.hash = `target-detail?${params}`; }, { target: TARGET, check: CHECK, run: RUN });
   await expect(page.locator('.inspector-panel .ei-execution')).toBeVisible();
-  await expect(activity.getByRole('button', { name: /^Stop/ })).toHaveCount(0);
   await expect(page.locator('.inspector-panel').getByRole('button', { name: 'Stop check', exact: true })).toHaveCount(1);
 });
 
@@ -149,24 +143,24 @@ test('the Validate tab shows no activity console until a check is selected or ru
   await gotoPortalRoute(page, 'target-detail', getPortalPlaywrightBaseUrl(), { entityIds: { 'target-detail': TARGET } });
   await page.getByRole('tab', { name: /Validate/ }).click();
   await expect(page.locator('.td-checks')).toBeVisible();
-  await expect(page.locator('.td-start-bar')).toContainText('No check selected');
-  await expect(page.locator('.td-validate .probe-activity')).toHaveCount(0);
+  await expect(page.locator('.td-start-bar')).toHaveCount(0);
+  await expect(page.locator('.ual')).toHaveCount(0);
   await expect(page.locator('.td-scan-terminal')).toHaveCount(0);
 });
 
 test('a read-only viewer can inspect logs but has no Stop controls', async ({ page }) => {
   await fixture(page, 'viewer');
-  await expect(page.locator('.probe-activity')).toContainText('HTTP 418');
+  await expect(checkActivity(page)).toContainText('HTTP 418');
   await expect(page.getByRole('button', { name: /^Stop/ })).toHaveCount(0);
 });
 
-test('an unrun selection does not hide an active provider observation from the live window', async ({ page }) => {
+test('selecting the active check shows its live window and Stop', async ({ page }) => {
   await fixture(page);
-  await gotoPortalRoute(page, 'target-detail', getPortalPlaywrightBaseUrl(), { entityIds: { 'target-detail': TARGET } });
-  await page.goto(`${getPortalPlaywrightBaseUrl()}/app#target-detail?id=${TARGET}&tab=validate&check=l7.cors_posture.safe`);
-  await expect(page.locator('.probe-activity')).toContainText('HTTP 418');
-  await expect(page.locator('.probe-activity')).toContainText('WAF and CDN Fingerprint');
-  await expect(page.getByRole('button', { name: 'Stop current check', exact: true })).toBeVisible();
+  await page.goto(`${getPortalPlaywrightBaseUrl()}/app#target-detail?id=${TARGET}&tab=validate&check=${CHECK}`);
+  const selected = page.locator('.td-check[data-selected=true]');
+  await expect(selected).toContainText('WAF and CDN Fingerprint');
+  await expect(checkActivity(page)).toContainText('HTTP 418');
+  await expect(selected.getByRole('button', { name: /^Stop/ })).toBeVisible();
 });
 
 test('the selected provider observation shows real request logs and no invented sent count', async ({ page }) => {
@@ -176,40 +170,31 @@ test('the selected provider observation shows real request logs and no invented 
   await expect(selected).toContainText('Logical operation count not recorded yet');
   await expect(selected).not.toContainText('13/16');
   await expect(selected).toContainText('HTTP 418');
-  await expect(selected).toContainText('outside_request_budget');
+  await expect(selected).toContainText(/outside request budget/i);
   await expect(selected).not.toContainText('reached origin');
 });
 
-test('a pause on an older run cannot leave the next active run with an empty live window', async ({ page }) => {
+test('the activity stream has a Follow toggle and a live indicator', async ({ page }) => {
   await fixture(page);
-  const panel = page.locator('.probe-activity');
-  await expect(panel).toContainText('HTTP 418');
-  await panel.getByRole('button', { name: 'Pause updates' }).click();
-  await expect(panel).toContainText('Updates paused');
-  const next = 'run_next_activity';
-  await page.route('**/v1/test-runs?*', async (route) => {
-    if (new URL(route.request().url()).searchParams.get('target_id') !== TARGET) return route.fallback();
-    await route.fulfill({ json: { items: [{ id: next, target_id: TARGET, check_id: CHECK, status: 'collecting', created_at: new Date().toISOString() }], count: 1 } });
-  });
-  await page.route(`**/v1/test-runs/${next}/activity?*`, (route) => route.fulfill({ json: {
-    run_id: next, check_id: CHECK, target_id: TARGET, status: 'collecting', telemetry_recorded: true,
-    items: [{ id: 'next_log', stage: 'request_started', method: 'GET', phase: 'replacement', at: AT, source: 'signed_worker' }], count: 1,
-  } }));
-  await expect(panel).toContainText(/replacement/i, { timeout: 12000 });
-  await expect(panel.getByRole('button', { name: 'Pause updates' })).toBeVisible();
+  const panel = checkActivity(page);
+  await expect(panel).toContainText('Live');
+  const follow = panel.getByRole('button', { name: /Follow/ });
+  await expect(follow).toHaveAttribute('aria-pressed', 'true');
+  await follow.click();
+  await expect(follow).toHaveAttribute('aria-pressed', 'false');
 });
 
 for (const width of [375, 768, 1024, 1440]) {
   for (const theme of ['dark', 'light']) {
-    test(`activity table stays accessible and contained at ${width}px in ${theme}`, async ({ page }) => {
+    test(`activity stream stays accessible and contained at ${width}px in ${theme}`, async ({ page }) => {
       test.setTimeout(90000); // Axe's cross-frame pass is slower under concurrent backend checks.
       await page.setViewportSize({ width, height: 1000 });
       await page.addInitScript((mode) => localStorage.setItem('astranull.theme', mode), theme);
       await fixture(page);
-      const panel = page.locator('.probe-activity');
+      const panel = checkActivity(page);
       await expect(panel).toBeVisible();
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 2)).toBe(true);
-      const results = await new AxeBuilder({ page }).include('.probe-activity').withTags(['wcag2a', 'wcag2aa', 'wcag21aa']).analyze();
+      const results = await new AxeBuilder({ page }).include('.ual').withTags(['wcag2a', 'wcag2aa', 'wcag21aa']).analyze();
       expect(results.violations.filter((item) => ['serious', 'critical'].includes(item.impact ?? '')).map((item) => item.id)).toEqual([]);
       await mkdir('output/probe-activity', { recursive: true });
       await panel.screenshot({ path: `output/probe-activity/activity-${width}-${theme}.png` });
@@ -232,32 +217,32 @@ for (const width of [375, 768, 1024, 1440]) for (const theme of ['dark', 'light'
     await page.addInitScript((mode) => localStorage.setItem('astranull.theme', mode), theme);
     await page.emulateMedia({ reducedMotion: 'reduce' });
     await fixture(page, 'owner', EXCHANGE_LOGS);
-    const panel = page.locator('.td-validate .probe-activity');
-    const exchange = panel.locator('.probe-exchange');
-    await expect(exchange).toHaveCount(1);
-    await expect(exchange).toContainText('job_original');
-    await expect(exchange).toContainText('attempt_reviewed');
-    await expect(exchange).toContainText('operation_reviewed');
-    await expect(exchange).toContainText('HTTP/1.1');
-    await expect(exchange).toContainText('<script>window.captureExecuted=true</script>');
-    await expect(exchange).not.toContainText('must-not-leak');
-    await expect(exchange).not.toContainText('Not consumed by this check');
+    const panel = checkActivity(page);
+    const row = panel.locator('.ual-row').filter({ has: page.locator('.ual-line', { hasText: 'owned.example/path' }) });
+    await expect(row).toHaveCount(1);
+    const line = row.locator('.ual-line');
+    await expect(line).toHaveAttribute('aria-expanded', 'false');
+    await line.click();
+    const open = row.locator('.ual-open');
+    await expect(open).toContainText('HTTP/1.1');
+    await expect(open).toContainText('<script>window.captureExecuted=true</script>');
+    await expect(open).not.toContainText('must-not-leak');
+    await expect(open).not.toContainText('Not consumed by this check');
     expect(await page.evaluate(() => window.captureExecuted)).toBeUndefined();
-    await expect(exchange.locator('script, iframe, html')).toHaveCount(0);
+    await expect(open.locator('script, iframe, html')).toHaveCount(0);
     await page.evaluate(() => { window.capturedClipboard = ''; Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async (value) => { window.capturedClipboard = value; } } }); });
-    await exchange.getByRole('button', { name: 'Copy sanitized exchange' }).click();
-    await expect(exchange.getByRole('status')).toHaveText('Sanitized exchange copied');
+    await open.getByRole('button', { name: /^Copy/ }).click();
+    await expect(open.getByRole('button', { name: 'Copied' })).toBeVisible();
     const copied = await page.evaluate(() => window.capturedClipboard);
     expect(copied).toContain('Request'); expect(copied).toContain('Response'); expect(copied).not.toContain('must-not-leak');
-    const summary = exchange.locator('.probe-exchange-summary');
-    await summary.focus(); await expect(summary).toBeFocused();
-    await page.keyboard.press('Enter'); await expect(summary).toHaveAttribute('aria-expanded', 'false');
-    await page.keyboard.press('Enter'); await expect(summary).toHaveAttribute('aria-expanded', 'true');
-    const sides = await exchange.locator('.probe-exchange-side').evaluateAll((nodes) => nodes.map((node) => { const rect = node.getBoundingClientRect(); return { x: rect.x, y: rect.y }; }));
-    const pairWidth = await exchange.locator('.probe-exchange-pair').evaluate((node) => node.clientWidth);
+    await line.focus(); await expect(line).toBeFocused();
+    await page.keyboard.press('Enter'); await expect(line).toHaveAttribute('aria-expanded', 'false');
+    await page.keyboard.press('Enter'); await expect(line).toHaveAttribute('aria-expanded', 'true');
+    const sides = await open.locator('.probe-exchange-side').evaluateAll((nodes) => nodes.map((node) => { const rect = node.getBoundingClientRect(); return { x: rect.x, y: rect.y }; }));
+    const pairWidth = await open.locator('.probe-exchange-pair').evaluate((node) => node.clientWidth);
     if (pairWidth < 624) expect(sides[1].y).toBeGreaterThan(sides[0].y); else expect(sides[1].x).toBeGreaterThan(sides[0].x);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
-    const axe = await new AxeBuilder({ page }).include('.probe-activity').withTags(['wcag2a', 'wcag2aa', 'wcag21aa']).analyze();
+    const axe = await new AxeBuilder({ page }).include('.ual').withTags(['wcag2a', 'wcag2aa', 'wcag21aa']).analyze();
     expect(axe.violations.filter((item) => ['serious', 'critical'].includes(item.impact ?? '')).map((item) => item.id)).toEqual([]);
     await mkdir('output/probe-activity', { recursive: true });
     await panel.screenshot({ path: `output/probe-activity/exchange-${width}-${theme}.png` });
@@ -290,12 +275,11 @@ for (const width of [375, 768]) for (const theme of ['dark', 'light']) {
     await withCoarseTouchPage(browser, width, theme, async (page) => {
       await fixture(page, 'owner', [...EXCHANGE_LOGS, LOGS[3]]);
       expect(await page.evaluate(() => matchMedia('(pointer: coarse)').matches)).toBe(true);
-      const panel = page.locator('.td-validate .probe-activity');
-      await expectTouchTargets(panel.locator('.probe-exchange-summary'));
-      await panel.locator('.probe-activity-technical > summary').click();
-      await expectTouchTargets(panel.locator('.probe-activity-expand'));
-      await panel.getByRole('button', { name: 'Details for event log_omitted' }).tap();
-      await expect(panel.getByRole('button', { name: 'Details for event log_omitted' })).toHaveAttribute('aria-expanded', 'true');
+      const panel = checkActivity(page);
+      await expectTouchTargets(panel.locator('.ual-line'));
+      const omitted = panel.locator('.ual-line').filter({ hasText: 'Not sent' });
+      await omitted.tap();
+      await expect(omitted).toHaveAttribute('aria-expanded', 'true');
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
     });
   });
@@ -342,21 +326,21 @@ test('exchange inspector distinguishes missing, unconsumed, empty, withheld, fai
     make('empty', 'request_started', { request_payload_preview: '', request_headers: [], request_query_preview: '' }), make('empty', 'response_body_completed', { sequence: 2, status_code: 200, response_payload_available: true, response_payload_preview: '' }),
     make('conflict', 'request_started'), make('conflict', 'request_started', { sequence: 2, method: 'POST' }),
   ]);
-  const panel = page.locator('.td-validate .probe-activity');
+  const panel = checkActivity(page);
   for (const [name, expected] of [
     ['missing', 'Not recorded by worker. No counterpart is inferred.'],
-    ['failed', 'Failure is not proof of blocking.'],
+    ['failed', 'No response recorded'],
     ['headers-only', 'Not consumed by this check'],
     ['withheld', '[Partial payload withheld]'],
     ['empty', 'Empty recorded body'],
     ['conflict', 'Conflicting worker records. This capture is withheld'],
   ]) {
-    const exchange = panel.locator('.probe-exchange').filter({ has: page.locator('.probe-exchange-summary', { hasText: `https://owned.example/${name}` }) });
-    const summary = exchange.locator('.probe-exchange-summary');
-    if (await summary.getAttribute('aria-expanded') !== 'true') await summary.click();
-    await expect(exchange).toContainText(expected);
-    if (name === 'conflict') await expect(exchange).toHaveAttribute('data-state', 'partial');
-    if (name === 'empty') { await expect(exchange).toContainText('Empty recorded query'); await expect(exchange).toContainText('Empty recorded header set'); }
+    const row = panel.locator('.ual-row').filter({ has: page.locator('.ual-line', { hasText: `owned.example/${name}` }) });
+    const line = row.locator('.ual-line');
+    if (await line.getAttribute('aria-expanded') !== 'true') await line.click();
+    await expect(row.locator('.ual-open')).toContainText(expected);
+    if (name === 'conflict') await expect(row).toHaveAttribute('data-severity', 'warn');
+    if (name === 'empty') { await expect(row.locator('.ual-open')).toContainText('Empty recorded query'); await expect(row.locator('.ual-open')).toContainText('Empty recorded header set'); }
   }
 });
 

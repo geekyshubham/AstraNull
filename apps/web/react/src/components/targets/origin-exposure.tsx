@@ -143,11 +143,11 @@ export function OriginExposure({ config, session, target, canWrite, enabled }: {
       <Badge tone="muted">{load.state === 'disabled' ? 'Not enabled' : 'No automatic probing'}</Badge>
     </header>
 
-    <ol className="oe-workflow" aria-label="Origin validation steps">
+    {disabledCopy ? null : <ol className="oe-workflow" aria-label="Origin validation steps">
       <li><span className="oe-step" aria-hidden="true">1</span><div><strong>Review associations</strong><p>DNS and imported records are clues, not ownership or application proof.</p></div></li>
       <li><span className="oe-step" aria-hidden="true">2</span><div><strong>Declare and verify</strong><p>Declare the IP separately, prove ownership, then bind its exact Host/SNI scope.</p></div></li>
       <li><span className="oe-step" aria-hidden="true">3</span><div><strong>Review a bounded check</strong><p>Direct responses, policy violations and paired identity proof remain distinct.</p></div></li>
-    </ol>
+    </ol>}
 
     {message ? <p className="form-banner" role="status">{message}</p> : null}
     {load.state === 'loading' ? <div className="oe-notice" role="status">Reading persisted origin associations. No DNS queries or application probes are started by this page.</div> : null}
@@ -188,7 +188,7 @@ export function OriginExposure({ config, session, target, canWrite, enabled }: {
       {text(load.page?.next_cursor) ? <Button size="sm" variant="secondary" loading={pageBusy} disabled={busy} onClick={() => void more()}>Load more associations</Button> : null}
       <details className="oe-details"><summary>Source coverage and what this cannot prove</summary><p>Coverage is partial. Collection reads only this declared hostname’s DNS (and separately selected declared hosts, when supplied). It does not resolve mail-provider hosts, expand SPF ranges, scan cloud networks or fetch certificate datasets.</p>{sources.length ? <ul aria-label="Latest source coverage">{sources.map((source, index) => <li key={`${text(source.hostname)}:${text(source.type)}:${index}`}><span className="mono">{text(source.hostname)} {text(source.type)}</span>{text(source.source_kind) ? ` ${originClueSourceLabel(text(source.source_kind))}` : ''} · {source.status === 'unavailable' ? 'Unavailable — no conclusion' : source.status === 'no_answer' ? 'No answer observed — not protection evidence' : source.status === 'observed' ? 'DNS response recorded' : source.status === 'supplied_import' ? 'Supplied import only' : 'Partial / omitted record'}{source.truncated === true ? ' · Answer list truncated' : ''}</li>)}</ul> : null}<p>CT contains hostname clues, not a current origin-IP map. Certificate/history imports do not prove the same application is still served. Repeated or shared feeds are not independent confirmation.</p>{strings(coverage.limitations).length ? <ul>{strings(coverage.limitations).map((limitation) => <li key={limitation}>{limitation.replace(/_/g, ' ')}</li>)}</ul> : null}<p>AstraNull observes exposure from outside. Queries to passive third-party indexes are not reliably visible in target logs; this is not an attacker-discovery detector.</p></details>
     </> : null}
-    <p className="oe-boundary">Ready to validate an address you own? <a href={relationsHref}>Review declared origin relations below</a>. Selecting or inspecting an association sends no traffic to it.</p>
+    {disabledCopy ? null : <p className="oe-boundary">Ready to validate an address you own? <a href={relationsHref}>Review declared origin relations below</a>. Selecting or inspecting an association sends no traffic to it.</p>}
 
     <ConfirmModal open={review !== null} title={review?.kind === 'collect' ? 'Collect DNS associations for this target?' : 'Import these origin associations?'} confirmLabel={review?.kind === 'collect' ? 'Collect DNS records' : 'Import associations'} busy={busy} onCancel={() => { setReview(null); setError(''); }} onConfirm={() => void confirm()} description={<div className="stack-tight scan-review">
       <dl className="td-review-list"><div><dt>Declared target</dt><dd className="mono">{text(target.value)} ({targetId})</dd></div><div><dt>Action</dt><dd>{review?.kind === 'collect' ? 'Bounded DNS collection; no HTTP/TLS requests to candidate addresses' : 'Append supplied source records; no network collection'}</dd></div>{review?.filename ? <div><dt>Local file</dt><dd>{review.filename}</dd></div> : null}{review?.kind === 'import' ? <div><dt>Source</dt><dd>{originClueSourceLabel(text(review.body.source_kind))}: {text(review.body.source_ref)}</dd></div> : null}</dl>

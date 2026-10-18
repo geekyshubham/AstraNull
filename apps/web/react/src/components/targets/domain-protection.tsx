@@ -53,12 +53,13 @@ import {
   type WafRuleEnforcement,
 } from '../../lib/domain-checks.mjs';
 import { DECLARATION_KEYS, controlsHref, prerequisiteCta, prerequisiteSection, prerequisiteTone, type CheckPrerequisite } from '../../lib/control-declarations.mjs';
-import { buildScanLiveLogs, generateCheckProbeLogs } from '../../lib/live-probe-logs';
+import { buildScanLiveLogs } from '../../lib/live-probe-logs';
+import { UnifiedActivityLog, type ActivityMarker } from '../activity/unified-activity-log';
 import { Badge } from '../ui/badge';
 import { NotTestedNote } from '../runs/not-tested-note';
 import { AnchorButton, Button } from '../ui/button';
 import { CheckClassChips, CheckClassLegend, CheckImpactBadge, CheckImpactIcon } from '../checks/check-class-chips';
-import { CHECK_IMPACT_CLASSES, classifyCheckImpact, type CheckImpactId } from '../../lib/check-classification.mjs';
+import { CHECK_IMPACT_CLASSES, classifyCheck, classifyCheckImpact, type CheckImpactId } from '../../lib/check-classification.mjs';
 import { Progress } from '../ui/progress';
 import { ProviderLogo, type ProviderLogoId } from '../integrations/provider-logos';
 import { LiveProbeTerminal } from './live-probe-terminal';
@@ -176,12 +177,8 @@ export function ProviderObservations({ rows, effectiveness, evaluating, note, ac
             metaText = `An edge fingerprint for ${detectedProxyName} does not establish origin hosting, reachability, or lockdown. Declare an origin under Origin Relations to test.`;
           } else if (row.family === 'dns' && (row.status === 'unknown' || row.status === 'not_recorded')) {
             metaText = 'The edge scan does not look up authoritative nameservers, so the DNS provider is not recorded yet.';
-          } else {
-            const timeText = row.observedAt
-              ? `Observed ${formatDate(row.observedAt)}`
-              : row.source === 'none' || ['not_checked', 'not_recorded', 'unknown'].includes(row.status)
-                ? 'No recorded observation'
-                : 'Observation time not recorded';
+          } else if (row.observedAt || row.sources.length || row.status === 'detected') {
+            const timeText = row.observedAt ? `Observed ${formatDate(row.observedAt)}` : 'Observation time not recorded';
             const sourceText = row.sources.length
               ? ` · ${row.sources.map((source) => source.method).join(', ')}`
               : row.status === 'detected'
@@ -189,38 +186,38 @@ export function ProviderObservations({ rows, effectiveness, evaluating, note, ac
                 : '';
             metaText = `${timeText}${sourceText}`;
           }
+          const describedBy = `td-provider-${row.family}-value${metaText ? ` td-provider-${row.family}-meta` : ''}`;
 
           return (
             <li key={row.family} className="td-provider-row" data-status={row.status}>
-              <span className="td-provider-mark" aria-hidden="true">
-                {row.logo ? <ProviderLogo provider={row.logo as ProviderLogoId} size={20} /> : <Shield size={18} />}
-              </span>
-              <span className="td-provider-copy">
-                <span className="td-provider-title">{row.title}</span>
-                <span className="td-provider-value">
+              <button
+                type="button"
+                className="td-provider-tile"
+                data-focus-key={`provider-${row.family}`}
+                aria-label={`How ${row.title} was identified`}
+                aria-describedby={describedBy}
+                onClick={() => onInspect(row)}
+              >
+                <span className="td-provider-top">
+                  <span className="td-provider-mark" aria-hidden="true">
+                    {row.logo ? <ProviderLogo provider={row.logo as ProviderLogoId} size={18} /> : <Shield size={16} />}
+                  </span>
+                  <span className="td-provider-title">{row.title}</span>
+                  <Fingerprint size={14} className="td-provider-inspect" aria-hidden="true" />
+                </span>
+                <span className="td-provider-value" id={`td-provider-${row.family}-value`}>
                   {evaluating && row.source === 'none' && (row.family === 'waf' || row.family === 'cdn') ? (
                     <span className="td-evaluating"><Spinner size={14} />Detection running</span>
                   ) : (
                     <>
-                      <Badge tone={row.tone}>{statusLabel}</Badge>
                       {row.providerName ? <strong>{row.providerName}</strong> : null}
+                      <Badge tone={row.tone}>{statusLabel}</Badge>
                       {row.freshness === 'stale' ? <span className="td-provider-stale">Stale</span> : null}
                     </>
                   )}
                 </span>
-                <span className="td-provider-meta">{metaText}</span>
-              </span>
-              <Button
-                size="sm"
-                variant="ghost"
-                className="td-provider-inspect"
-                data-focus-key={`provider-${row.family}`}
-                aria-label={`How ${row.title} was identified`}
-                onClick={() => onInspect(row)}
-              >
-                <Fingerprint size={14} aria-hidden="true" />
-                {row.source === 'none' || ['not_checked', 'not_recorded', 'unknown'].includes(row.status) ? 'What we know' : 'How identified'}
-              </Button>
+                {metaText ? <span className="td-provider-meta" id={`td-provider-${row.family}-meta`}>{metaText}</span> : null}
+              </button>
             </li>
           );
         })}
@@ -335,6 +332,16 @@ export function rowImpact(row: CheckRow): CheckImpactId {
   return classifyCheckImpact(checkClassInput(row)).id;
 }
 
+function checkActivityMarkers(row: CheckRow): ActivityMarker[] {
+  const markers: ActivityMarker[] = [];
+  if (row.startedAt) markers.push({ id: `start:${row.runId || row.checkId}`, at: row.startedAt, severity: 'info', label: `Run started: ${row.name}` });
+  if (row.finishedAt) {
+    const severity = row.status === 'failed' ? 'error' : row.status === 'inconclusive' ? 'warn' : ['passed', 'blocked', 'observed'].includes(row.status) ? 'ok' : 'info';
+    markers.push({ id: `outcome:${row.runId || row.checkId}`, at: row.finishedAt, severity, label: `Outcome: ${row.label}`, detail: row.explanation ? humanizeReason(row.explanation) : '' });
+  }
+  return markers;
+}
+
 function CheckQueueRow({
   row,
   selected,
@@ -344,14 +351,20 @@ function CheckQueueRow({
   onToggleInclude,
   onInspect,
   onStopCheck,
-  onActivity,
   liveNote,
-  targetValue,
-  runEvents,
+  selectedRunItems,
   prerequisite,
   targetId = '',
+  omitLayer = false,
+  omitControls = [],
+  omitImpact = false,
+  omitDeclaration = false,
 }: {
   row: CheckRow;
+  omitLayer?: boolean;
+  omitControls?: string[];
+  omitImpact?: boolean;
+  omitDeclaration?: boolean;
   selected: boolean;
   onSelect: (checkId: string) => void;
   included: boolean;
@@ -359,11 +372,9 @@ function CheckQueueRow({
   onToggleInclude?: (checkId: string) => void;
   onInspect: (row: CheckRow) => void;
   onStopCheck?: (row: CheckRow) => void;
-  onActivity?: (row: CheckRow) => void;
   /** Set when the server says this pair's result is retained, not current live external evidence. */
   liveNote?: string;
-  targetValue?: string;
-  runEvents?: DataItem[];
+  selectedRunItems?: DataItem[];
   prerequisite?: CheckPrerequisite;
   targetId?: string;
 }) {
@@ -371,7 +382,10 @@ function CheckQueueRow({
   const blocked = Boolean(prerequisite && prerequisite.state !== 'ready');
   const prerequisiteId = `td-prereq-${row.checkId.replace(/[^a-zA-Z0-9_-]/g, '-')}`;
   const sent = rowSentLine(row);
-  const resultType = row.producesVerdict ? row.readinessCapable ? 'Produces a verdict' : 'Scoped verdict · no readiness credit' : 'Observation only · no readiness credit';
+  const resultType = row.producesVerdict ? row.readinessCapable ? '' : 'Scoped verdict' : 'Observation only';
+  const activityItems = selected ? (Array.isArray(selectedRunItems) ? selectedRunItems : []) : [];
+  const activityMarkers = selected ? checkActivityMarkers(row) : [];
+  const statusLabel = liveNote && ['passed', 'failed'].includes(row.status) ? 'Retained · not current' : row.label;
   return (
     <li className="td-check" data-status={row.status} data-selected={selected || undefined} data-included={included || undefined} data-focus-key={`check-${row.checkId}`}>
       <div className="td-check-row">
@@ -394,17 +408,17 @@ function CheckQueueRow({
             <StatusIcon size={16} className={row.status === 'running' ? 'td-spin' : undefined} aria-hidden="true" />
           </span>
           <span className="td-check-name">
-            <strong>{row.name}</strong>
-            <code>{row.checkId}</code>
+            <span className="td-check-title"><strong>{row.name}</strong>{resultType ? <span className="td-check-tier">{resultType}</span> : null}</span>
             <span className="td-check-chips">
-              <CheckImpactBadge impact={rowImpact(row)} />
-              <CheckClassChips check={checkClassInput(row)} />
+              <code>{row.checkId}</code>
+              {omitImpact ? null : <CheckImpactBadge impact={rowImpact(row)} />}
+              <CheckClassChips check={checkClassInput(row)} omitLayer={omitLayer} omitControls={omitControls} omitDeclaration={omitDeclaration} />
             </span>
           </span>
-          <span className="td-check-tier">{TIER_COPY[row.tier] ? `${TIER_COPY[row.tier]} · ` : ''}{resultType}</span>
-          <Badge tone={liveNote ? 'muted' : row.tone}>{liveNote && ['passed', 'failed'].includes(row.status) ? 'Retained · not current' : row.label}</Badge>
-          {blocked && prerequisite ? <Badge tone={prerequisiteTone(prerequisite)} title={prerequisite.detail}>{prerequisite.label}</Badge> : null}
-          {liveNote ? <Badge tone="warn" title={liveNote}>Not live evidence</Badge> : null}
+          <span className="td-check-badges">
+            <Badge tone={liveNote ? 'muted' : row.tone} title={liveNote ? `Not live evidence: ${liveNote}` : undefined}>{statusLabel}</Badge>
+            {blocked && prerequisite ? <Badge tone={prerequisiteTone(prerequisite)} title={prerequisite.detail}>{prerequisite.label}</Badge> : null}
+          </span>
           <ChevronRight size={16} className="td-chevron" aria-hidden="true" />
         </button>
       </div>
@@ -433,12 +447,12 @@ function CheckQueueRow({
             {row.mechanism ? <div><dt>How it works</dt><dd>{row.mechanism}</dd></div> : null}
             {row.limitations ? <div><dt>Limits</dt><dd>{row.limitations}</dd></div> : null}
             {row.nextStep ? <div><dt>Next step</dt><dd>{row.nextStep}</dd></div> : null}
-            <div><dt>Result type</dt><dd>{row.producesVerdict ? row.readinessCapable ? 'Produces a readiness verdict' : 'Produces a scoped policy verdict; no readiness credit' : 'Observation only; no readiness credit'}</dd></div>
+            <div><dt>Result type</dt><dd>{row.producesVerdict ? row.readinessCapable ? 'Produces a readiness verdict' : 'Produces a scoped policy verdict; no readiness credit' : 'Observation only; no readiness credit'}{TIER_COPY[row.tier] ? ` · ${TIER_COPY[row.tier]}` : ''}</dd></div>
             {row.expectedBehavior ? <div><dt>Expectation</dt><dd>{humanizeReason(row.expectedBehavior)}</dd></div> : null}
             <div><dt>Upper bound</dt><dd>{rowRequestLine(row)}</dd></div>
             {sent ? <div><dt>Logical operations</dt><dd className="tabular-nums">{sent}{row.requestsSimulated ? '' : ' (attested)'}</dd></div> : null}
             {row.response ? <div><dt>Response</dt><dd>{formatStepResponse(row.response)}</dd></div> : null}
-            <div>
+            {row.status === 'not_run' ? null : <div>
               <dt>Result</dt>
               <dd>
                 {row.status === 'running' ? (
@@ -453,31 +467,33 @@ function CheckQueueRow({
                   rowResultLine(row)
                 )}
               </dd>
-            </div>
-            {liveNote ? <div><dt>Coverage</dt><dd>Retained record, not counted as current live external evidence: {liveNote}.</dd></div> : null}
+            </div>}
+            {liveNote ? <div><dt>Coverage</dt><dd>Saved from an earlier run, not current live evidence: {liveNote}.</dd></div> : null}
             {row.finishedAt || row.startedAt ? <div><dt>{row.finishedAt ? 'Finished' : 'Started'}</dt><dd>{formatDate(row.finishedAt || row.startedAt)}</dd></div> : null}
           </dl>
-          <div className="td-check-terminal-wrapper">
-            <LiveProbeTerminal
-              entries={generateCheckProbeLogs(row, targetValue, runEvents)}
-              active={row.status === 'running'}
-              title={`Probe execution logs · ${row.checkId}`}
-              activeCheckLabel={row.checkId}
-              requestsSent={row.requestsSent}
-              maxRequests={row.maxRequests}
-              compact
-              emptyMessage="No probe execution logs recorded for this check yet."
-            />
-          </div>
-          <div className="td-check-links">
-            {row.runId || ['blocked', 'skipped', 'cancelled'].includes(row.status) ? <Button size="sm" variant="ghost" onClick={() => onActivity?.(row)}>View activity</Button> : null}
-            {row.runId && row.status === 'running' && onStopCheck ? <Button size="sm" variant="danger" aria-label={`Stop ${row.name}`} onClick={() => onStopCheck(row)}><Square size={13} aria-hidden="true" />Stop this check</Button> : null}
-            {row.runId ? (
-              <Button size="sm" variant="secondary" data-focus-key={`check-evidence-${row.checkId}`} onClick={() => onInspect(row)}>
-                <Eye size={14} aria-hidden="true" />View evidence
-              </Button>
-            ) : <span className="td-muted">No recorded result to inspect yet.</span>}
-          </div>
+          {row.runId || row.status === 'running' ? (
+            <div className="td-check-terminal-wrapper">
+              <UnifiedActivityLog
+                items={activityItems}
+                markers={activityMarkers}
+                active={row.status === 'running'}
+                label={row.name}
+                requestsSent={row.requestsSent}
+                maxRequests={row.maxRequests}
+                emptyMessage="No probe activity recorded for this check yet."
+              />
+            </div>
+          ) : null}
+          {row.runId || ['blocked', 'skipped', 'cancelled'].includes(row.status) ? (
+            <div className="td-check-links">
+              {row.runId && row.status === 'running' && onStopCheck ? <Button size="sm" variant="danger" aria-label={`Stop ${row.name}`} onClick={() => onStopCheck(row)}><Square size={13} aria-hidden="true" />Stop this check</Button> : null}
+              {row.runId ? (
+                <Button size="sm" variant="secondary" data-focus-key={`check-evidence-${row.checkId}`} onClick={() => onInspect(row)}>
+                  <Eye size={14} aria-hidden="true" />View evidence
+                </Button>
+              ) : null}
+            </div>
+          ) : null}
         </div>
       ) : null}
     </li>
@@ -519,11 +535,10 @@ export type CheckQueueProps = {
   onRunAll: () => void;
   onStop: () => void;
   onStopCheck?: (row: CheckRow) => void;
-  onActivity?: (row: CheckRow) => void;
   footer?: ReactNode;
   liveNotes?: Record<string, string>;
   scanActivity?: DataItem[];
-  selectedRunEvents?: DataItem[];
+  selectedRunItems?: DataItem[];
   targetValue?: string;
   /** Run-all is unavailable for this target (for example ownership is not proven). */
   runAllDisabledReason?: string;
@@ -555,11 +570,10 @@ export function CheckQueue({
   onRunAll,
   onStop,
   onStopCheck,
-  onActivity,
   footer,
   liveNotes = {},
   scanActivity = [],
-  selectedRunEvents = [],
+  selectedRunItems = [],
   targetValue = 'target',
   runAllDisabledReason = '',
   runAllBlockedReason = '',
@@ -655,13 +669,13 @@ export function CheckQueue({
       <header className="td-section-head">
         <div>
           <h2 id="td-checks-title">Checks for this target</h2>
-          <p>
+          <p className="td-checks-stats tabular-nums">
             {catalogCount != null
-              ? `${catalogCount} checks in the catalog. ${readyCount} are eligible for selection on this target, including observation checks.`
-              : `${rows.length} selection checks loaded. The full catalog is not available yet.`}
-            {' '}Availability is separate from recorded results. Open any definition to inspect it; tick eligible checks to review a run. The server re-checks authorization before starting.
-            {waitingCount ? ` ${waitingCount} ${waitingCount === 1 ? 'definition needs' : 'definitions need'} setup or cannot be run here.` : ''}
+              ? <><span><strong>{catalogCount}</strong> in the catalog</span><span><strong>{readyCount}</strong> eligible here</span></>
+              : <span><strong>{rows.length}</strong> loaded · full catalog not available yet</span>}
+            {waitingCount ? <span><strong>{waitingCount}</strong> need setup or cannot run here</span> : null}
           </p>
+          <p>Availability is separate from recorded results. Tick eligible checks to review a run; the server re-checks authorization before starting.</p>
         </div>
         {canRun ? (
           scanActive ? (
@@ -727,8 +741,27 @@ export function CheckQueue({
           </Button>
         </div>
       ) : null}
-      <div className="td-impact" role="group" aria-labelledby="td-impact-title" aria-describedby="td-impact-help">
-        <div className="td-impact-head">
+      <div className="td-queue-toolbar">
+        <div className="td-filters" role="group" aria-label="Filter checks by result">
+          {FILTERS.filter((entry) => entry.id === 'all' || (counts[entry.id] ?? 0) > 0).map((entry) => (
+            <button
+              key={entry.id}
+              type="button"
+              className="td-filter"
+              data-filter={entry.id}
+              aria-pressed={filter === entry.id}
+              onClick={() => setFilter(entry.id)}
+            >
+              {entry.id === 'all' && catalogCount == null ? 'Loaded' : entry.label}<span className="tabular-nums">{counts[entry.id] ?? 0}</span>
+            </button>
+          ))}
+          {canInclude && filtering && filteredIds.length ? (
+            <Button size="sm" variant="ghost" className="td-filter-select" onClick={() => changeSelection(filteredIds, true)}>
+              Select {filterLabel.toLowerCase()} ({filteredIds.length})
+            </Button>
+          ) : null}
+        </div>
+        <div className="td-impact" role="group" aria-labelledby="td-impact-title" aria-describedby="td-impact-help">
           <span className="td-label" id="td-impact-title">Traffic impact</span>
           <div className="td-impact-switch">
             {IMPACT_FILTERS.map((entry) => (
@@ -746,34 +779,24 @@ export function CheckQueue({
             ))}
           </div>
         </div>
-        <p className="td-muted td-impact-help" id="td-impact-help">
-          {impact === 'all'
-            ? `${impactCounts.non_invasive} non-invasive checks only observe with ordinary requests. ${impactCounts.invasive} invasive checks send bounded, attack-shaped traffic and can trigger WAF, IDS or SOC alerts, so tell your security team first.`
-            : CHECK_IMPACT_CLASSES[impact].summary}
-        </p>
       </div>
-      <div className="td-filters" role="group" aria-label="Filter checks by result">
-        {FILTERS.filter((entry) => entry.id === 'all' || (counts[entry.id] ?? 0) > 0).map((entry) => (
-          <button
-            key={entry.id}
-            type="button"
-            className="td-filter"
-            data-filter={entry.id}
-            aria-pressed={filter === entry.id}
-            onClick={() => setFilter(entry.id)}
-          >
-            {entry.id === 'all' && catalogCount == null ? 'Loaded' : entry.label}<span className="tabular-nums">{counts[entry.id] ?? 0}</span>
-          </button>
-        ))}
-        {canInclude && filtering && filteredIds.length ? (
-          <Button size="sm" variant="ghost" className="td-filter-select" onClick={() => changeSelection(filteredIds, true)}>
-            Select {filterLabel.toLowerCase()} ({filteredIds.length})
-          </Button>
-        ) : null}
-      </div>
+      <p className="td-muted td-impact-help" id="td-impact-help">
+        {impact === 'all'
+          ? `${impactCounts.non_invasive} non-invasive checks only observe with ordinary requests. ${impactCounts.invasive} invasive checks send bounded, attack-shaped traffic and can trigger WAF, IDS or SOC alerts, so tell your security team first.`
+          : CHECK_IMPACT_CLASSES[impact].summary}
+      </p>
       {groups.length ? <CheckClassLegend className="td-check-class-legend" /> : null}
       {groups.map((group) => {
         const Icon = CATEGORY_ICONS[group.category.icon] ?? Shield;
+        const classes = group.rows.map((row) => classifyCheck(checkClassInput(row)));
+        const impacts = group.rows.map(rowImpact);
+        const multiple = group.rows.length > 1;
+        const sharedImpact = multiple && impacts.every((value) => value === impacts[0]) ? impacts[0] : null;
+        const sharedLayer = multiple && classes[0]?.layer && classes.every((value) => value.layer?.osi === classes[0].layer?.osi && value.layer?.label === classes[0].layer?.label);
+        const sharedControls = multiple ? (classes[0]?.controls ?? []).map((control) => control.id).filter((id) => classes.every((value) => value.controls.some((control) => control.id === id))) : [];
+        const sharedDeclaration = multiple && classes.every((value) => value.declaration_only);
+        const sharedChips = sharedImpact || sharedLayer || sharedControls.length || sharedDeclaration;
+        const firstControls = (classes[0]?.controls ?? []).map((control) => control.id);
         const holdsSelection = group.rows.some((row) => row.checkId === selectedCheckId);
         const computedDefault = holdsSelection || filtering || group.counts.failed > 0 || group.counts.running > 0 || rows.length <= 12;
         if (defaultsRef.current[group.category.id] === undefined || holdsSelection) defaultsRef.current[group.category.id] = defaultsRef.current[group.category.id] || computedDefault;
@@ -796,7 +819,21 @@ export function CheckQueue({
               <span className="td-cat-icon"><Icon size={18} aria-hidden="true" /></span>
               <span className="td-cat-title">
                 <strong>{group.category.label}</strong>
-                <span className="td-muted">{group.rows.length} check{group.rows.length === 1 ? '' : 's'}</span>
+                <span className="td-cat-meta">
+                  <span className="td-muted">{group.rows.length} check{group.rows.length === 1 ? '' : 's'}</span>
+                  {sharedChips ? (
+                    <span className="td-check-chips">
+                      <span className="sr-only">Shared by every check in this group:</span>
+                      {sharedImpact ? <CheckImpactBadge impact={sharedImpact} /> : null}
+                      <CheckClassChips
+                        check={checkClassInput(group.rows[0])}
+                        omitLayer={!sharedLayer}
+                        omitControls={firstControls.filter((id) => !sharedControls.includes(id))}
+                        omitDeclaration={!sharedDeclaration}
+                      />
+                    </span>
+                  ) : null}
+                </span>
               </span>
               <span className="td-cat-tally">
                 {group.counts.failed ? <Badge tone="danger">{`${group.counts.failed} gap${group.counts.failed === 1 ? '' : 's'}`}</Badge> : null}
@@ -821,12 +858,14 @@ export function CheckQueue({
                   onToggleInclude={canInclude ? (checkId) => changeSelection([checkId], !selection.has(checkId)) : undefined}
                   onInspect={onInspect}
                   onStopCheck={onStopCheck}
-                  onActivity={onActivity}
                   liveNote={liveNotes[row.checkId]}
-                  targetValue={targetValue}
-                  runEvents={row.checkId === selectedCheckId ? selectedRunEvents : undefined}
+                  selectedRunItems={row.checkId === selectedCheckId ? selectedRunItems : undefined}
                   prerequisite={prerequisites[row.checkId]}
                   targetId={targetId}
+                  omitImpact={Boolean(sharedImpact)}
+                  omitLayer={Boolean(sharedLayer)}
+                  omitControls={sharedControls}
+                  omitDeclaration={sharedDeclaration}
                 />
               ))}
             </ul>

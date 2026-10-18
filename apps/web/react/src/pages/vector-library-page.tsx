@@ -636,8 +636,7 @@ export function VectorLibraryPage({
                         >
                           <ChevronDown className="vector-check-chevron" size={16} aria-hidden="true" data-open={expanded || undefined} />
                           <span className="vector-check-title">
-                            <strong>{plainCheckName(checkPresentation(check).name)}</strong>
-                            <code className="traffic-path-label">{group.checkId}</code>
+                            <strong title={group.checkId}>{plainCheckName(checkPresentation(check).name)}</strong>
                           </span>
                         </button>
                         <span className="vector-check-meta">

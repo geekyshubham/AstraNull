@@ -154,7 +154,7 @@ test.describe('portal dynamic provenance', () => {
     const observations = page.getByRole('region', { name: 'Protection observations' });
     const wafFamily = observations.getByRole('listitem').filter({ hasText: /^WAF/ });
     await expect(wafFamily).toContainText('Not checked');
-    await expect(wafFamily).toContainText('No recorded observation');
+    await expect(wafFamily.locator('.td-provider-meta')).toHaveCount(0);
     await expect(observations).toContainText('Not measured. Detection alone does not show whether anything is blocked.');
     // The declared expectation ("Expected: Protected path baseline") is customer context, not an observation.
     await expect(observations).not.toContainText(/Protection worked|\bprotected\b/i);

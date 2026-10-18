@@ -14,7 +14,6 @@ describe('live portal sweep UX diagnostics', () => {
     );
     assert.deepEqual(result.machineTokens.map((entry) => entry.token), ['coverage_summary_not_populated']);
     assert.deepEqual(result.jargon.map((entry) => entry.kind), [
-      'api',
       'hydrator',
       'canonical',
       'producer_attribution',

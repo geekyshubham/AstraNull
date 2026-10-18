@@ -37,7 +37,7 @@ export function TargetAuthorization({ target, config, session, canWrite, ownersh
     finally { setBusy(false); }
   }
   return <section className="td-section td-authorization" aria-labelledby="td-authorization-title">
-    <header className="td-section-head"><div><h2 id="td-authorization-title">Target authorization</h2><p>Authorization for {String(target.value ?? id)}. Recording it sends no probe traffic. High-scale execution still requires a complete authorization pack and SOC approval.</p></div>
+    <header className="td-section-head"><div><h2 id="td-authorization-title">Target authorization</h2><p>Recording it sends no probe traffic. High-scale execution still requires a complete authorization pack and SOC approval.</p></div>
       {canWrite && !record ? <Button variant="secondary" disabled={loading || !ownershipDone} onClick={() => setOpen(true)}>Record authorization</Button> : null}
     </header>
     {loading ? <p role="status">Loading authorization…</p> : record ? <p>Recorded authorization · {String(record.signer_name ?? 'Signer not recorded')} · {record.signed_at ? <time className="mono" dateTime={String(record.signed_at)}>{formatDate(record.signed_at)}</time> : 'Time not recorded'}</p> : <p>No active authorization covers this target.{!ownershipDone ? ' Prove ownership before recording authorization.' : ''}</p>}
