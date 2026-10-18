@@ -1,6 +1,7 @@
 import { runWithTenantClient, withTenantContext } from './tenantContext.mjs';
 import { incMetric } from '../../lib/metrics.mjs';
 import { mergeProbeCapture } from '../../lib/probeExecution.mjs';
+import { historicalOriginBindingForRun, validateOriginBindingForExecution } from '../../services/originBindings.mjs';
 
 const PROBE_JOB_COLUMNS = `id, tenant_id, test_run_id, target_id, check_id, vector_family, status,
   nonce_hash, nonce_for_worker, probe_profile, constraints_json, target_descriptor_json,
@@ -473,9 +474,37 @@ export function createProbeJobRepository(pool) {
       return runWithTenantClient(pool, ctx.tenantId, options.client, async (client) => {
         // Hold the declared destination and policy rows through the durable grant. The lease
         // alone is not authorization: ownership or target binding can change after polling.
-        await client.query(`SELECT t.id FROM targets t
+        await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [ctx.tenantId]);
+        const runResult = await client.query(`SELECT * FROM test_runs
+          WHERE tenant_id = $1 AND id = $2 FOR SHARE`, [ctx.tenantId, job.test_run_id]);
+        const run = runResult.rows[0];
+        const reference = historicalOriginBindingForRun(run);
+        let binding = null;
+        if (reference) {
+          const found = await client.query(`SELECT * FROM origin_bindings
+            WHERE tenant_id = $1 AND id = $2 FOR SHARE`, [ctx.tenantId, reference.id]);
+          binding = found.rows[0] ?? null;
+        }
+        const targetIds = [...new Set([job.target_id, binding?.origin_target_id, binding?.protected_target_id].filter(Boolean))];
+        // Verification transitions lock their target row (advance_target_verification_clock).
+        // Both descriptors, declarations and both proof clocks remain stable until COMMIT.
+        const targets = await client.query(`SELECT t.*, t.metadata_json AS metadata FROM targets t
           JOIN target_groups tg ON tg.tenant_id = t.tenant_id AND tg.id = t.target_group_id
-          WHERE t.tenant_id = $1 AND t.id = $2 FOR SHARE OF t, tg`, [ctx.tenantId, job.target_id]);
+          WHERE t.tenant_id = $1
+            AND (t.id = ANY($2::text[]) OR EXISTS (SELECT 1 FROM targets child
+              WHERE child.tenant_id = t.tenant_id AND child.id = ANY($2::text[]) AND child.target_group_id = t.target_group_id
+                AND child.metadata_json->'tags' ? ('subdomain-of:' || t.id)))
+            AND t.deleted_at IS NULL AND tg.deleted_at IS NULL AND tg.archived_at IS NULL
+          ORDER BY t.id FOR SHARE OF t, tg`, [ctx.tenantId, targetIds]);
+        const proofs = await client.query(`SELECT *,
+          to_char(transitioned_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS transitioned_at
+          FROM target_verification_current WHERE tenant_id = $1 AND target_id = ANY($2::text[])`, [ctx.tenantId, targets.rows.map((row) => row.id)]);
+        const connectors = reference ? await client.query(`SELECT * FROM waf_connectors WHERE tenant_id = $1 FOR SHARE`, [ctx.tenantId]) : { rows: [] };
+        const snapshots = reference ? await client.query(`SELECT * FROM waf_connector_snapshots WHERE tenant_id = $1 FOR SHARE`, [ctx.tenantId]) : { rows: [] };
+        const records = { targets: targets.rows, targetVerifications: proofs.rows,
+          wafConnectors: connectors.rows.map((row) => ({ ...row, has_secret: Boolean(row.secret_id) })),
+          wafConnectorSnapshots: snapshots.rows.map((row) => ({ ...row, summary: row.summary_json })) };
+        if (validateOriginBindingForExecution({ job, run, binding, records }).error) return null;
         const { rows } = await client.query(`UPDATE probe_jobs AS j SET worker_metadata_json =
           COALESCE(j.worker_metadata_json, '{}'::jsonb) || jsonb_build_object('execution_reservation', $5::jsonb)
           WHERE j.tenant_id = $1 AND j.id = $2 AND j.status = 'leased' AND j.leased_by = $3

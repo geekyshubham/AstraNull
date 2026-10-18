@@ -1,5 +1,5 @@
-import { FileText, Layers, ShieldCheck } from 'lucide-react';
-import { CHECK_PROTECTION_CONTROLS, classifyCheck } from '../../lib/check-classification.mjs';
+import { Eye, FileText, Layers, ShieldCheck, Zap } from 'lucide-react';
+import { CHECK_IMPACT_CLASSES, CHECK_PROTECTION_CONTROLS, classifyCheck, type CheckImpactId } from '../../lib/check-classification.mjs';
 import { Badge } from '../ui/badge';
 import './check-class-chips.css';
 
@@ -32,6 +32,22 @@ export function CheckClassChips({ check, className }: { check: CheckLike; classN
         </Badge>
       ) : null}
     </span>
+  );
+}
+
+export function CheckImpactIcon({ impact, size = 12 }: { impact: CheckImpactId; size?: number }) {
+  const Icon = impact === 'invasive' ? Zap : Eye;
+  return <Icon aria-hidden="true" focusable="false" size={size} strokeWidth={2.25} />;
+}
+
+export function CheckImpactBadge({ impact }: { impact: CheckImpactId }) {
+  const meta = CHECK_IMPACT_CLASSES[impact];
+  return (
+    <Badge tone={impact === 'invasive' ? 'warn' : 'muted'} className="check-class-chip check-class-chip--impact" data-impact={impact} title={meta.summary}>
+      <CheckImpactIcon impact={impact} />
+      <span className="sr-only">Traffic impact: </span>
+      {meta.label}
+    </Badge>
   );
 }
 

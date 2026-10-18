@@ -170,6 +170,7 @@ describe('GET /v1/targets inventory', () => {
         criticality: { status: 'unassigned', value: null, source: null },
       },
       created_at: CREATED_AT,
+      dns_observation: null,
     });
 
     const otherTenant = await request(baseUrl, 'GET', '/v1/targets', {
@@ -220,6 +221,7 @@ describe('GET /v1/targets inventory', () => {
     assert.equal(items[0].source, 'manual');
     assert.equal(items[0].import_integration, null);
     assert.equal(items[0].created_at, CREATED_AT);
+    assert.equal(items[0].dns_observation, null, 'no stored edge detection reads as null, never inferred');
 
     const inventoryQuery = pool.queries.find((query) => query.text.includes('FROM targets t'));
     assert.deepEqual(inventoryQuery.params, ['ten_pg']);
@@ -228,6 +230,7 @@ describe('GET /v1/targets inventory', () => {
     assert.match(inventoryQuery.text, /verification\.tenant_id = t\.tenant_id/);
     assert.match(inventoryQuery.text, /verification\.target_id = t\.id/);
     assert.match(inventoryQuery.text, /environment\.tenant_id = t\.tenant_id/);
+    assert.match(inventoryQuery.text, /ed\.tenant_id = t\.tenant_id AND ed\.target_id = t\.id/);
   });
 
   it('requires and forwards listTargets through the Postgres catalog adapter', async () => {

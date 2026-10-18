@@ -38,6 +38,7 @@ export const OBSERVATION_ONLY_PROBE_KINDS = Object.freeze([
   'l7_resource_posture_probe',
   // Standalone Host/SNI has a one-request contract and no approved permitted-baseline producer.
   'host_sni_bypass',
+  'origin_identity_pair',
   'origin_leak_scan',
   'port_scan_bounded',
   'connection_limit_probe',
@@ -257,6 +258,7 @@ const TAXONOMY_CHECK_IDS_BY_PROBE_KIND = Object.freeze({
     'ops.kill_switch_drill.safe',
     'ops.runbook_contact_validation.safe',
   ]),
+  origin_identity_pair: Object.freeze(['origin.identity_pair.head.v1', 'origin.identity_pair.get.v1']),
   origin_leak_scan: Object.freeze([
     'origin.cdn_bypass.readiness',
     'origin.dns_hostname_bypass.readiness',
@@ -440,7 +442,18 @@ export const SUPPORTED_EVASION_TRANSFORMS = Object.freeze([
 ]);
 const SEMANTIC_EVASION_CHECK_SUFFIXES = new Set(SUPPORTED_EVASION_TRANSFORMS);
 
+const SETUP_UNAVAILABLE_CUSTOM_CANARY_IDS = new Set([
+  'waf.http_method_policy_marker.safe', 'waf.request_smuggling_marker.safe',
+  'waf.crlf_injection_marker.safe', 'waf.open_redirect_marker.safe',
+  'waf.nosql_injection_marker.safe', 'waf.xpath_injection_marker.safe',
+  'waf.jndi_ldap_marker.safe', 'waf.csv_formula_marker.safe',
+  'waf.prototype_pollution_marker.safe', 'waf.deserialization_marker.safe',
+  'waf.ssrf_marker.safe', 'waf.xxe_marker.safe', 'waf.file_upload_marker.safe',
+  'waf.jwt_tamper_marker.safe', 'waf.ssti_marker.safe',
+]);
+
 export function evidenceTierForTaxonomyCheckId(checkId) {
+  if (SETUP_UNAVAILABLE_CUSTOM_CANARY_IDS.has(checkId)) return 'E2';
   const kind = TAXONOMY_PROBE_KIND_BY_CHECK_ID.get(checkId);
   if (kind === 'soc_gated') return 'E4';
   if (!kind) return 'E0';

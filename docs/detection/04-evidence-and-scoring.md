@@ -56,7 +56,7 @@ Timeout, error, and not-run remain `inconclusive`. They create no finding and no
 
 NFW kinds that can emit `exposed` still sit on `OBSERVATION_ONLY_PROBE_KINDS`, so they stay **excluded from the readiness denominator** (ADR-0014). Rule-coverage reports them separately as `violation_only` ([rule-coverage.md](rule-coverage.md)).
 
-Custom-canary checks (`waf.*_marker.safe` except the three managed markers) **roll up to one pair per target** (`rollupCustomCanaryPairs`). Efficacy is by distinct canary rule, not by check count.
+Opaque custom-canary checks have `setup_required: true`, `produces_verdict: false`, `observation_only: true` and `readiness_conclusion: false`. Current typed declarations cannot bind an installed exact-token rule to placements and expected action. They are E2 observations excluded from readiness; an allowed token does not establish installed-rule failure. Historical custom-canary rollup compatibility never grants current credit. Actual HTTP method policy is also E2/no-readiness, but separately retains scoped verdict capability (`produces_verdict: true`).
 
 ## Version gaps
 
@@ -67,9 +67,9 @@ Custom-canary checks (`waf.*_marker.safe` except the three managed markers) **ro
 - `scenario_version` is required and missing or mismatched.
 - The run or verdict records a `grading_version` or `signature_corpus_version` that `gradingSignatureVersionGap` rejects.
 
-`gradingSignatureVersionGap` (`src/lib/checkDefinitionVersion.mjs`) compares recorded `grading_version` / `signature_corpus_version` to `waf-grading.v2` and `waf-signatures.2026-10-13.2` (bumped when generic proxy headers stopped grading `blocked`; runs graded under `waf-signatures.2026-10-13` are a `signature_corpus_version_mismatch` gap until re-run). Runs stamp those fields. `versionGapFor` calls it whenever either field is recorded, so a grading or corpus change marks the pair `partial` (`retest_required`); runs that record neither field (non-WAF kinds) are unaffected. Finding `fix_verified` also compares `grading_version` between the open finding and the retest run.
+`gradingSignatureVersionGap` (`src/lib/checkDefinitionVersion.mjs`) compares recorded `grading_version` / `signature_corpus_version` to `waf-grading.v3` and `waf-signatures.2026-10-13.2` (bumped when generic proxy headers stopped grading `blocked`; runs graded under `waf-signatures.2026-10-13` are a `signature_corpus_version_mismatch` gap until re-run). Runs stamp those fields. `versionGapFor` calls it whenever either field is recorded, so a grading or corpus change marks the pair `partial` (`retest_required`); runs that record neither field (non-WAF kinds) are unaffected. Finding `fix_verified` also compares `grading_version` between the open finding and the retest run.
 
-Material `assurance-scope.v3` change, incomplete marker comparison (`marker-comparison-v4` with healthy baseline and all planned legs), and `observation_only` / `readiness_conclusion: false` also force `partial`.
+Material `assurance-scope.v3` change, incomplete marker comparison (class/entry-path/scanner `marker-comparison-v5`, healthy controls, all planned delivery completed and at least one graded leg; method/evasion retain their separate v4 contract), and `observation_only` / `readiness_conclusion: false` also force `partial`.
 
 ## Positive-outcome (enforcement) credit
 

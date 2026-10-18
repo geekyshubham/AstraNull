@@ -2,7 +2,8 @@
  * Full P0/P1 capability probes — bounded, metadata-only results, no flooding.
  */
 
-import dns, { Resolver } from 'node:dns/promises';
+import dns from 'node:dns/promises';
+import { resolveOwnedDns } from './ownedDnsResolver.mjs';
 import {
   ALLOWED_PROBE_HTTP_METHODS,
   normalizeProbeHttpPath,
@@ -38,6 +39,9 @@ import {
   VETTED_SCAN_PORTS,
 } from './probeEndpoint.mjs';
 import { probeConnectionLimit } from './connectionLimitProbe.mjs';
+import { probeOriginIdentityPair } from './originIdentityPairProbe.mjs';
+export { probeOriginIdentityPair } from './originIdentityPairProbe.mjs';
+import { markerComparisonComplete } from './vectorProbes/wafProbeSupport.mjs';
 import {
   classifyTcpErrno,
   peerIsCdn,
@@ -105,6 +109,7 @@ const NANOSECONDS_PER_MILLISECOND = 1_000_000n;
 // leaf capability module so signing and worker execution share one floor.
 export const MINIMUM_REQUESTS_BY_PROBE_KIND = Object.freeze({
   origin_leak_scan: 3, // apex A + apex AAAA + edge HEAD
+  origin_identity_pair: 2, // reviewed protected baseline + bound direct request
   dns_axfr_leak: 2, // NS lookup + one TCP AXFR query
 });
 
@@ -207,11 +212,12 @@ function dnsResolverFailureOutcome(job, kind, deps, requestsSent, error, metadat
     return deadlineOutcome(job, kind, deps, requestsSent, metadata);
   }
   const durationMs = observedProbeDurationMs(deps);
+  const errorClass = dnsResolverErrorClass(error);
   return {
-    external_result: 'error',
+    external_result: ['ETIMEOUT', 'ETIMEDOUT'].includes(errorClass) ? 'timeout' : 'error',
     metadata: withKind(job, kind, {
       ...metadata,
-      error_class: dnsResolverErrorClass(error),
+      error_class: errorClass,
       resolver_attempts: requestsSent,
       request_counting_basis: 'logical_operations',
       duration_ms: durationMs,
@@ -283,6 +289,8 @@ export const CAPABILITY_OBSERVATION_VERSION = 'capability-observation-v3';
 function withKind(job, kind, metadata, deps = {}) {
   const observationOnly = OBSERVATION_ONLY_PROBE_KINDS.includes(kind) || Boolean(metadata?.error_class);
   return stampSourcePerspective({ profile_kind: kind, probe_kind: kind, classifier_version: CAPABILITY_OBSERVATION_VERSION,
+    ...(kind === 'origin_leak_scan' ? { addresses_are_confirmed_origins: false, exposure_conclusion: 'not_established',
+      source_coverage_complete: false, observed_addresses: [...new Set([...(metadata.origin_ips ?? []), ...(metadata.ipv6_addrs ?? [])])].slice(0, 16) } : {}),
     ...metadata, ...(observationOnly ? {
       observation_only: true, readiness_conclusion: false, evidence_tier: 'E2',
       assurance_limits: 'Bounded external observations; no capacity, exploit mitigation or policy assurance.',
@@ -647,16 +655,13 @@ async function resolve6(host, deps) {
 }
 
 async function resolveNs(zone, deps) {
-  const fn = deps.resolveNsFn ?? dns.resolveNs;
-  if (typeof deps.remainingJobTimeoutMs === 'function' && deps.remainingJobTimeoutMs() <= 0) {
-    throw probeDeadlineError();
-  }
+  const timeoutMs = remainingProbeTimeoutMs({ constraints: { timeout_ms: DEFAULT_PROBE_TIMEOUT_MS } }, deps);
+  if (timeoutMs <= 0) throw probeDeadlineError();
   try {
-    return await withinRemainingProbeTime(
-      startProbeIoAttempt(deps, 'dns_ns', () => fn(zone)),
-      { constraints: { timeout_ms: DEFAULT_PROBE_TIMEOUT_MS } },
-      deps,
-    );
+    return await startProbeIoAttempt(deps, 'dns_ns', () => resolveOwnedDns({
+      method: 'resolveNs', name: zone, resolveFn: deps.resolveNsFn, timeoutMs,
+      signals: [deps.jobDeadlineSignal, deps.cancellationSignal],
+    }));
   } catch (error) {
     if (isProbeDeadlineError(error, deps) || isOperationBudgetError(error)) throw error;
     if (isAuthoritativeDnsNegative(error)) return [];
@@ -853,10 +858,12 @@ export async function probeOriginLeakScan(job, deps = {}) {
     };
   }
 
-  let edge_ip = null;
-  if (edgeProbe.res) {
-    edge_ip = edgeProbe.res.headers.get('x-backend-ip') ?? null;
-  }
+  // Only transport metadata can describe the connected peer. A response header is
+  // attacker-controlled data, not socket telemetry or independent origin evidence.
+  const edge_ip = net.isIP(String(edgeProbe.res?.pinnedAddress ?? '')) ? edgeProbe.res.pinnedAddress : null;
+  const backendHeaderValue = edgeProbe.res?.headers?.get('x-backend-ip');
+  // This is an IP clue, not a channel for retaining arbitrary response-header text.
+  const backendHeaderClue = typeof backendHeaderValue === 'string' && net.isIP(backendHeaderValue) ? backendHeaderValue : null;
 
   for (const prefix of BOUNDED_SUBDOMAIN_PREFIXES) {
     if (requestsSent >= budget) break;
@@ -921,13 +928,25 @@ export async function probeOriginLeakScan(job, deps = {}) {
   if (edgeMismatch) corroborated_leak_signals.push('dns_points_not_edge');
 
   const durationMs = observedProbeDurationMs(deps);
-  const external = corroborated_leak_signals.length > 0 ? 'connected' : 'blocked';
+  // Successful metadata collection is not a protected/blocked verdict, including
+  // empty or limited sources. DNS differences do not identify a production origin.
+  const external = 'connected';
   return {
     external_result: external,
     metadata: withKind(job, kind, {
       duration_ms: durationMs,
       apex_domain: domain,
+      // Legacy alias retained for historical consumers; these are observations only.
       origin_ips: directIps.slice(0, 8),
+      observed_addresses: [...new Set([...directIps, ...ipv6_addrs])].slice(0, 16),
+      addresses_are_confirmed_origins: false,
+      edge_peer_address: edge_ip,
+      untrusted_header_clues: backendHeaderClue ? [{ name: 'x-backend-ip', value: String(backendHeaderClue).slice(0, 128), trusted: false }] : [],
+      exposure_conclusion: 'not_established',
+      source_coverage: 'bounded_current_dns_and_one_edge_head',
+      source_coverage_complete: false,
+      observation_only: true, readiness_conclusion: false,
+      limitations: ['dns_addresses_not_confirmed_origins', 'response_headers_are_untrusted_clues', 'empty_sources_do_not_establish_origin_hiding'],
       ipv6_addrs: [...ipv6_addrs].slice(0, 8),
       subdomains_scanned,
       leak_signals,
@@ -1050,6 +1069,8 @@ export async function probeHostSniBypass(job, deps = {}) {
       ...(observation.error_class ? { error_class: observation.error_class } : {}),
       protected_host: hostname,
       direct_ip: directIp,
+      tls: { verification_enabled: false, trust_valid: null, name_valid: null,
+        limitation: useHttps ? 'legacy_origin_transport_does_not_verify_certificate' : 'not_verified_by_this_observation' },
       observation_outcome: observation.outcome,
       network_reachable: observation.response_observed,
       explicit_denial_observed: observation.explicit_denial_observed,
@@ -1513,6 +1534,8 @@ export async function probeHttpMethodMatrix(job, deps = {}) {
       methods_allowed,
       methods_blocked,
       method_errors,
+      ...(method_errors.length === method_statuses.length && method_errors.length > 0
+        ? { error_class: method_errors[0].error_class } : {}),
       allow_header: allowHeader,
       advertised_methods: advertisedMethods,
       unsafe_methods_advertised: unsafeMethodsAdvertised,
@@ -1682,7 +1705,7 @@ export async function probeSlowHeaderTimeout(job, deps = {}) {
           socket.write(`HEAD ${endpoint.probePath} HTTP/1.1\r\nHost: ${parsed.host}\r\nX-AstraNull-Marker: `);
         } catch (error) { finish(false, error); }
       };
-      timer = setTimeout(() => finish(false), timeoutMs);
+      timer = setTimeout(onAbort, timeoutMs);
       signal?.addEventListener('abort', onAbort, { once: true });
       if (signal?.aborted) return onAbort();
       socket.once(connectedEvent, onConnect);
@@ -1727,31 +1750,42 @@ export async function probeSlowHeaderTimeout(job, deps = {}) {
 }
 
 function waitForHttp2Settings(session, job, deps) {
-  return withinRemainingProbeTime(new Promise((resolve, reject) => {
-    const cleanup = () => {
+  return new Promise((resolve, reject) => {
+    const signal = deps.jobDeadlineSignal;
+    let settled = false;
+    let timer;
+    const finish = (error, settings) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
       session.removeListener?.('remoteSettings', onSettings);
       session.removeListener?.('connect', onConnect);
-      session.removeListener?.('error', onError);
+      session.removeListener?.('close', onClose);
+      if (error) reject(error);
+      else resolve(settings);
     };
-    const onSettings = (settings) => {
-      cleanup();
-      resolve(settings ?? session.remoteSettings ?? {});
-    };
+    const onSettings = (settings) => finish(null, settings ?? session.remoteSettings ?? {});
     const onConnect = () => {
       const protocol = session.alpnProtocol;
       if (protocol && protocol !== 'h2') {
-        cleanup();
-        reject(Object.assign(new Error('HTTP/2 was not negotiated.'), { code: 'http2_not_negotiated' }));
+        finish(Object.assign(new Error('HTTP/2 was not negotiated.'), { code: 'http2_not_negotiated' }));
       }
     };
-    const onError = (error) => {
-      cleanup();
-      reject(error);
-    };
+    const onError = (error) => finish(error);
+    const onClose = () => finish(Object.assign(new Error('HTTP/2 closed before peer SETTINGS.'), { code: 'ECONNRESET' }));
+    const onAbort = () => finish(probeDeadlineError());
+    // Keep a bounded error listener for asynchronous session teardown after settlement.
+    session.once('error', onError);
+    const timeoutMs = remainingProbeTimeoutMs(job, deps);
+    if (timeoutMs <= 0) return onAbort();
+    timer = setTimeout(onAbort, timeoutMs);
     session.once('remoteSettings', onSettings);
     session.once('connect', onConnect);
-    session.once('error', onError);
-  }), job, deps);
+    session.once('close', onClose);
+    signal?.addEventListener('abort', onAbort, { once: true });
+    if (signal?.aborted) onAbort();
+  });
 }
 
 export async function probeHttp2FrameBehavior(job, deps = {}) {
@@ -1813,12 +1847,21 @@ export async function probeHttp2FrameBehavior(job, deps = {}) {
       resetStream.once?.('error', () => {});
     }
     if (budget >= 2) {
-      pingRttMs = await withinRemainingProbeTime(new Promise((resolve, reject) => {
-        startProbeIoAttempt(deps, 'http2_ping', () => session.ping(Buffer.alloc(8), (error, duration) => {
-          if (error) reject(error);
-          else resolve(Math.max(0, Math.ceil(Number(duration) || 0)));
-        }), () => { requestsSent += 1; });
-      }), job, deps);
+      const signal = deps.jobDeadlineSignal;
+      let onAbort;
+      try {
+        pingRttMs = await withinRemainingProbeTime(new Promise((resolve, reject) => {
+          onAbort = () => reject(probeDeadlineError());
+          signal?.addEventListener('abort', onAbort, { once: true });
+          if (signal?.aborted) return onAbort();
+          startProbeIoAttempt(deps, 'http2_ping', () => session.ping(Buffer.alloc(8), (error, duration) => {
+            if (error) reject(error);
+            else resolve(Math.max(0, Math.ceil(Number(duration) || 0)));
+          }), () => { requestsSent += 1; });
+        }), job, deps);
+      } finally {
+        if (onAbort) signal?.removeEventListener('abort', onAbort);
+      }
     }
 
     if (budget >= 3) {
@@ -1864,11 +1907,12 @@ export async function probeHttp2FrameBehavior(job, deps = {}) {
       && settings.maxHeaderListSize > 0;
   } catch (error) {
     const durationMs = observedProbeDurationMs(deps);
-    const errorClass = error.code === 'http2_not_negotiated'
-      ? 'http2_not_negotiated'
+    if (isOperationBudgetError(error)) throw error;
+    const stopped = isProbeDeadlineError(error, deps);
+    const errorClass = stopped ? 'probe_job_deadline_exceeded'
       : (error.code ?? error.name ?? 'http2_probe_failed');
     return {
-      external_result: 'error',
+      external_result: stopped && requestsSent > 0 ? 'timeout' : 'error',
       metadata: withKind(job, kind, {
         error_class: errorClass,
         probe_path: endpoint.probePath,
@@ -2906,26 +2950,20 @@ export async function probeOpenRecursion(job, deps = {}) {
     };
   }
 
-  const resolveExternal = deps.resolve4ExternalFn ?? (async (resolver, name) => {
-    const resolverClient = new Resolver();
-    resolverClient.setServers([resolver]);
-    return resolverClient.resolve4(name);
-  });
-
   const resolverAddress = resolverVerdict.addresses?.[0] ?? resolverHost;
 
   let open_recursion = false;
   let requestsSent = 0;
   try {
-    await withinRemainingProbeTime(
-      startProbeIoAttempt(
-        deps,
-        'dns_external_lookup',
-        () => resolveExternal(resolverAddress, queryName),
-        () => { requestsSent = 1; },
-      ),
-      job,
+    await startProbeIoAttempt(
       deps,
+      'dns_external_lookup',
+      () => resolveOwnedDns({
+        method: 'resolve4', name: queryName, server: resolverAddress,
+        resolveFn: deps.resolve4ExternalFn, timeoutMs: remainingProbeTimeoutMs(job, deps),
+        signals: [deps.jobDeadlineSignal, deps.cancellationSignal],
+      }),
+      () => { requestsSent = 1; },
     );
     open_recursion = true;
   } catch (error) {
@@ -3205,10 +3243,7 @@ export async function probeWafClassMarker(job, deps = {}) {
   const rawMetadata = { ...(raw ?? {}) };
   delete rawMetadata.requests_sent;
   const hasMarkerEvidence = Array.isArray(raw?.marker_results) && raw.marker_results.length > 0
-    && raw.comparison_complete === true && raw.classifier_version === 'marker-comparison-v4'
-    && Number.isSafeInteger(raw.planned_marker_legs) && raw.planned_marker_legs > 0
-    && raw.completed_marker_legs === raw.planned_marker_legs
-    && (raw.baseline_health ?? raw.permitted_baseline?.health) === 'healthy';
+    && markerComparisonComplete(raw) && raw.setup_required !== true;
   const externalResult = raw?.error_class
     ? 'error'
     : hasMarkerEvidence && raw.posture === 'protected'
@@ -3225,7 +3260,7 @@ export async function probeWafClassMarker(job, deps = {}) {
       observation_only: externalResult === 'not_run',
       readiness_conclusion: ['blocked', 'connected'].includes(externalResult),
       ...(externalResult === 'not_run'
-        ? { not_run_reason: 'insufficient_marker_comparison' }
+        ? { not_run_reason: raw?.setup_required ? 'custom_canary_rule_setup_unavailable' : 'insufficient_marker_comparison' }
         : {}),
       duration_ms: durationMs,
       request_counting_basis: 'logical_operations',
@@ -3391,6 +3426,10 @@ export async function probeWafMethodPolicy(job, deps = {}) {
     external_result: externalResult,
     metadata: withKind(job, kind, {
       ...rawMetadata,
+      // Method policy can emit a scoped E2 verdict, never readiness credit.
+      observation_only: true,
+      readiness_conclusion: false,
+      produces_verdict: true,
       max_requests: budget,
       duration_ms: durationMs,
       request_counting_basis: 'logical_operations',
@@ -3468,6 +3507,7 @@ export const CAPABILITY_PROBE_DISPATCH = Object.freeze({
   waf_fingerprint_observation: probeOutsideInWafScan,
   outside_in_waf_scan: probeOutsideInWafScan,
   origin_leak_scan: probeOriginLeakScan,
+  origin_identity_pair: probeOriginIdentityPair,
   host_sni_bypass: probeHostSniBypass,
   port_scan_bounded: probePortScanBounded,
   rate_limit_sequence: probeRateLimitSequence,

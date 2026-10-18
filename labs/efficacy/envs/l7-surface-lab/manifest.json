@@ -1,0 +1,65 @@
+{
+  "schema": "astranull.efficacy-lab.v1",
+  "lab_id": "l7-surface-lab",
+  "networks": [
+    "anl-l7-surface-lab-net"
+  ],
+  "targets": [
+    {
+      "name": "l7-surface-nginx",
+      "address": "172.31.53.10",
+      "hostname": null,
+      "ports": [
+        {
+          "port": 80,
+          "protocol": "tcp",
+          "service": "http"
+        }
+      ],
+      "planted_condition": "nginx reflecting arbitrary Origin with Access-Control-Allow-Credentials: true; JSON endpoint at /api/health; methods restricted to GET, HEAD, OPTIONS (POST/PUT/DELETE return 405)",
+      "declarations": {},
+      "expectations": [
+        {
+          "check": "l7.cors_posture.safe",
+          "expected": "gap",
+          "why": "Origin header is reflected in Access-Control-Allow-Origin with Access-Control-Allow-Credentials: true; AstraNull inferred-missing-control correlation flags this as exposed."
+        },
+        {
+          "check": "l7.api_surface_scan.safe",
+          "expected": "inconclusive_expected",
+          "why": "api_surface_scan is an observation-only probe (E2) that records path observations; without an inference rule or customer declaration, correlation returns inconclusive."
+        },
+        {
+          "check": "l7.http_method_restriction.safe",
+          "expected": "inconclusive_expected",
+          "why": "http_method_restriction.safe uses http_method_matrix, an observation-only probe (E2) sending only HEAD and OPTIONS to collect Allow metadata; correlation returns inconclusive as it does not test or grade 405 rejection of disallowed methods."
+        },
+        {
+          "check": "l7.login_abuse_flow.safe",
+          "expected": "not_applicable",
+          "why": "Target does not implement an authentication/login flow."
+        },
+        {
+          "check": "l7.graphql_complexity.safe",
+          "expected": "not_applicable",
+          "why": "Target does not host a GraphQL endpoint."
+        },
+        {
+          "check": "l7.webhook_flood.readiness",
+          "expected": "not_applicable",
+          "why": "Target does not implement webhook receivers."
+        },
+        {
+          "check": "l7.slowloris.readiness",
+          "expected": "not_applicable",
+          "why": "Slow-request attack tooling is explicitly excluded by safety policy."
+        }
+      ]
+    }
+  ],
+  "verification": [
+    "curl -s -i -X OPTIONS -H 'Origin: https://probe.invalid.astranull' -H 'Access-Control-Request-Method: GET' http://172.31.53.10/ returns Access-Control-Allow-Origin: https://probe.invalid.astranull and Access-Control-Allow-Credentials: true",
+    "curl -s -i http://172.31.53.10/api/health returns HTTP 200 with Content-Type: application/json and {\"status\":\"ok\",\"service\":\"l7-surface-lab\"}",
+    "curl -s -i -X GET http://172.31.53.10/ returns HTTP 200, curl -s -I http://172.31.53.10/ returns HTTP 200, curl -s -i -X POST http://172.31.53.10/ returns HTTP 405"
+  ]
+}

@@ -26,7 +26,6 @@ export type RouteId =
   | 'release-evidence'
   | 'settings'
   | 'support'
-  | 'subscription'
   | 'admin'
   | 'tenant-detail'
   | 'internal-soc'
@@ -106,7 +105,6 @@ export const PORTAL_ROUTE_DATASETS = {
   'release-evidence': [],
   settings: ['evidence', 'secrets', 'serviceAccounts'],
   support: ['subscriptionSummary'],
-  subscription: ['subscriptionSummary'],
   admin: ['internalOverview', 'internalSignupRequests', 'internalTenants', 'internalApprovalRequests', 'internalAudit'],
   'tenant-detail': ['internalTenants', 'internalApprovalRequests'],
   'internal-soc': ['findings', 'highScale', 'internalApprovalRequests'],

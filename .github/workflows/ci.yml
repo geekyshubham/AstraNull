@@ -78,7 +78,7 @@ jobs:
         run: npm run oidc:fixture:ensure
 
       - name: Unit tests
-        run: node --test tests/unit/*.test.mjs
+        run: node --test --test-concurrency=1 tests/unit/*.test.mjs
 
       # Start the shared Postgres once. Otherwise each parallel integration-test process that
       # finds no database runs its own `docker compose up`, the runs collide on the fixed
@@ -87,10 +87,10 @@ jobs:
         run: docker compose -f docker-compose.yml up -d --wait postgres
 
       - name: Integration tests
-        run: node --test tests/integration/*.test.mjs
+        run: node --test --test-concurrency=1 tests/integration/*.test.mjs
 
       - name: E2E tests
-        run: node --test tests/e2e/*.test.mjs
+        run: node --test --test-concurrency=1 tests/e2e/*.test.mjs
 
       - name: Safety check
         run: node scripts/safety-check.mjs
@@ -108,7 +108,7 @@ jobs:
         run: node scripts/generate-check-library-html.mjs --check
 
       - name: Edge signature corpus provenance and hash parity
-        run: node --test tests/unit/edge-signature-corpus.test.mjs
+        run: node --test --test-concurrency=1 tests/unit/edge-signature-corpus.test.mjs
 
       # apps/web/react-app.{js,css} is a hand-committed bundle that is deployed
       # as-is. Nothing else rebuilds it, so portal source and the shipped bundle

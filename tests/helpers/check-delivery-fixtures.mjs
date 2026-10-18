@@ -21,10 +21,11 @@ import { createOriginBinding } from '../../src/services/originBindings.mjs';
 import { RISKY_ADMIN_PORTS } from '../../src/lib/capabilityProbes.mjs';
 import { BENIGN_CLASS_MARKERS } from '../../src/lib/inertWafMarkers.mjs';
 import { executeProbeForJob, buildResultBody } from '../../workers/probe-worker.mjs';
-import { CHECK_DELIVERY_INVENTORY, deliveryFingerprint } from '../fixtures/check-delivery-coverage.mjs';
+import { CHECK_DELIVERY_INVENTORY, deliveryFingerprint, OWNED_INVALID_TLS_REPLY_HEX } from '../fixtures/check-delivery-coverage.mjs';
 import { createTlsFixture } from '../unit/protocol-transport-socket.fixture.mjs';
 import { freshStore } from './reset.mjs';
 import { createDeliveryDnsFixture, dnsQuestion, dnsResponse } from './check-delivery-dns-fixture.mjs';
+import { deliverySocketIdentity, deliveryDatagramIdentity } from './check-delivery-peer-identity.mjs';
 
 export const DELIVERY_WORKER_SECRET = randomBytes(32).toString('base64url');
 export const DELIVERY_CTX = Object.freeze({ tenantId: 'ten_demo', userId: 'delivery-test', role: 'admin' });
@@ -117,26 +118,35 @@ export async function createCheckDeliveryFixtures() {
   const rows = []; const routes = []; const peerEvidence = [];
   const sockets = new Set(); const sessions = new Set();
   let activeCheck = null; let ordinal = 0; let mode = 'success'; let cancellation; let epoch = 0;
-  const cancelFromPeer = (transport) => {
-    peerEvidence.push({ event: 'cancel_requested', transport, source: 'owned_peer_after_actual_request' });
+  const connectionPhases = new Map(); const observedDatagrams = new Map();
+  const socketEvidence = (socket, phase = 'request') => {
+    const identity = deliverySocketIdentity(socket);
+    connectionPhases.set(identity.connection_id, phase);
+    return { ...identity, phase };
+  };
+  const cancelFromPeer = (evidence) => {
+    peerEvidence.push({ event: 'cancel_requested', ...evidence, observed_at_ms: Date.now(), source: 'owned_peer_after_actual_request' });
     cancellation.abort();
   };
   const track = (socket) => {
     const ownerEpoch = epoch;
+    const identity = deliverySocketIdentity(socket); // Snapshot while the endpoint is observable.
     sockets.add(socket);
     socket.once('close', () => {
       sockets.delete(socket);
-      if (ownerEpoch === epoch) peerEvidence.push({ event: 'owned_peer_socket_closed', transport: 'tcp' });
+      if (ownerEpoch === epoch) peerEvidence.push({ event: 'owned_peer_socket_closed', transport: 'tcp', ...identity, phase: connectionPhases.get(identity.connection_id), observed_at_ms: Date.now() });
     });
     socket.on('error', () => {});
   };
   function respond(request, response) {
     ordinal += 1;
-    rows.push({ transport: request.socket.encrypted ? 'https' : 'http', method: request.method, url: request.url, host: request.headers.host, servername: request.socket.servername ?? null, peer_address: request.socket.remoteAddress, peer_port: request.socket.remotePort, nonce: request.headers['x-astranull-nonce'], nonce_hash: request.headers['x-astranull-nonce-hash'], marker: request.headers['x-astranull-marker'], cookie: request.headers.cookie, bytes: 0, request_headers: { ...request.headers } });
-    peerEvidence.push({ event: 'request_received', transport: request.socket.encrypted ? 'https' : 'http', method: request.method, path: request.url });
-    if (mode === 'timeout') { peerEvidence.push({ event: 'response_withheld', transport: 'http' }); return; }
-    if (mode === 'cancel') { cancelFromPeer('http'); return; }
-    if (mode === 'error' || mode === 'peer_error') { peerEvidence.push({ event: 'peer_reset', transport: 'http' }); request.socket.destroy(); return; }
+    const identity = socketEvidence(request.socket);
+    rows.push({ transport: request.socket.encrypted ? 'https' : 'http', ...identity, method: request.method, url: request.url, host: request.headers.host, servername: request.socket.servername ?? null, peer_address: request.socket.remoteAddress, peer_port: request.socket.remotePort, nonce: request.headers['x-astranull-nonce'], nonce_hash: request.headers['x-astranull-nonce-hash'], marker: request.headers['x-astranull-marker'], cookie: request.headers.cookie, bytes: 0, request_headers: { ...request.headers } });
+    const endpointEvidence = { transport: request.socket.encrypted ? 'https' : 'http', ...identity, method: request.method, path: request.url };
+    peerEvidence.push({ event: 'request_received', ...endpointEvidence });
+    if (mode === 'timeout') { peerEvidence.push({ event: 'response_withheld', ...endpointEvidence }); return; }
+    if (mode === 'cancel') { cancelFromPeer(endpointEvidence); return; }
+    if (mode === 'error' || mode === 'peer_error') { peerEvidence.push({ event: 'peer_reset', ...endpointEvidence }); request.socket.destroy(); return; }
     const semantic = ['waf_class_marker_probe', 'waf_evasion_marker_probe'].includes(activeCheck?.probe_profile?.kind);
     const entryPermittedHead = activeCheck?.probe_profile?.entry_path_scenario && request.method === 'HEAD'
       && !request.headers['x-astranull-marker'] && !request.url.includes('_probe=');
@@ -157,6 +167,9 @@ export async function createCheckDeliveryFixtures() {
     response.setHeader('Alt-Svc', 'h3=":443"; ma=60');
     response.setHeader('Access-Control-Allow-Origin', '*');
     response.setHeader('X-RateLimit-Limit', '10');
+    peerEvidence.push({ event: 'response_sent', ...endpointEvidence,
+      request_ordinal: ordinal, request_phase: transformed ? 'transform' : marker ? 'reference' : ordinal === 1 ? 'permitted' : 'clean_control',
+      status: response.statusCode, headers: { ...response.getHeaders() }, local_address: request.socket.localAddress, local_port: request.socket.localPort });
     response.end(request.method === 'HEAD' ? undefined : '{"data":{"fixture":true}}');
   }
   const httpServer = http.createServer({ maxHeaderSize: 16384 }, respond);
@@ -168,11 +181,11 @@ export async function createCheckDeliveryFixtures() {
         const [method, urlPath] = line.split(' ');
         const transport = socket.encrypted ? 'https' : 'http';
         rows.push({
-          transport, method, url: urlPath, host: null, servername: socket.servername ?? null,
+          transport, ...socketEvidence(socket), method, url: urlPath, host: null, servername: socket.servername ?? null,
           peer_address: socket.remoteAddress, peer_port: socket.remotePort,
           nonce: null, nonce_hash: null, marker: null, cookie: null, bytes: 0, request_headers: {},
         });
-        peerEvidence.push({ event: 'request_received', transport, method, path: urlPath });
+        peerEvidence.push({ event: 'request_received', transport, ...socketEvidence(socket), method, path: urlPath });
         socket.end('HTTP/1.1 501 Not Implemented\r\nContent-Length: 0\r\n\r\n');
         return;
       }
@@ -181,10 +194,20 @@ export async function createCheckDeliveryFixtures() {
     server.on('connection', (socket) => {
       track(socket);
       if (activeCheck?.probe_profile?.kind === 'slow_header_probe') {
-        socket.once('data', (packet) => rows.push({ transport: 'slow_header_connection', request_hex: packet.toString('hex') }));
-        // A real owned peer enforces a small idle boundary; do not wait beyond the signed cap.
-        const timer = setTimeout(() => socket.destroy(), 40);
-        socket.once('close', () => clearTimeout(timer));
+        socket.once('data', (packet) => {
+          const observed = { ...socketEvidence(socket), request_hex: packet.toString('hex') };
+          rows.push({ transport: 'slow_header_connection', ...observed });
+          peerEvidence.push({ event: 'request_received', transport: 'slow_header', ...observed });
+          if (mode === 'cancel') cancelFromPeer({ transport: 'slow_header', ...observed });
+          else if (mode === 'timeout') peerEvidence.push({ event: 'response_withheld', transport: 'slow_header', ...observed });
+          else if (mode === 'peer_error') {
+            peerEvidence.push({ event: 'peer_reset', transport: 'slow_header', ...observed });
+            socket.resetAndDestroy();
+          } else {
+            const timer = setTimeout(() => socket.destroy(), 40);
+            socket.once('close', () => clearTimeout(timer));
+          }
+        });
       }
     });
     server.on('clientError', (err, socket) => {
@@ -210,18 +233,19 @@ export async function createCheckDeliveryFixtures() {
       }
     });
     server.on('upgrade', (request, socket) => {
-      rows.push({ transport: 'websocket_upgrade', method: request.method, url: request.url, host: request.headers.host, nonce_hash: request.headers['x-astranull-nonce-hash'], request_headers: { ...request.headers } });
-      peerEvidence.push({ event: 'upgrade_received', transport: 'websocket' });
-      if (mode === 'timeout') { peerEvidence.push({ event: 'response_withheld', transport: 'websocket' }); return; }
+      const observed = { ...socketEvidence(socket), method: request.method, path: request.url };
+      rows.push({ transport: 'websocket_upgrade', ...observed, url: request.url, host: request.headers.host, nonce_hash: request.headers['x-astranull-nonce-hash'], request_headers: { ...request.headers } });
+      peerEvidence.push({ event: 'upgrade_received', transport: 'websocket', ...observed });
+      if (mode === 'timeout') { peerEvidence.push({ event: 'response_withheld', transport: 'websocket', ...observed }); return; }
       if (mode === 'cancel') {
         // Upgraded sockets are half-open and unmanaged; observe the client's FIN before closing our side.
         socket.once('end', () => socket.destroy());
         socket.resume();
-        cancelFromPeer('websocket');
+        cancelFromPeer({ transport: 'websocket', ...observed });
         return;
       }
       const accept = mode === 'invalid_upgrade' ? 'invalid-owned-peer-accept' : createHash('sha1').update(`${request.headers['sec-websocket-key']}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`).digest('base64');
-      peerEvidence.push({ event: mode === 'invalid_upgrade' ? 'invalid_upgrade_sent' : 'valid_upgrade_sent', transport: 'websocket', accept });
+      peerEvidence.push({ event: mode === 'invalid_upgrade' ? 'invalid_upgrade_sent' : 'valid_upgrade_sent', transport: 'websocket', ...observed, accept });
       socket.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`); socket.resume();
     });
   }
@@ -232,29 +256,57 @@ export async function createCheckDeliveryFixtures() {
   });
   h2Server.on('secureConnection', (socket) => { track(socket); rows.push({ transport: 'h2_tls_session', servername: socket.servername, alpn: socket.alpnProtocol }); });
   h2Server.on('stream', (stream, headers) => {
-    rows.push({ transport: 'h2_stream_open', method: headers[':method'], path: headers[':path'], authority: headers[':authority'] });
+    const identity = socketEvidence(stream.session.socket);
+    rows.push({ transport: 'h2_stream_open', ...identity, method: headers[':method'], path: headers[':path'], authority: headers[':authority'] });
     stream.once('close', () => rows.push({ transport: 'h2_stream_close', rst_code: stream.rstCode }));
     stream.on('error', () => {});
     const chunks = [];
     stream.on('data', (chunk) => chunks.push(chunk));
     stream.on('end', () => {
-      rows.push({ transport: 'h2_stream', method: headers[':method'], path: headers[':path'], authority: headers[':authority'], content_type: headers['content-type'], request_body_hex: Buffer.concat(chunks).toString('hex') });
+      const observed = { ...identity, request_hex: Buffer.concat(chunks).toString('hex') };
+      rows.push({ transport: 'h2_stream', ...identity, method: headers[':method'], path: headers[':path'], authority: headers[':authority'], content_type: headers['content-type'], request_body_hex: observed.request_hex });
       if (stream.destroyed || stream.closed) return;
       // The existing bounded reset probe needs an open real peer stream to cancel,
       // not a completed 204 response that races its single permitted CANCEL.
       if (activeCheck?.probe_profile?.kind === 'http2_frame_probe') return;
       if (headers['content-type'] === 'application/grpc') {
-        peerEvidence.push({ event: 'grpc_request_received', transport: 'h2', request_hex: Buffer.concat(chunks).toString('hex') });
-        if (mode === 'timeout') { peerEvidence.push({ event: 'response_withheld', transport: 'grpc' }); return; }
-        if (mode === 'cancel') { cancelFromPeer('grpc'); return; }
+        peerEvidence.push({ event: 'grpc_request_received', transport: 'h2', ...observed });
+        if (mode === 'timeout') { peerEvidence.push({ event: 'response_withheld', transport: 'grpc', ...observed }); return; }
+        if (mode === 'cancel') { cancelFromPeer({ transport: 'grpc', ...observed }); return; }
         stream.respond({ ':status': 200, 'content-type': 'application/grpc' }, { waitForTrailers: true });
         stream.once('wantTrailers', () => stream.sendTrailers({ 'grpc-status': mode === 'unimplemented' ? '12' : '0', 'grpc-message': 'fixture-owned' }));
         const response = mode === 'malformed_response' ? Buffer.from([0, 0, 0, 0, 99, 0]) : mode === 'unimplemented' ? Buffer.alloc(0) : Buffer.from([0, 0, 0, 0, 6, 0x12, 2, 0x3a, 0, 0x32, 0]);
-        peerEvidence.push({ event: 'grpc_response_sent', transport: 'h2', response_hex: response.toString('hex'), grpc_status: mode === 'unimplemented' ? '12' : '0' });
+        peerEvidence.push({ event: 'grpc_response_sent', transport: 'h2', ...observed, response_hex: response.toString('hex'), grpc_status: mode === 'unimplemented' ? '12' : '0' });
         stream.end(response);
       } else { stream.respond({ ':status': 204 }); stream.end(); }
     });
   });
+  // A genuine TLS handshake and h2 ALPN precede this invalid SETTINGS frame.
+  // An invalid TLS record cannot stand in for a post-TLS HTTP/2 protocol fault.
+  const invalidH2Server = tls.createServer({ key: cert.key, cert: cert.cert, ALPNProtocols: ['h2'] }, (socket) => {
+    const identity = socketEvidence(socket);
+    rows.push({ transport: 'h2_tls_session', ...identity, servername: socket.servername, alpn: socket.alpnProtocol });
+    let pending = Buffer.alloc(0); let handled = false;
+    socket.on('data', (chunk) => {
+      pending = Buffer.concat([pending, chunk]);
+      if (pending.length < 24 || socket.writableEnded || handled) return;
+      assert.equal(socket.alpnProtocol, 'h2');
+      assert.equal(pending.subarray(0, 24).toString(), 'PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n');
+      handled = true;
+      const observed = { ...identity, alpn: socket.alpnProtocol, tls_protocol: socket.getProtocol(), request_hex: pending.toString('hex') };
+      rows.push({ transport: 'h2_client_preface', ...observed });
+      if (mode === 'timeout' || mode === 'cancel') {
+        peerEvidence.push({ event: 'response_withheld', transport: 'h2', ...observed });
+        if (mode === 'cancel') cancelFromPeer({ transport: 'h2', ...observed });
+        return; // Actual TLS+ALPN and preface succeeded; withhold server SETTINGS.
+      }
+      const frame = Buffer.from([0, 0, 1, 4, 0, 0, 0, 0, 0, 0]); // SETTINGS length must be a multiple of six.
+      peerEvidence.push({ event: 'malformed_h2_sent', transport: 'h2', ...observed, response_hex: frame.toString('hex') });
+      socket.end(frame);
+    });
+  });
+  invalidH2Server.on('connection', track);
+  invalidH2Server.on('tlsClientError', () => {});
   const tlsServer = tls.createServer({ key: cert.key, cert: cert.cert }, (socket) => { rows.push({ transport: 'tls_session', servername: socket.servername, protocol: socket.getProtocol() }); socket.end(); });
   tlsServer.on('connection', track);
   const tcpServer = net.createServer((socket) => {
@@ -262,37 +314,45 @@ export async function createCheckDeliveryFixtures() {
     peerEvidence.push({ event: 'connection_received', transport: 'tcp' });
     if (mode === 'timeout' || mode === 'cancel') {
       socket.once('data', (request) => {
-        rows.push(activeCheck?.probe_profile?.kind === 'reflection_service_probe'
-          ? { transport: 'reflection_tcp', payload_profile: activeCheck.probe_profile.payload_profile, request_hex: request.toString('hex') }
-          : { transport: 'raw_protocol_input', request_hex: request.toString('hex') });
-        peerEvidence.push({ event: 'response_withheld', transport: 'tcp', request_hex: request.toString('hex') });
-        if (mode === 'cancel') cancelFromPeer('tcp');
+        const reflection = activeCheck?.probe_profile?.kind === 'reflection_service_probe';
+        const observed = { ...socketEvidence(socket, reflection ? 'request' : 'tls_handshake'), request_hex: request.toString('hex') };
+        rows.push(reflection
+          ? { transport: 'reflection_tcp', payload_profile: activeCheck.probe_profile.payload_profile, ...observed }
+          : { transport: 'raw_protocol_input', ...observed });
+        peerEvidence.push({ event: 'response_withheld', transport: reflection ? 'reflection_tcp' : 'tcp', ...observed });
+        if (mode === 'cancel') cancelFromPeer({ transport: reflection ? 'reflection_tcp' : 'tcp', ...observed });
       });
       return;
     }
-    if (mode === 'invalid_tls' || mode === 'invalid_h2') {
+    if (mode === 'invalid_tls') {
       socket.once('data', (request) => {
-        peerEvidence.push({ event: 'malformed_tls_sent', transport: 'tcp', request_hex: request.toString('hex') });
-        socket.end(Buffer.from('HTTP/1.1 400 Owned invalid TLS peer\r\n\r\n'));
+        const observed = { ...socketEvidence(socket, 'tls_handshake'), request_hex: request.toString('hex') };
+        rows.push({ transport: 'raw_protocol_input', ...observed });
+        const reply = Buffer.from(OWNED_INVALID_TLS_REPLY_HEX, 'hex');
+        peerEvidence.push({ event: 'malformed_tls_sent', transport: 'tcp', ...observed, response_hex: reply.toString('hex') });
+        socket.end(reply);
       });
       return;
     }
     if (activeCheck?.probe_profile?.kind === 'reflection_service_probe') socket.once('data', (request) => {
-      rows.push({ transport: 'reflection_tcp', payload_profile: activeCheck.probe_profile.payload_profile, request_hex: request.toString('hex') });
-      peerEvidence.push({ event: 'request_received', transport: 'reflection_tcp', request_hex: request.toString('hex') });
+      const observed = { ...socketEvidence(socket), request_hex: request.toString('hex') };
+      rows.push({ transport: 'reflection_tcp', payload_profile: activeCheck.probe_profile.payload_profile, ...observed });
+      peerEvidence.push({ event: 'request_received', transport: 'reflection_tcp', ...observed });
       socket.end(mode === 'unconfirmed_response' ? Buffer.from('owned invalid identity') : reflectionReply(activeCheck.probe_profile.payload_profile, request));
     }); else socket.end();
   });
   const udpServer = dgram.createSocket('udp4');
   udpServer.on('message', (request, peer) => {
     assert.equal(peer.address, '127.0.0.1');
-    rows.push({ transport: 'udp', payload_profile: activeCheck?.probe_profile?.payload_profile ?? null, request_hex: request.toString('hex') });
-    peerEvidence.push({ event: 'request_received', transport: 'udp', request_hex: request.toString('hex') });
-    if (mode === 'timeout') { peerEvidence.push({ event: 'response_withheld', transport: 'udp' }); return; }
-    if (mode === 'cancel') { cancelFromPeer('udp'); return; }
+    const observed = { ...deliveryDatagramIdentity(udpServer, peer), phase: 'datagram', request_hex: request.toString('hex') };
+    observedDatagrams.set(peer.port, observed);
+    rows.push({ transport: 'udp', payload_profile: activeCheck?.probe_profile?.payload_profile ?? null, ...observed });
+    peerEvidence.push({ event: 'request_received', transport: 'udp', ...observed });
+    if (mode === 'timeout') { peerEvidence.push({ event: 'response_withheld', transport: 'udp', ...observed }); return; }
+    if (mode === 'cancel') { cancelFromPeer({ transport: 'udp', ...observed }); return; }
     udpServer.send(mode === 'unconfirmed_response' ? Buffer.from('owned invalid identity') : activeCheck?.probe_profile?.kind === 'reflection_service_probe' ? reflectionReply(activeCheck.probe_profile.payload_profile, request) : Buffer.from('ASTRANULL:owned-udp-fixture'), peer.port, peer.address);
   });
-  const [httpPort, httpsPort, h2Port, tlsPort, tcpPort] = await Promise.all([httpServer, httpsServer, h2Server, tlsServer, tcpServer].map(listen));
+  const [httpPort, httpsPort, h2Port, tlsPort, tcpPort, invalidH2Port] = await Promise.all([httpServer, httpsServer, h2Server, tlsServer, tcpServer, invalidH2Server].map(listen));
   await new Promise((resolve) => udpServer.bind(0, '127.0.0.1', resolve));
   const udpPort = udpServer.address().port;
   const ports = { http: httpPort, https: httpsPort, h2: h2Port, tls: tlsPort, tcp: tcpPort, udp: udpPort };
@@ -301,7 +361,8 @@ export async function createCheckDeliveryFixtures() {
     epoch += 1;
     activeCheck = check; ordinal = 0; mode = scenario; cancellation = new AbortController();
     rows.length = 0; routes.length = 0; peerEvidence.length = 0; dnsFixture.rows.length = 0; dnsFixture.resolutionCalls.length = 0;
-    dnsFixture.setScenario?.(scenario, () => cancelFromPeer('dns'));
+    connectionPhases.clear(); observedDatagrams.clear();
+    dnsFixture.setScenario?.(scenario, cancelFromPeer, check.probe_profile?.kind);
     const kind = check.probe_profile?.kind;
     const dnsKind = ['dns_wire_query', 'dnssec_posture', 'dns_axfr_leak', 'dns_open_recursion', 'dns_failover_posture', 'dns_resolve'].includes(kind);
     const tlsKind = ['tls_session', 'tls_audit'].includes(kind);
@@ -309,8 +370,9 @@ export async function createCheckDeliveryFixtures() {
     const udpKind = ['udp_probe', 'reflection_service_probe'].includes(kind) && check.probe_profile?.payload_profile !== 'portmap_dump';
     const tcpKind = kind === 'tcp_connect' || kind === 'port_scan_bounded' || kind === 'connection_limit_probe' || (kind === 'reflection_service_probe' && !udpKind);
     const primary = targetKind ?? (check.supported_targets.includes('url') ? 'url' : check.supported_targets.includes('fqdn') ? 'fqdn' : check.supported_targets[0]);
-    const rawTlsFault = (tlsKind || (h2Kind && kind !== 'grpc_reflection_probe')) && ['timeout', 'cancel', 'invalid_tls', 'invalid_h2'].includes(scenario);
-    const protocolPort = rawTlsFault ? tcpPort : tlsKind ? tlsPort : h2Kind ? h2Port : udpKind ? udpPort : tcpKind ? tcpPort : httpsPort;
+    const rawTlsFault = tlsKind && ['timeout', 'cancel', 'invalid_tls'].includes(scenario);
+    const h2Fault = h2Kind && kind !== 'grpc_reflection_probe' && ['invalid_h2', 'timeout', 'cancel'].includes(scenario);
+    const protocolPort = h2Fault ? invalidH2Port : rawTlsFault ? tcpPort : tlsKind ? tlsPort : h2Kind ? h2Port : udpKind ? udpPort : tcpKind ? tcpPort : httpsPort;
     const urlProtocol = ['http3_control_probe', 'quic_reachability', 'tls_session', 'tls_audit', 'http2_settings', 'http2_frame_probe', 'grpc_reflection_probe'].includes(kind) ? 'https' : 'http';
     const target = {
       id: 'tgt_1', tenant_id: DELIVERY_CTX.tenantId, target_group_id: 'tg_1', kind: primary,
@@ -344,8 +406,12 @@ export async function createCheckDeliveryFixtures() {
         const send = socket.send.bind(socket);
         const connect = socket.connect.bind(socket);
         const ownerEpoch = epoch;
-        let connected = null;
-        socket.once('close', () => { if (ownerEpoch === epoch) peerEvidence.push({ event: 'owned_client_socket_closed', transport: 'udp' }); });
+        let connected = null; let clientPort;
+        socket.once('listening', () => { clientPort = socket.address().port; });
+        socket.once('close', () => {
+          const observed = observedDatagrams.get(clientPort);
+          if (ownerEpoch === epoch && observed) peerEvidence.push({ event: 'owned_client_socket_closed', transport: 'udp', ...observed, observed_at_ms: Date.now() });
+        });
         socket.connect = (port, host, callback) => {
           assert.equal(host, '127.0.0.1');
           assert.equal(Number(port), target.port);
@@ -435,10 +501,17 @@ export async function createCheckDeliveryFixtures() {
       target, deps, timeoutMs,
       wire: () => [...rows, ...dnsFixture.rows], routes: () => structuredClone(routes),
       peerEvidence: () => structuredClone([...peerEvidence, ...(dnsFixture.peerEvidence ?? [])]),
-      async waitForCancelledSocketClose() {
-        const deadline = Date.now() + 500;
-        while (![...peerEvidence, ...(dnsFixture.peerEvidence ?? [])].some((row) => ['owned_peer_socket_closed', 'owned_client_socket_closed'].includes(row.event))) {
-          assert.ok(Date.now() < deadline, `${check.check_id}: cancellation settled without actual socket close`);
+      async waitForCancelledSocketClose({ closureCause, timeoutMs = 500 } = {}) {
+        assert.ok(Number.isInteger(timeoutMs) && timeoutMs > 0 && timeoutMs <= 1000, 'owned closure wait must remain bounded');
+        const deadline = Date.now() + timeoutMs;
+        const observedClose = () => {
+          const evidence = [...peerEvidence, ...(dnsFixture.peerEvidence ?? [])];
+          return evidence.some((row) => ['owned_peer_socket_closed', 'owned_client_socket_closed'].includes(row.event)
+            && (closureCause === undefined || (row.closure_cause === closureCause && evidence.some((requested) => requested.event === 'cancel_requested'
+              && requested.connection_id === row.connection_id && requested.phase === row.phase))));
+        };
+        while (!observedClose()) {
+          assert.ok(Date.now() < deadline, `${check.check_id}: cancellation settled without actual ${closureCause ?? 'owned'} socket close`);
           await new Promise((resolve) => setTimeout(resolve, 5));
         }
       },
@@ -462,7 +535,7 @@ export async function createCheckDeliveryFixtures() {
     forCheck, ports, rows, dnsFixture,
     async close() {
       for (const session of sessions) session.destroy(); for (const socket of sockets) socket.destroy();
-      await Promise.all([httpServer, httpsServer, h2Server, tlsServer, tcpServer].map(close));
+      await Promise.all([httpServer, httpsServer, h2Server, tlsServer, tcpServer, invalidH2Server].map(close));
       await new Promise((resolve) => udpServer.close(resolve)); await dnsFixture.close();
       rmSync(cert.dir, { recursive: true, force: true });
     },

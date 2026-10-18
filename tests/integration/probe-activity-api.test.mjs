@@ -23,7 +23,10 @@ test('signed activity is lease-bound, immutable, tenant-scoped, read-only, and r
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const base = `http://127.0.0.1:${server.address().port}`;
   const path = '/internal/probe/jobs/job_activity/activity';
-  const body = { leased_at: at, items: [{ sequence: 1, at, stage: 'request_started', method: 'GET', url: 'https://owned.test/path?key=private', request_content_type: 'application/json', request_payload_preview: '{"marker":"inert","password":"private-password"}' }] };
+  const body = { leased_at: at, items: [{ sequence: 1, at, stage: 'request_started', method: 'GET', url: 'https://owned.test/path?key=private',
+    capture_version: 'http-exchange.v1', exchange_id: 'exchange_api', attempt_id: 'attempt_api', operation_id: 'operation_api', http_version: '1.1',
+    request_headers: [{ name: 'content-type', value: 'application/json' }, { name: 'authorization', value: 'Bearer private' }],
+    request_content_type: 'application/json', request_payload_preview: '{"marker":"inert","password":"private-password"}' }] };
   const post = (payload = body, workerId = 'worker_activity', tenantId = 'ten_demo') => request(base, 'POST', path, { body: payload,
     headers: probeWorkerAuthHeaders(workerId, { method: 'POST', path, bodyText: JSON.stringify(payload), tenantId }, SECRET) });
   try {
@@ -37,6 +40,10 @@ test('signed activity is lease-bound, immutable, tenant-scoped, read-only, and r
     const read = await request(base, 'GET', '/v1/test-runs/run_activity/activity', { headers: demoHeaders('viewer') });
     assert.equal(read.status, 200);
     assert.ok(read.json.items.some((item) => item.method === 'GET'));
+    const exchange = read.json.items.find((item) => item.exchange_id === 'exchange_api');
+    assert.equal(exchange.source_context.job_id, 'job_activity');
+    assert.equal(exchange.source_context.leased_at, at);
+    assert.equal(exchange.request_headers.find((header) => header.name === 'authorization').value, '[redacted]');
     assert.ok(read.json.items.some((item) => item.request_payload_preview?.includes('inert')));
     assert.equal(JSON.stringify(read.json).includes('private'), false);
     assert.equal(store.testRuns[0].status, 'collecting');

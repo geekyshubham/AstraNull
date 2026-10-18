@@ -2,6 +2,7 @@ import { catalogRuleCoverage, RULE_COVERAGE_CATEGORIES } from '../contracts/rule
 import { controlDeclarationsFromTarget } from '../contracts/controlDeclarations.mjs';
 import { COVERAGE_FRESHNESS_POLICY } from '../lib/protectionCoverage.mjs';
 import { latestRunsByCheck } from '../lib/targetDetailRows.mjs';
+import { latestAvailableVerdicts } from '../lib/readinessProjection.mjs';
 import { listProbePerspectives } from '../lib/probePerspectiveRegistry.mjs';
 import { getStore } from '../store.mjs';
 import { getTarget } from './targetGroups.mjs';
@@ -33,14 +34,17 @@ function verdictLabel(value) {
   return 'inconclusive';
 }
 
-function latestForCheck(latestByCheck, checkId, nowMs) {
-  const entry = latestByCheck.get(checkId);
+function latestForCheck(latestByCheck, check, nowMs) {
+  const entry = latestByCheck.get(check.check_id);
   if (!entry?.run) return { status: 'not_run', verdict: null, observed_at: null, stale: false };
   const observedMs = Date.parse(entry.run.completed_at ?? entry.run.started_at ?? '');
   const observed_at = Number.isFinite(observedMs) ? new Date(observedMs).toISOString() : null;
   const stale = !Number.isFinite(observedMs) || nowMs - observedMs > COVERAGE_FRESHNESS_POLICY.max_age_ms;
   if (stale) return { status: 'not_run', verdict: entry.verdict?.verdict ?? null, observed_at, stale: true };
   const label = verdictLabel(entry.verdict?.verdict);
+  if (label && check.assurance === 'observation') {
+    return { status: 'inconclusive', verdict: entry.verdict.verdict, observed_at, stale: false };
+  }
   if (label === 'pass') return { status: 'covered_pass', verdict: entry.verdict.verdict, observed_at, stale: false };
   if (label === 'fail') return { status: 'covered_fail', verdict: entry.verdict.verdict, observed_at, stale: false };
   if (label === 'inconclusive') return { status: 'inconclusive', verdict: entry.verdict.verdict, observed_at, stale: false };
@@ -70,7 +74,7 @@ export function buildTargetRuleCoverage({ targetId, declarations, runs = [], ver
     const source = RULE_COVERAGE_CATEGORIES.find((entry) => entry.id === row.id);
     const missing_declarations = (row.required_declarations ?? []).filter((key) => !declarationPresent(resolvedDeclarations, key));
     const checks = (row.checks ?? []).map((check) => {
-      const latest = latestForCheck(latestByCheck, check.check_id, nowMs);
+      const latest = latestForCheck(latestByCheck, check, nowMs);
       return { ...check, ...latest };
     });
     return {
@@ -115,13 +119,12 @@ export function targetRuleCoverage(ctx, targetId, { nowMs = Date.now(), env = pr
     ...(controlDeclarationsFromTarget(raw) ?? {}),
     ...(targetBindings.length > 0 ? { origin_binding: targetBindings[0], origin_bindings: targetBindings } : {}),
   };
+  const publications = latestAvailableVerdicts({ tenantId: ctx.tenantId, runs, verdicts: store.verdicts, nowMs });
   return buildTargetRuleCoverage({
     targetId,
     declarations,
     runs,
-    verdictForRun: (run) => (
-      (store.verdicts ?? []).find((verdict) => verdict.test_run_id === run.id && verdict.tenant_id === ctx.tenantId) ?? null
-    ),
+    verdictForRun: (run) => publications.get(run.id) ?? null,
     nowMs,
     env,
   });

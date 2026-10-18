@@ -3,6 +3,7 @@ import { normalizePrivacySettings } from '../../lib/privacySettings.mjs';
 import {
   buildMetadataRetentionCutoffs,
   buildRetentionPolicySnapshot,
+  emptyOriginClueCounts,
 } from '../../services/privacyRetention.mjs';
 import { withTenantContext } from './tenantContext.mjs';
 
@@ -86,6 +87,7 @@ function zeroCounts() {
     notificationEvents: 0,
     connectorPollJobs: 0,
     connectorSnapshots: 0,
+    ...emptyOriginClueCounts(),
   };
 }
 
@@ -117,7 +119,25 @@ async function countCandidates(client, tenantId, nowIso, privacy) {
     counts[collection.key] = Number(rows[0]?.count ?? 0);
   }
 
-  return { counts, cutoffs };
+  const originPlan = await readOriginPlan(client, tenantId, new Date(metadataCutoffMs).toISOString(), false);
+  Object.assign(counts, originPlan.counts);
+  return { counts, cutoffs, originPlan };
+}
+
+async function readOriginPlan(client, tenantId, cutoff, erase) {
+  const { rows } = await client.query(
+    'SELECT public.astranull_origin_clue_lifecycle_plan($1, $2::timestamptz, $3::boolean) AS plan',
+    [tenantId, cutoff, erase]);
+  return rows[0]?.plan ?? { counts: emptyOriginClueCounts(), plan_digest: null };
+}
+function originAuditPlan(plan, mode, now) {
+  return { mode, at: now.toISOString(), counts: plan.counts, plan_digest: plan.plan_digest };
+}
+async function applyOriginPlan(client, tenantId, audit, mode, now) {
+  const { rows } = await client.query(
+    'SELECT public.astranull_apply_origin_clue_lifecycle($1, $2, $3, $4::timestamptz) AS counts',
+    [tenantId, audit.id, mode, now.toISOString()]);
+  return rows[0].counts;
 }
 
 async function deleteCandidates(client, tenantId, cutoffs) {
@@ -154,6 +174,40 @@ export function createRetentionRepository(pool) {
      * @param {{ userId?: string | null, role?: string | null }} [auditContext]
      * @param {{ dryRun?: boolean, now?: Date }} [options]
      */
+    async runOriginClueErasure(tenantId, auditContext, request, options = {}) {
+      const now = new Date(options.now ?? Date.now());
+      return withTenantContext(pool, tenantId, async (client) => {
+        await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [tenantId]);
+        const { rows } = await client.query('SELECT id, privacy_settings FROM tenants WHERE id = $1 FOR UPDATE', [tenantId]);
+        const tenant = rows[0];
+        if (!tenant) return { error: 'not_found', status: 404 };
+        const privacy = normalizePrivacySettings(tenant.privacy_settings);
+        if (!request.dry_run && JSON.stringify(tenant.privacy_settings) !== JSON.stringify(privacy)) {
+          await client.query('UPDATE tenants SET privacy_settings = $2::jsonb WHERE id = $1', [tenantId, JSON.stringify(privacy)]);
+        }
+        const cutoff = new Date(buildMetadataRetentionCutoffs(privacy, now).metadataCutoffMs).toISOString();
+        const plan = await readOriginPlan(client, tenantId, cutoff, true);
+        const held = privacy.evidence_retention.legal_hold;
+        const deleted = held || request.dry_run ? emptyOriginClueCounts() : plan.counts;
+        const policy = buildRetentionPolicySnapshot({ ...tenant, privacy_settings: privacy });
+        const summary = { tenant_id: tenantId, dry_run: request.dry_run, legal_hold: held, deleted,
+          would_delete: plan.counts, blocked_deletions: held ? plan.counts : emptyOriginClueCounts(),
+          metadata_retention_days: privacy.metadata_retention_days, policy_snapshot: policy, audit_entry_id: null };
+        if (request.dry_run) return summary;
+        const auditEntry = await appendAuditEventInTransaction(client, {
+          tenant_id: tenantId, actor_user_id: auditContext.userId ?? null, actor_role: auditContext.role,
+          action: held ? 'privacy.origin_clues_erasure_blocked' : 'privacy.origin_clues_erased',
+          resource_type: 'tenant', resource_id: tenantId,
+          metadata: { confirmation_tenant_id: tenantId, reason: request.reason, deleted,
+            blocked_deletions: summary.blocked_deletions, policy_snapshot: policy,
+            origin_lifecycle: originAuditPlan(plan, 'erase', now) },
+        }, now);
+        if (!held) summary.deleted = await applyOriginPlan(client, tenantId, auditEntry, 'erase', now);
+        summary.audit_entry_id = auditEntry.id;
+        return held ? { ...summary, error: 'origin_clue_erasure_legal_hold', status: 409 } : summary;
+      });
+    },
+
     async runMetadataRetention(tenantId, auditContext = {}, options = {}) {
       const normalizedTenantId = String(tenantId ?? '').trim();
       if (!normalizedTenantId) {
@@ -164,6 +218,7 @@ export function createRetentionRepository(pool) {
       const dryRun = options.dryRun === true;
 
       return withTenantContext(pool, normalizedTenantId, async (client) => {
+        await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [normalizedTenantId]);
         const tenantResult = await client.query(
           `SELECT id, privacy_settings
            FROM tenants
@@ -178,7 +233,7 @@ export function createRetentionRepository(pool) {
 
         const originalPrivacy = tenantRow.privacy_settings ?? {};
         const privacy = normalizePrivacySettings(originalPrivacy);
-        if (JSON.stringify(originalPrivacy) !== JSON.stringify(privacy)) {
+        if (!dryRun && JSON.stringify(originalPrivacy) !== JSON.stringify(privacy)) {
           await client.query(
             `UPDATE tenants
              SET privacy_settings = $2::jsonb
@@ -218,7 +273,7 @@ export async function runMetadataRetentionInTransaction(
     id: tenant?.id ?? normalizedTenantId,
     privacy_settings: privacy,
   });
-  const { counts, cutoffs } = await countCandidates(
+  const { counts, cutoffs, originPlan } = await countCandidates(
     client,
     normalizedTenantId,
     now.toISOString(),
@@ -275,8 +330,9 @@ export async function runMetadataRetentionInTransaction(
 
   const deleted =
     totalCounts(counts) > 0 ? await deleteCandidates(client, normalizedTenantId, cutoffs) : zeroCounts();
+  Object.assign(deleted, originPlan.counts);
   if (totalCounts(deleted) > 0) {
-    await appendAuditEventInTransaction(
+    const auditEntry = await appendAuditEventInTransaction(
       client,
       {
         tenant_id: normalizedTenantId,
@@ -289,10 +345,13 @@ export async function runMetadataRetentionInTransaction(
           deleted,
           metadata_retention_days: privacy.metadata_retention_days,
           policy_snapshot: policySnapshot,
+          origin_lifecycle: originAuditPlan(originPlan, 'expiry', now),
         },
       },
       now,
     );
+    if (totalCounts(originPlan.counts)) Object.assign(deleted,
+      await applyOriginPlan(client, normalizedTenantId, auditEntry, 'expiry', now));
   }
 
   return {

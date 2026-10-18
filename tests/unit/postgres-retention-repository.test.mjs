@@ -104,6 +104,7 @@ describe('postgres retention repository', () => {
       notificationEvents: 3,
       connectorPollJobs: 0,
       connectorSnapshots: 0,
+      originClues: 0, originClueBatches: 0, originClueResponses: 0,
     });
     assert.deepEqual(summary.would_delete, summary.deleted);
     assert.equal(
@@ -166,6 +167,7 @@ describe('postgres retention repository', () => {
       notificationEvents: 0,
       connectorPollJobs: 0,
       connectorSnapshots: 0,
+      originClues: 0, originClueBatches: 0, originClueResponses: 0,
     });
     assert.deepEqual(summary.blocked_deletions, {
       events: 2,
@@ -174,6 +176,7 @@ describe('postgres retention repository', () => {
       notificationEvents: 2,
       connectorPollJobs: 2,
       connectorSnapshots: 2,
+      originClues: 0, originClueBatches: 0, originClueResponses: 0,
     });
     const auditInsert = pool.client.queries.find((q) => q.text.startsWith('INSERT INTO audit_logs'));
     assert.ok(auditInsert);
@@ -213,6 +216,7 @@ describe('postgres retention repository', () => {
       notificationEvents: 0,
       connectorPollJobs: 0,
       connectorSnapshots: 0,
+      originClues: 0, originClueBatches: 0, originClueResponses: 0,
     });
     assert.deepEqual(summary.would_delete, {
       events: 4,
@@ -221,6 +225,7 @@ describe('postgres retention repository', () => {
       notificationEvents: 4,
       connectorPollJobs: 4,
       connectorSnapshots: 4,
+      originClues: 0, originClueBatches: 0, originClueResponses: 0,
     });
     assert.ok(pool.client.queries.every((q) => !q.text.startsWith('DELETE FROM ')));
     assert.ok(pool.client.queries.every((q) => !q.text.startsWith('INSERT INTO audit_logs')));

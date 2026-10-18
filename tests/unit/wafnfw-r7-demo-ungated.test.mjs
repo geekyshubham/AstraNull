@@ -108,7 +108,7 @@ describe('Ticket R7: demo tenant runs every customer check with no access or inp
     store.checkCatalog = [...CHECK_CATALOG];
   }
 
-  beforeEach(() => {
+  beforeEach(async () => {
     prevDemoEnv = process.env.ASTRANULL_DEMO_AUTO_VERIFY_TENANTS;
     prevCapEnv = process.env.ASTRANULL_DEMO_MAX_RUNS_PER_HOUR;
     process.env.ASTRANULL_DEMO_AUTO_VERIFY_TENANTS = DEMO_TENANT;
@@ -121,7 +121,10 @@ describe('Ticket R7: demo tenant runs every customer check with no access or inp
         ASTRANULL_DEMO_AUTO_VERIFY_TENANTS: DEMO_TENANT,
       },
     });
-    server.listen(0);
+    await new Promise((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(0, '127.0.0.1', resolve);
+    });
     const { port } = server.address();
     baseUrl = `http://127.0.0.1:${port}`;
   });
@@ -138,6 +141,11 @@ describe('Ticket R7: demo tenant runs every customer check with no access or inp
     } else {
       process.env.ASTRANULL_DEMO_MAX_RUNS_PER_HOUR = prevCapEnv;
     }
+  });
+
+  it('binds the demo HTTP fixture to the IPv4 loopback used by its clients', () => {
+    assert.equal(server.address().address, '127.0.0.1');
+    assert.equal(server.address().family, 'IPv4');
   });
 
   it('(a) GET /v1/checks?target_id= lists every customer-runnable check as runnable for demo; non-demo gets refusal codes', async () => {
@@ -241,7 +249,7 @@ describe('Ticket R7: demo tenant runs every customer check with no access or inp
         check_id: 'nfw.declared_deny_tcp.safe',
       },
     });
-    assert.equal(simRes.status, 201);
+    assert.equal(simRes.status, 201, JSON.stringify(simRes.json));
     assert.equal(simRes.json.jobs_dispatched, 0);
 
     const simRunId = simRes.json.run.id;
@@ -269,7 +277,12 @@ describe('Ticket R7: demo tenant runs every customer check with no access or inp
         ASTRANULL_PROBE_WORKER_SECRET: randomBytes(32).toString('hex'),
       },
     });
-    signedServer.listen(0);
+    await new Promise((resolve, reject) => {
+      signedServer.once('error', reject);
+      signedServer.listen(0, '127.0.0.1', resolve);
+    });
+    assert.equal(signedServer.address().address, '127.0.0.1');
+    assert.equal(signedServer.address().family, 'IPv4');
     const signedBaseUrl = `http://127.0.0.1:${signedServer.address().port}`;
     try {
       getStore().testRuns = [];
@@ -439,7 +452,12 @@ describe('Ticket R7: demo tenant runs every customer check with no access or inp
         ASTRANULL_PROBE_WORKER_SECRET: randomBytes(32).toString('hex'),
       },
     });
-    signedServer.listen(0);
+    await new Promise((resolve, reject) => {
+      signedServer.once('error', reject);
+      signedServer.listen(0, '127.0.0.1', resolve);
+    });
+    assert.equal(signedServer.address().address, '127.0.0.1');
+    assert.equal(signedServer.address().family, 'IPv4');
     const signedBaseUrl = `http://127.0.0.1:${signedServer.address().port}`;
     try {
       const resBypassed = await request(signedBaseUrl, 'POST', '/v1/test-runs', {

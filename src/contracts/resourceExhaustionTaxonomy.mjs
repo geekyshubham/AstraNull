@@ -758,7 +758,7 @@ const ATTACK_VECTOR_REGISTRY_SOURCE = [
   { id: 'ATT-097', name: 'Application-aware targeting', exhausted_resource: 'delivery_pattern', task_id: 'DET-022', delivery_patterns: ['application_aware'], check_ids: ['l7.expensive_endpoint.safe'] },
 
   // --- Origin / edge (readiness, not numbered in user list) ---
-  { id: 'ATT-100', name: 'Direct origin bypass', exhausted_resource: 'application_l7', task_id: 'DET-001', check_ids: ['origin.direct_bypass.safe', 'origin.direct_reachability.safe', 'origin.host_sni_bypass.safe', 'nfw.origin_lockdown.safe'] },
+  { id: 'ATT-100', name: 'Direct origin bypass', exhausted_resource: 'application_l7', task_id: 'DET-001', check_ids: ['origin.direct_bypass.safe', 'origin.direct_reachability.safe', 'origin.host_sni_bypass.safe', 'nfw.origin_lockdown.safe', 'origin.identity_pair.head.v1', 'origin.identity_pair.get.v1'], notes: 'Paired identity scenarios are E2 observations only: exact reviewed destinations, two current proofs, shared nonce; no WAF bypass, protected outcome or readiness credit.' },
   { id: 'ATT-101', name: 'Origin leak scan', exhausted_resource: 'application_l7', task_id: 'DET-001', check_ids: ['origin.leak_scan.safe'] },
   { id: 'ATT-102', name: 'WAF marker / enforcement', exhausted_resource: 'application_l7', task_id: 'DET-007', check_ids: ['waf.marker_rule.safe', 'waf.enforcement.safe', 'l7.waf_marker_rule.safe'] },
 

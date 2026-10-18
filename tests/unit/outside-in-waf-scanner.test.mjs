@@ -927,7 +927,7 @@ describe('benign-marker grading needs a control-specific signature', () => {
   it('maps unsigned statuses to the research decision table', () => {
     const cases = [
       [200, { allowed: true, reason: 'not_blocked_at_the_edge' }],
-      [302, { allowed: true, reason: 'not_blocked_at_the_edge' }],
+      [302, { inconclusive: true, reason: 'redirect_location_missing' }],
       [401, { inconclusive: true, reason: 'authentication_gate_precedes_inspection' }],
       [403, { inconclusive: true, block_suspected: true, reason: 'unattributed_denial' }],
       [404, { inconclusive: true, block_suspected: true, reason: 'unattributed_denial' }],

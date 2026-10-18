@@ -5,6 +5,8 @@ import { advanceScan } from '../../src/services/validationScans.mjs';
 import { getStore } from '../../src/store.mjs';
 import { closeServer, demoHeaders, request } from '../helpers/http.mjs';
 import { freshStore } from '../helpers/reset.mjs';
+import { assessmentChecks, targetCheckAvailability, withTargetRunnableChecks } from '../../apps/web/react/src/lib/domain-checks.mjs';
+import { targetRunnableIndex } from '../../apps/web/react/src/lib/control-declarations.mjs';
 
 let server;
 let baseUrl;
@@ -182,6 +184,44 @@ describe('validation scans API', () => {
     const afterInert = await request(baseUrl, 'GET', `/v1/validation-scans/${created.json.id}`, { headers: engineer });
     assert.equal(afterInert.json.status, 'completed');
     assert.equal(getStore().testRuns.length, 2);
+  });
+
+  it('executes every eligible catalog definition as a sequential child, not just a displayed plan (simulation only)', async (t) => {
+    t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
+    const engineer = demoHeaders('engineer');
+    const catalog = await request(baseUrl, 'GET', '/v1/checks?scope=all&target_id=tgt_1', { headers: engineer });
+    const defaults = await request(baseUrl, 'GET', '/v1/checks', { headers: engineer });
+    assert.equal(catalog.status, 200);
+    assert.equal(defaults.status, 200);
+    const target = getStore().targets.find((item) => item.id === 'tgt_1');
+    const context = { serverSuppliesInput: true, serverRunnableIndex: targetRunnableIndex(catalog.json.items) };
+    const checks = assessmentChecks(withTargetRunnableChecks(defaults.json.items, catalog.json.items, { serverSuppliesInput: true }), target, context);
+    const checkIds = checks.map((check) => check.check_id);
+    const expected = catalog.json.items.filter((check) => targetCheckAvailability(check, target, context).state === 'ready').map((check) => check.check_id);
+    assert.deepEqual([...checkIds].sort(), expected.sort());
+    assert.ok(checkIds.length > 100, 'exercise the full eligible catalog, not a small illustrative subset');
+    const created = await request(baseUrl, 'POST', '/v1/validation-scans', { headers: engineer, body: { target_id: target.id, check_ids: checkIds } });
+    assert.equal(created.status, 201, JSON.stringify(created.json));
+    assert.deepEqual(created.json.steps.map((step) => step.check_id), checkIds);
+    for (let index = 0; index < checkIds.length; index += 1) {
+      assert.deepEqual(getStore().testRuns.map((run) => run.check_id), checkIds.slice(0, index + 1));
+      assert.equal(getStore().testRuns.filter((run) => ['queued', 'running', 'collecting'].includes(run.status)).length, 1, 'only one child holds the execution slot');
+      // Advance only the simulation clock; production quotas and signed probe caps stay unchanged.
+      t.mock.timers.tick(61 * 60 * 1000);
+      expireCollectionWindows();
+      const advanced = advanceScan(RUNNER_CTX, created.json.id, { runtimeConfig: SIM_CONFIG });
+      assert.equal(advanced.acquired, true);
+    }
+    const final = await request(baseUrl, 'GET', `/v1/validation-scans/${created.json.id}`, { headers: engineer });
+    assert.equal(final.json.status, 'completed');
+    assert.equal(final.json.summary.verdicted, checkIds.length);
+    assert.deepEqual(final.json.steps.map((step) => step.check_id), checkIds);
+    assert.ok(final.json.steps.every((step) => step.status === 'verdicted' && step.test_run_id && step.requests_simulated === true && step.requests_sent === 0));
+    assert.equal(new Set(final.json.steps.map((step) => step.test_run_id)).size, checkIds.length);
+    assert.deepEqual(getStore().testRuns.map((run) => run.check_id), checkIds);
+    assert.equal(getStore().auditLog.filter((row) => row.action === 'validation_scan.step_started').length, checkIds.length);
+    assert.equal(getStore().auditLog.filter((row) => row.action === 'validation_scan.step_completed').length, checkIds.length);
+    assert.equal((getStore().probeJobs ?? []).length, 0, 'simulation creates no external probe jobs or live proof');
   });
 
   it('enforces RBAC and refuses SOC-gated or unknown checks for the whole request', async () => {

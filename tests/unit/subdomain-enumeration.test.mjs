@@ -2,13 +2,17 @@ import assert from 'node:assert/strict';
 import { afterEach, describe, it } from 'node:test';
 import {
   SubdomainSourceError,
+  fetchCertificateTransparencySubdomains,
+  fetchSubdomainsFromSource,
   fetchVirusTotalSubdomains,
   normalizeSubdomainCandidate,
   ownershipParentFor,
   presentSubdomainRow,
+  resolveSubdomainSource,
   subdomainParentTag,
   summarizeSubdomains,
 } from '../../src/lib/subdomainEnumeration.mjs';
+import { loadRuntimeConfig } from '../../src/config.mjs';
 import { recordDnsVerification } from '../helpers/subdomain-fixtures.mjs';
 import { targetOwnershipProof } from '../../src/services/ownershipVerification.mjs';
 import { createTargetDirect } from '../../src/services/targetGroups.mjs';
@@ -159,5 +163,102 @@ describe('subdomain ownership inheritance', () => {
     const proof = targetOwnershipProof(ctx, group, child.id);
     assert.equal(proof.verified, true);
     assert.equal(proof.inherited_from_target_id, parent.id);
+  });
+});
+
+describe('subdomain source resolution', () => {
+  it('defaults to keyless VirusTotal UI when no VirusTotal API key is configured', () => {
+    assert.deepEqual(resolveSubdomainSource({}), { source: 'virustotal_ui', configured: true, reason: null });
+    assert.deepEqual(resolveSubdomainSource({ requested: 'virustotal_ui', virusTotalApiKey: 'k' }), { source: 'virustotal_ui', configured: true, reason: null });
+    assert.deepEqual(resolveSubdomainSource({ virusTotalApiKey: 'k' }), { source: 'virustotal_ui', configured: true, reason: null });
+    assert.deepEqual(resolveSubdomainSource({ requested: 'virustotal', virusTotalApiKey: 'k' }), { source: 'virustotal', configured: true, reason: null });
+    assert.deepEqual(resolveSubdomainSource({ requested: 'crtsh', virusTotalApiKey: 'k' }), { source: 'crtsh', configured: true, reason: null });
+    assert.deepEqual(resolveSubdomainSource({ requested: 'virustotal' }), { source: 'virustotal', configured: false, reason: 'virustotal_api_key_missing' });
+    assert.deepEqual(resolveSubdomainSource({ requested: 'disabled', virusTotalApiKey: 'k' }), { source: null, configured: false, reason: 'disabled' });
+    assert.equal(resolveSubdomainSource({ requested: 'shodan' }).reason, 'invalid_source');
+  });
+
+  it('runtime config enables discovery without a key and never calls an unconfigured source', async () => {
+    const config = loadRuntimeConfig({ NODE_ENV: 'test' }).subdomainDiscovery;
+    assert.equal(config.configured, true);
+    assert.equal(config.source, 'virustotal_ui');
+    let calls = 0;
+    await assert.rejects(
+      fetchSubdomainsFromSource('example.com', { configured: false, reason: 'disabled' }, { fetchFn: async () => { calls += 1; } }),
+      (error) => error.code === 'subdomain_source_not_configured' && error.status === 503 && /disabled/.test(error.message),
+    );
+    assert.equal(calls, 0);
+  });
+});
+
+describe('fetchCertificateTransparencySubdomains', () => {
+  it('queries crt.sh once and keeps only strict, non-wildcard descendants', async () => {
+    const calls = [];
+    const result = await fetchCertificateTransparencySubdomains('Example.com.', {
+      fetchFn: async (url, init) => {
+        calls.push({ url: new URL(url), redirect: init.redirect });
+        return jsonResponse(200, [
+          { common_name: 'www.example.com', name_value: 'www.example.com\nAPI.example.com\n*.example.com' },
+          { common_name: 'example.com', name_value: 'example.com\nops@example.com\nexample.com.attacker.net' },
+          { common_name: 'api.example.com', name_value: 'api.example.com' },
+        ]);
+      },
+    });
+    assert.deepEqual(result.hostnames, ['api.example.com', 'www.example.com']);
+    assert.equal(result.source, 'crtsh');
+    assert.equal(result.truncated, false);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].url.origin, 'https://crt.sh');
+    assert.equal(calls[0].url.searchParams.get('q'), '%.example.com');
+    assert.equal(calls[0].url.searchParams.get('exclude'), 'expired');
+    assert.equal(calls[0].redirect, 'manual');
+  });
+
+  it('stops at the result cap and parses streamed bodies', async () => {
+    const entries = Array.from({ length: 30 }, (_, index) => ({ name_value: `h${index}.example.com` }));
+    const result = await fetchCertificateTransparencySubdomains('example.com', {
+      maxResults: 5,
+      fetchFn: async () => new Response(JSON.stringify(entries), { status: 200 }),
+    });
+    assert.equal(result.hostnames.length, 5);
+    assert.equal(result.stop_reason, 'max_results');
+    assert.equal(result.truncated, true);
+  });
+
+  it('cancels unread rejected responses and releases consumed stream locks', async () => {
+    for (const [status, headers, code] of [
+      [429, {}, 'subdomain_source_rate_limited'],
+      [503, {}, 'subdomain_source_failed'],
+      [302, { location: 'https://other.example/' }, 'subdomain_source_failed'],
+      [200, { 'content-length': '1000' }, 'subdomain_source_response_too_large'],
+    ]) {
+      let cancelled = false;
+      const response = new Response(new ReadableStream({ cancel() { cancelled = true; } }), { status, headers });
+      await assert.rejects(fetchCertificateTransparencySubdomains('example.com', {
+        maxBytes: 64, fetchFn: async () => response,
+      }), (error) => error.code === code);
+      assert.equal(cancelled, true, `unread HTTP ${status} body must be cancelled`);
+      assert.equal(response.body.locked, false);
+    }
+    const response = new Response('[]', { status: 200 });
+    await fetchCertificateTransparencySubdomains('example.com', { fetchFn: async () => response });
+    assert.equal(response.body.locked, false, 'completed stream reader must release its lock');
+  });
+
+  it('maps upstream failures, timeouts and oversized bodies to typed errors', async () => {
+    const rejects = (options, code, status = 502) => assert.rejects(
+      fetchCertificateTransparencySubdomains('example.com', options),
+      (error) => error instanceof SubdomainSourceError && error.code === code && error.status === status,
+    );
+    await rejects({ fetchFn: async () => jsonResponse(503, {}) }, 'subdomain_source_failed');
+    await rejects({ fetchFn: async () => jsonResponse(429, {}) }, 'subdomain_source_rate_limited', 429);
+    await rejects({ fetchFn: async () => { throw new TypeError('fetch failed'); } }, 'subdomain_source_unreachable');
+    await rejects({ timeoutMs: 5, fetchFn: (_url, init) => new Promise((_resolve, reject) => {
+      init.signal.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+    }) }, 'subdomain_source_unreachable');
+    await rejects({ fetchFn: async () => new Response('<html>busy</html>', { status: 200 }) }, 'subdomain_source_failed');
+    await rejects({ fetchFn: async () => jsonResponse(200, { error: 'x' }) }, 'subdomain_source_failed');
+    await rejects({ maxBytes: 64, fetchFn: async () => new Response('['.padEnd(200, ' ') + ']', { status: 200 }) },
+      'subdomain_source_response_too_large');
   });
 });

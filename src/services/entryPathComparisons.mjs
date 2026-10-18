@@ -218,6 +218,7 @@ function* computePlan(b, ctx, request, runtimeConfig, options) {
       targets: records.targets,
       originBindings: records.originBindings,
       catalog: options.catalog ?? CHECK_CATALOG,
+      verificationRecords: records.verificationRecords,
       authorize: executionGate(records, runtimeConfig),
     });
     return { plan, records, anchorTarget };
@@ -253,6 +254,7 @@ function presentPlan(plan) {
       check_version: item.check_version,
       scenario_version: item.scenario_version,
       origin_binding_id: item.origin_binding_id,
+      ...(item.paired_plan ? { paired_plan: item.paired_plan } : {}),
       eligible: item.eligible,
       ineligible_reason: item.ineligible_reason,
     })),
@@ -957,6 +959,7 @@ function loadDevRecords(ctx, options = {}) {
     targets: (store.targets ?? []).filter((row) => row.tenant_id === ctx.tenantId),
     originBindings: (store.originBindings ?? []).filter((row) => row.tenant_id === ctx.tenantId),
     targetGroups: (store.targetGroups ?? []).filter((row) => row.tenant_id === ctx.tenantId),
+    verificationRecords: bindingRecords,
     originProof: (targetId) => currentOriginProof(bindingRecords, ctx.tenantId, targetId),
     targetProof: (group, targetId) => targetOwnershipProof(ctx, group, targetId),
   };
@@ -984,7 +987,8 @@ function createDevComparisonBackend() {
     runtimeConfig: () => defaultRuntimeConfig,
     loadRecords: (ctx, _selection, options) => loadDevRecords(ctx, options),
     killSwitchActive: (tenantId) => isKillSwitchActiveForTenant(tenantId),
-    startRun: (execCtx, body, runtimeConfig, extra = {}) => (extra.startRun ?? startTestRun)(execCtx, body, runtimeConfig),
+    startRun: (execCtx, body, runtimeConfig, extra = {}) => (extra.startRun ?? startTestRun)(execCtx, body, runtimeConfig,
+      { reviewedComparison: extra.comparison }),
     checkpoint: () => undefined,
     getRun: (tenantId, runId) => getStore().testRuns.find((row) => row.id === runId && row.tenant_id === tenantId) ?? null,
     cancelRun: (ctx, runId, options) => cancelTestRun(ctx, runId, options),

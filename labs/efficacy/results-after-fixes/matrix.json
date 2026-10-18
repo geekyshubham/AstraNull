@@ -1,0 +1,151 @@
+{
+  "source_unchanged": true,
+  "labs": [
+    {
+      "lab_id": "waf-none",
+      "exit_code": 0,
+      "rows": 4,
+      "tally": {
+        "detected gap": 3,
+        "inconclusive": 1
+      },
+      "unexpected": 0
+    },
+    {
+      "lab_id": "waf-crs-detect",
+      "exit_code": 0,
+      "rows": 4,
+      "tally": {
+        "detected gap": 3,
+        "inconclusive": 1
+      },
+      "unexpected": 0
+    },
+    {
+      "lab_id": "waf-crs-sqli-gap",
+      "exit_code": 0,
+      "rows": 5,
+      "tally": {
+        "detected gap": 2,
+        "correct protected": 2,
+        "inconclusive": 1
+      },
+      "unexpected": 0
+    },
+    {
+      "lab_id": "waf-crs-block",
+      "exit_code": 0,
+      "rows": 9,
+      "tally": {
+        "detected gap": 2,
+        "correct protected": 4,
+        "inconclusive": 3
+      },
+      "unexpected": 0
+    },
+    {
+      "lab_id": "waf-crs-pl4",
+      "exit_code": 0,
+      "rows": 7,
+      "tally": {
+        "correct protected": 6,
+        "detected gap": 1
+      },
+      "unexpected": 0
+    },
+    {
+      "lab_id": "waf-coraza",
+      "exit_code": 0,
+      "rows": 9,
+      "tally": {
+        "detected gap": 2,
+        "correct protected": 4,
+        "inconclusive": 3
+      },
+      "unexpected": 0
+    },
+    {
+      "lab_id": "nfw-router",
+      "exit_code": 0,
+      "rows": 5,
+      "tally": {
+        "detected gap": 3,
+        "inconclusive": 2
+      },
+      "unexpected": 0
+    },
+    {
+      "lab_id": "nfw-ipv6-gap",
+      "exit_code": 0,
+      "rows": 2,
+      "tally": {
+        "detected gap": 2
+      },
+      "unexpected": 0
+    },
+    {
+      "lab_id": "dns-lab",
+      "exit_code": 0,
+      "rows": 6,
+      "tally": {
+        "inconclusive": 3,
+        "detected gap": 2,
+        "not_applicable": 1
+      },
+      "unexpected": 0
+    },
+    {
+      "lab_id": "reflector-lab",
+      "exit_code": 0,
+      "rows": 7,
+      "tally": {
+        "detected gap": 4,
+        "not_applicable": 2,
+        "inconclusive": 1
+      },
+      "unexpected": 0
+    },
+    {
+      "lab_id": "tls-proto-lab",
+      "exit_code": 0,
+      "rows": 4,
+      "tally": {
+        "detected gap": 3,
+        "inconclusive": 1
+      },
+      "unexpected": 0
+    },
+    {
+      "lab_id": "ratelimit-lab",
+      "exit_code": 0,
+      "rows": 6,
+      "tally": {
+        "correct protected": 1,
+        "inconclusive": 4,
+        "detected gap": 1
+      },
+      "unexpected": 0
+    },
+    {
+      "lab_id": "l7-surface-lab",
+      "exit_code": 0,
+      "rows": 7,
+      "tally": {
+        "execution_error": 1,
+        "inconclusive": 2,
+        "not_applicable": 4
+      },
+      "unexpected": 1
+    },
+    {
+      "lab_id": "fault-lab",
+      "exit_code": 0,
+      "rows": 9,
+      "tally": {
+        "not_applicable": 9
+      },
+      "unexpected": 0
+    }
+  ],
+  "total_rows": 84
+}

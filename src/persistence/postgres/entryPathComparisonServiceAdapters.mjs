@@ -98,7 +98,8 @@ export function createPostgresEntryPathComparisonBackend(deps) {
       if (group && group.tenant_id === ctx.tenantId) targetGroups.push(group);
     }
     const proof = (targetId) => currentOriginProof(context.records, ctx.tenantId, targetId);
-    return { relations, targets, originBindings, targetGroups, originProof: proof, targetProof: (_group, targetId) => proof(targetId) };
+    return { relations, targets, originBindings, targetGroups, verificationRecords: context.records,
+      originProof: proof, targetProof: (_group, targetId) => proof(targetId) };
   }
 
   async function deferUntil(comparison, scopeItem, result, at) {
@@ -154,7 +155,7 @@ export function createPostgresEntryPathComparisonBackend(deps) {
     killSwitchActive: (tenantId) => killSwitch.isKillSwitchActiveForTenant({ tenantId }),
     startRun: async (execCtx, body, config, extra = {}) => {
       await repository.claimItem(extra.comparison, extra.item);
-      return testRuns.startTestRun(execCtx, body, config);
+      return testRuns.startTestRun(execCtx, body, config, { reviewedComparison: extra.comparison });
     },
     checkpoint: (comparison) => repository.saveComparison(comparison),
     getRun: async (tenantId, runId) => {

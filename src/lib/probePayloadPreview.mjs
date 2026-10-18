@@ -1,4 +1,5 @@
 import { redactString, isVariantSensitiveKey } from './redact.mjs';
+import { isUtf8 } from 'node:buffer';
 
 export const PROBE_PREVIEW_BYTES = 2048;
 export const PROBE_PREVIEW_CHARS = 4096;
@@ -29,8 +30,8 @@ export function redactPayloadPreview(value, sensitiveValues = []) {
   return scrub(text, sensitiveValues).slice(0, PROBE_PREVIEW_CHARS);
 }
 
-export function previewContentType(value) {
-  const raw = String(value ?? '').slice(0, 253);
+export function previewContentType(value, sensitiveValues = []) {
+  const raw = scrub(value ?? '', sensitiveValues).slice(0, 253);
   const mime = raw.split(';')[0].trim().toLowerCase();
   if (!/^[a-z0-9.+-]+\/[a-z0-9.+-]+$/i.test(mime)) return null;
   const charset = raw.match(/charset\s*=\s*([a-z0-9_-]+)/i)?.[1];
@@ -58,8 +59,18 @@ export function previewBytes(buffer, contentType, sensitiveValues = []) {
   return { preview, encoding: 'utf8', truncated: bytes.length > sample.length || preview.length >= PROBE_PREVIEW_CHARS };
 }
 
+/** Formats without a bounded structure-aware scrubber are unavailable, not encoded around redaction. */
+export function unsafePayloadPreviewReason(buffer, contentType) {
+  if (!buffer.length) return null;
+  if (!isUtf8(buffer) || buffer.includes(0)) return '[Binary payload withheld]';
+  const text = buffer.toString('utf8');
+  if (/multipart|xml/i.test(contentType ?? '') || /<(?:form|input|textarea|select|script)\b/i.test(text)
+    || /^\s*<\?xml\b/i.test(text)) return '[Structured payload withheld]';
+  return null;
+}
+
 export function previewRequest(url, options = {}, deps = {}) {
-  const contentType = previewContentType(Object.entries(options.headers ?? {}).find(([name]) => name.toLowerCase() === 'content-type')?.[1]);
+  const contentType = previewContentType(Object.entries(options.headers ?? {}).find(([name]) => name.toLowerCase() === 'content-type')?.[1], deps.activitySensitiveValues ?? []);
   const body = options.body == null ? Buffer.alloc(0) : Buffer.from(options.body);
   const captured = previewBytes(body, contentType, deps.activitySensitiveValues ?? []);
   const query = Object.create(null);
@@ -81,6 +92,15 @@ export function captureResponsePayload(deps, common, contentType) {
   const emit = (complete, available = true) => {
     if (typeof deps.onProbeActivity !== 'function') return;
     const payload = previewBytes(captured, contentType, deps.activitySensitiveValues ?? []);
+    if (common.capture_version === 'http-exchange.v1') {
+      // Do not publish a secret prefix before a later chunk can complete redaction.
+      if (!complete || total > captured.length) {
+        payload.preview = '[Partial payload withheld]'; payload.encoding = 'redacted';
+      } else {
+        const withheld = payload.encoding === 'base64' ? '[Binary payload withheld]' : unsafePayloadPreviewReason(captured, contentType);
+        if (withheld) { payload.preview = withheld; payload.encoding = 'redacted'; }
+      }
+    }
     try { deps.onProbeActivity({ ...common, stage: complete ? 'response_body_completed' : 'response_payload',
       response_content_type: contentType, response_payload_preview: payload.preview,
       response_payload_available: available,

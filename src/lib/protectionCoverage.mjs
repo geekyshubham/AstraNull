@@ -6,6 +6,7 @@ import { approvedScenarioVersion, deriveCheckDefinitionVersion, gradingSignature
 import { currentAssuranceGap } from './assuranceScope.mjs';
 import { OBSERVATION_ONLY_PROBE_KINDS } from './probeEvidenceTiers.mjs';
 import { inconclusiveReason } from './inconclusiveReasons.mjs';
+import { markerComparisonComplete } from './vectorProbes/wafProbeSupport.mjs';
 
 export const COVERAGE_FRESHNESS_POLICY = Object.freeze({ id: 'protection-profile.coverage.v2', version: 2, max_age_ms: 7 * 24 * 60 * 60 * 1000, unit: 'target_check_pair' });
 const PLAN_VERSION = 'catalog+policy.v2';
@@ -67,14 +68,23 @@ export function versionGapFor(check, run, verdict) {
   return null;
 }
 
-export function observationAssuranceGap(run, verdict, check = null) {
+export function observationAssuranceGap(run, verdict, check = null, { requireResolvedResult = false } = {}) {
   const summary = summaryOf(run);
   const sources = [summary, summary.metadata, summary.probe_metadata, run?.probe_metadata, run?.probe_external_result?.metadata, verdict?.metadata_json, verdict?.metadata, ...(run?.readiness_result_metadata ?? [])].filter(Boolean);
   if (sources.some((source) => source.observation_only === true || source.readiness_conclusion === false)) return 'observation_only_result';
   if (sources.some((source) => source.complete === false || source.comparison_complete === false || source.evidence_complete === false || source.planned_legs_complete === false || source.capture_complete === false)) return 'incomplete_evidence';
   if (check?.requires_complete_comparison === true || ['waf_class_marker_probe', 'waf_evasion_marker_probe', 'outside_in_waf_scan'].includes(check?.probe_profile?.kind)) {
-    const proof = sources.filter((source) => source.classifier_version === 'marker-comparison-v4');
-    if (!proof.length || proof.some((source) => source.comparison_complete !== true || !Number.isInteger(source.planned_marker_legs) || source.planned_marker_legs <= 0 || source.completed_marker_legs !== source.planned_marker_legs || (source.permitted_baseline_health ?? source.permitted_baseline?.health ?? source.baseline_health) !== 'healthy')) return 'complete_marker_comparison_missing';
+    const classifier = check?.probe_profile?.kind === 'waf_evasion_marker_probe' ? 'marker-comparison-v4' : 'marker-comparison-v5';
+    // Coverage requires its strict resolver's actual results, never mutable run
+    // summaries. Report/posture readers also use this semantic helper on result
+    // metadata they independently resolve and validate before granting credit.
+    const proof = requireResolvedResult
+      ? (Array.isArray(run?.readiness_result_metadata) ? run.readiness_result_metadata : [])
+      : sources.filter((source) => source.classifier_version != null);
+    if (!proof.length || proof.some((source) => classifier === 'marker-comparison-v5'
+      ? !markerComparisonComplete(source)
+      : source?.classifier_version !== classifier || source.comparison_complete !== true || source.planned_marker_legs !== 2 || source.completed_marker_legs !== 2
+        || (source.permitted_baseline_health ?? source.permitted_baseline?.health ?? source.baseline_health) !== 'healthy')) return 'complete_marker_comparison_missing';
   }
   return null;
 }
@@ -96,9 +106,12 @@ function positiveOutcomeGap(run, verdict, check, context) {
 
 function provenanceOf(run, verdict) {
   const summary = summaryOf(run);
-  const producer = recordedText(run, verdict, 'producer_kind');
-  if (producer === 'internal_simulation' || run?.simulation === 'SAFE_PROBE_SIMULATION' || summary.simulation === 'SAFE_PROBE_SIMULATION' || run?.probe_mode === 'simulation' || summary.probe_mode === 'simulation') return 'internal_simulation';
-  if (['manual', 'customer_declaration'].includes(producer)) return 'manual_declaration';
+  // Immutable run provenance wins over result/display metadata. Simulation never
+  // becomes live credit merely because a signed activity row exists in its run.
+  const producer = text(run?.producer_kind) ?? text(run?.provenance_json?.producer_kind)
+    ?? recordedText(run, verdict, 'producer_kind');
+  if (producer === 'internal_simulation' || run?.simulation === 'SAFE_PROBE_SIMULATION' || summary.simulation === 'SAFE_PROBE_SIMULATION' || run?.probe_mode === 'simulation' || summary.probe_mode === 'simulation' || run?.evidence_label === 'probe_simulation_evidence') return 'internal_simulation';
+  if (['manual', 'manual_declaration', 'customer_declaration'].includes(producer)) return 'manual_declaration';
   return ['signed_probe', 'live_external'].includes(producer) ? 'external' : 'unspecified';
 }
 
@@ -117,14 +130,18 @@ export function pairState(run, verdict, check, nowMs, context = {}) {
   if (!['completed', 'verdicted'].includes(run.status)) return unknown('unfinalized');
   if (!observedAt) return unknown('observation_time_unknown');
   if (completed > nowMs || evidenceTime > nowMs) return unknown('future_observation');
-  if (!evidenceBackedVerdict(verdict) || context.evidence_verified === false) return unknown('no_evidence');
+  const citationsPresent = verdict?.evidence_ids != null
+    && (!Array.isArray(verdict.evidence_ids) || verdict.evidence_ids.length > 0);
+  if (!citationsPresent) return unknown('no_evidence');
+  if (['internal_simulation', 'manual_declaration'].includes(provenance)) return unknown(provenance);
+  if (!evidenceBackedVerdict(verdict) || context.evidence_verified === false) return unknown('invalid_or_unresolved_evidence');
   if (provenance !== 'external') return unknown(provenance);
   const stale = nowMs - observedMs > COVERAGE_FRESHNESS_POLICY.max_age_ms;
   const recordedScope = run.safety_constraints?.assurance_scope ?? run.provenance_json?.assurance_scope;
   const gap = versionGapFor(check, run, verdict)
     ?? (context.require_recorded_scope === true && !recordedScope?.target?.definition_digest ? 'recorded_target_scope_missing' : null)
     ?? (context.target ? currentAssuranceGap({ run, target: context.target, policy: context.policy, targetGroup: context.targetGroup }) : null)
-    ?? observationAssuranceGap(run, verdict, check)
+    ?? observationAssuranceGap(run, verdict, check, { requireResolvedResult: true })
     ?? positiveOutcomeGap(run, verdict, check, context);
   if (gap) return { ...base, state: 'partial', freshness: stale ? 'stale' : 'unknown', pair_reason: gap, current_assurance: 'retest_required', retest_required: true };
   const value = String(verdict.verdict).trim().toLowerCase();

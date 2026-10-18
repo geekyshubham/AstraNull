@@ -1,5 +1,20 @@
 # Recorded probe execution activity
 
+## Correlated HTTP exchange capture (2026-10-15, local source)
+
+The additive `http-exchange.v1` activity contract supersedes the header-value exclusion below **only** for bounded sanitized `request_headers` / `response_headers` entries. Credential/header secrets and raw packets remain forbidden. The server must accept the additive fields before deploying a worker that emits them; older records remain unpaired, with missing capture explicitly unavailable. No history is backfilled.
+
+- Each actual HTTP/1, HTTP/2, or WebSocket-handshake transport invocation generates an `exchange_id`, `attempt_id`, and `operation_id`. They flow through request/response/body/error observations and are scoped by the immutable event's original job and lease. These local IDs add no network tracing headers or execution authority. Separate invocations get separate IDs; a higher-level retry relationship is not inferred.
+- The header serializer retains at most 16 entries, preserves duplicates when the client exposes them, withholds credential/cookie/authentication and unknown header values, and permits only bounded sanitized values from a fixed public metadata allowlist. Location strips credentials/fragments and redacts all query values for relative and absolute URLs. Request headers represent the client-observable prepared set, not a raw-wire capture; HTTP version is separate from URL scheme.
+- Only consumed response bytes are observed, up to the existing 2-KiB sample / 4096-character bound. Versioned binary, invalid UTF-8, NUL-containing, incomplete, and sample-truncated previews are withheld rather than exposed as base64 or unsafe secret prefixes. Multipart/XML and form- or script-bearing HTML are also withheld because no bounded structure-aware sanitizer is implemented for them. A complete empty body remains empty. Ordinary small redirect HTML remains readable. Legacy preview records remain readable under their original contract. No added body read, drain, clone, request, redirect or safety allowance is introduced.
+- Sanitization runs before reporter signing and again on ingestion. The strict item schema rejects unknown fields, malformed correlation tokens, unsupported versions, invalid header entries, and excess counts. Existing 24-KiB item, 28-KiB reporter, 32-KiB signed-body, 16-item batch and 256-ordinal bounds are unchanged.
+- `requests_sent` keeps its legacy attested meaning. An additive `accounting` object exposes nullable `probe_logical_attempts`, `destination_vetting_resolver_attempts`, `total_operations` and `counting_basis`. Logical reservations are not measured HTTP sends. Missing historical splits stay null.
+- Branding aliases apply to descriptive operation labels, never captured URLs, header values, or payload text. Capture completeness remains separate from signed-result proof. Events retain normal tenant access, metadata retention and legal holds.
+
+The safe metadata-preview contract is not raw packet storage. `store_packet_payloads` does not grant raw capture, and `redact_headers_by_default: false` cannot disable mandatory secret/header redaction in this contract. Existing privacy flags are not represented as a new payload opt-in or a guarantee that every historical preview was disabled. No tenant setting is silently changed.
+
+Verification uses owned loopback peers and local application-role PostgreSQL; no deployment or public target traffic is part of this change. See [ADR-0030](../adr/0030-verdict-proof-and-correlated-exchange-evidence.md).
+
 ## Current authority and Inspector contract (2026-10-09)
 
 This section supersedes the earlier signing, latest-slice and Stop wording below for the current engineering tree. See [ADR-0021](../adr/0021-bounded-execution-and-evidence-based-assurance.md). Historical live-verification entries below are prior-release records, not deployment evidence for this remediation.

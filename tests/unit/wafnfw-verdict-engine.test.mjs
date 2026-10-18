@@ -14,7 +14,10 @@ import { SCENARIO_TO_CHECK } from '../../src/contracts/wafOrchestrator.mjs';
 import { buildProtectionValidationReport } from '../../src/lib/protectionValidationReport.mjs';
 import { getCheckById } from '../../src/contracts/checks.mjs';
 import { approvedScenarioVersion, deriveCheckDefinitionVersion } from '../../src/lib/checkDefinitionVersion.mjs';
-import { EXTERNAL_OBSERVATION_SEMANTICS_VERSION } from '../../src/lib/externalObservationOutcomes.mjs';
+import { EXTERNAL_OBSERVATION_SEMANTICS_VERSION, WAF_GRADING_VERSION, SIGNATURE_CORPUS_VERSION } from '../../src/lib/externalObservationOutcomes.mjs';
+import { addAssuredObservation, assuranceWorld } from '../helpers/assurance-fixtures.mjs';
+
+const CURRENT_MARKER_PROOF = addAssuredObservation(assuranceWorld()).event.metadata;
 
 const denyTcp22 = {
   version: 1,
@@ -185,7 +188,7 @@ describe('F17 F10 F02 challenge redirect penalty', () => {
       externalResult: 'challenged',
       expectedBehavior: 'must_block_before_origin',
       probeIoObserved: true,
-      probeMetadata: { enforcement: 'challenged', posture_status: 'challenged' },
+      probeMetadata: { ...CURRENT_MARKER_PROOF, enforcement: 'challenged', posture_status: 'challenged' },
       declarations: { waf: { expected_action: 'block' } },
     });
     assert.equal(result.verdict, 'inconclusive');
@@ -198,7 +201,7 @@ describe('F17 F10 F02 challenge redirect penalty', () => {
       externalResult: 'challenged',
       expectedBehavior: 'must_block_before_origin',
       probeIoObserved: true,
-      probeMetadata: { enforcement: 'challenged', posture_status: 'challenged' },
+      probeMetadata: { ...CURRENT_MARKER_PROOF, enforcement: 'challenged', posture_status: 'challenged' },
       declarations: { waf: { expected_action: 'challenge' } },
     });
     assert.equal(result.verdict, 'protected');
@@ -210,7 +213,7 @@ describe('F17 F10 F02 challenge redirect penalty', () => {
       externalResult: 'challenged',
       expectedBehavior: 'must_block_before_origin',
       probeIoObserved: true,
-      probeMetadata: { enforcement: 'challenged' },
+      probeMetadata: { ...CURRENT_MARKER_PROOF, enforcement: 'challenged' },
       declarations: { waf: { expected_action: 'block_or_challenge' } },
     });
     assert.equal(result.verdict, 'protected');
@@ -252,7 +255,7 @@ describe('WAF class and managed markers', () => {
       externalResult: 'blocked',
       expectedBehavior: 'must_block_before_origin',
       probeIoObserved: true,
-      probeMetadata: { enforcement: 'enforced', assurance_scope: 'managed_rule_marker' },
+      probeMetadata: { ...CURRENT_MARKER_PROOF, enforcement: 'enforced', assurance_scope: 'managed_rule_marker' },
     });
     assert.equal(result.verdict, 'protected');
     assert.equal(result.createsFinding, false);
@@ -264,23 +267,23 @@ describe('WAF class and managed markers', () => {
       externalResult: 'connected',
       expectedBehavior: 'must_block_before_origin',
       probeIoObserved: true,
-      probeMetadata: { enforcement: 'not_enforced', assurance_scope: 'managed_rule_marker' },
+      probeMetadata: { ...CURRENT_MARKER_PROOF, enforcement: 'not_enforced', assurance_scope: 'managed_rule_marker' },
     });
     assert.equal(result.verdict, 'exposed');
     assert.equal(result.severity, 'medium');
   });
 
-  it('exposes custom_canary_rule at low and names the canary, not an attack class', () => {
+  it('withholds custom canary exposure without typed installed-token prerequisites', () => {
     const result = correlateExternalOnlyVerdict({
       probeKind: 'waf_class_marker_probe',
       externalResult: 'connected',
       expectedBehavior: 'must_block_before_origin',
       probeIoObserved: true,
-      probeMetadata: { enforcement: 'not_enforced', assurance_scope: 'custom_canary_rule' },
+      probeMetadata: { ...CURRENT_MARKER_PROOF, enforcement: 'not_enforced', assurance_scope: 'custom_canary_rule' },
     });
-    assert.equal(result.verdict, 'exposed');
-    assert.equal(result.severity, 'low');
-    assert.match(result.explanation, /custom canary rule for AstraNull's marker/);
+    assert.equal(result.verdict, 'inconclusive');
+    assert.equal(result.createsFinding, false);
+    assert.match(result.explanation, /installed exact-token rule and placements/);
     assert.doesNotMatch(result.explanation, /attack class blocked/i);
   });
 
@@ -291,6 +294,7 @@ describe('WAF class and managed markers', () => {
       expectedBehavior: 'must_block_before_origin',
       probeIoObserved: true,
       probeMetadata: {
+        ...CURRENT_MARKER_PROOF,
         enforcement: 'partial',
         assurance_scope: 'managed_rule_marker',
         placements: [
@@ -320,7 +324,7 @@ describe('F05 F16 evasion symmetric', () => {
     });
     assert.equal(result.verdict, 'exposed');
     assert.equal(result.severity, 'medium');
-    assert.equal(result.explanation, 'normalization gap for double_url');
+    assert.equal(result.explanation, 'normalization gap for double_url: the plain SQL injection marker was blocked, but the same marker sent with double_url encoding was allowed through.');
   });
 
   it('exposes a normalization gap at low for other families', () => {
@@ -490,15 +494,15 @@ describe('F08 readiness credit and custom-canary rollup', () => {
     assert.ok(coverage.applicable_count <= 2);
   });
 
-  it('credits dns zone transfer when enforcement is recorded', () => {
+  it('withholds AXFR credit from an enforcement label without protocol refusal evidence', () => {
     const result = correlateExternalOnlyVerdict({
       probeKind: 'dns_axfr_leak',
       externalResult: 'blocked',
       expectedBehavior: 'must_block_before_origin',
       probeIoObserved: true,
-      probeMetadata: { enforcement: 'enforced' },
+      probeMetadata: { ...CURRENT_MARKER_PROOF, enforcement: 'enforced' },
     });
-    assert.equal(result.verdict, 'protected');
+    assert.equal(result.verdict, 'inconclusive');
   });
 });
 
@@ -532,9 +536,10 @@ describe('call-site declaration wiring', () => {
       expectedBehavior: 'must_block_before_origin',
       probeIoObserved: true,
       probeMetadata: {
+        ...CURRENT_MARKER_PROOF,
         enforcement: 'enforced',
-        grading_version: 'waf-grading.v2',
-        signature_corpus_version: 'waf-signatures.2026-10-13.2',
+        grading_version: WAF_GRADING_VERSION,
+        signature_corpus_version: SIGNATURE_CORPUS_VERSION,
         source_perspective: { id: 'default' },
       },
       declarations: { waf: { expected_action: 'block' } },
@@ -550,7 +555,7 @@ describe('F28 method-policy and perspective-allowlist verdicts', () => {
       externalResult: 'blocked',
       expectedBehavior: 'must_block_before_origin',
       probeIoObserved: true,
-      probeMetadata: { enforcement: 'enforced', comparison_complete: true },
+      probeMetadata: { ...CURRENT_MARKER_PROOF, enforcement: 'enforced', comparison_complete: true },
     });
     assert.equal(enforced.verdict, 'protected');
     const exposed = correlateExternalOnlyVerdict({
@@ -558,7 +563,7 @@ describe('F28 method-policy and perspective-allowlist verdicts', () => {
       externalResult: 'connected',
       expectedBehavior: 'must_block_before_origin',
       probeIoObserved: true,
-      probeMetadata: { enforcement: 'not_enforced', comparison_complete: true },
+      probeMetadata: { ...CURRENT_MARKER_PROOF, enforcement: 'not_enforced', comparison_complete: true },
     });
     assert.equal(exposed.verdict, 'exposed');
     assert.equal(exposed.severity, 'low');

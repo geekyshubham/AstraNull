@@ -25,6 +25,7 @@ export const ALLOWED_PROBE_PROFILE_KINDS = Object.freeze([
   'tls_session',
   'http2_settings',
   'origin_leak_scan',
+  'origin_identity_pair',
   'host_sni_bypass',
   'port_scan_bounded',
   'rate_limit_sequence',
@@ -65,6 +66,7 @@ export const MAX_REQUESTS_BY_PROBE_KIND = Object.freeze({
   quic_reachability: 1,
   origin_leak_scan: 15,
   host_sni_bypass: 1,
+  origin_identity_pair: 2,
   port_scan_bounded: 15,
   rate_limit_sequence: 5,
   waf_enforcement_probe: 1,
@@ -1104,12 +1106,12 @@ export const CHECK_CATALOG = [
     version: '1.0.0',
     name: 'Secondary DNS Failover (Safe)',
     vector_family: 'dns',
-    description: 'Customer-declared secondary DNS and failover path metadata validation (no failover stress).',
+    description: 'Customer-declared authoritative nameserver inventory validation scoping single nameserver redundancy gaps (not proof of failover behavior).',
     supported_targets: ['fqdn', 'dns'],
     required_customer_setup: ['declared_secondary_dns_targets', 'failover_policy_declaration'],
-    evidence_required: ['probe_result', 'health_signal'],
+    evidence_required: ['probe_result'],
     stop_conditions: ['max_events_reached', 'max_duration_elapsed', 'customer_cancel', 'tenant_kill_switch'],
-    verdict_logic: 'NS count and declared secondary nameserver reachability signal weak failover posture.',
+    verdict_logic: 'Single authoritative nameserver signals a redundancy gap rather than proof of failover behavior.',
     probe_profile: { kind: 'dns_failover_posture', max_requests: 3, timeout_ms: 5000 },
     safety_constraints: { max_events: 3, max_duration_seconds: 60, max_concurrent_runs_per_target_group: 1 },
     default_expected_behavior: 'must_block_before_origin',
@@ -3608,6 +3610,23 @@ export const CHECK_CATALOG = [
 ];
 
 
+// Separately reviewed comparisons; ordinary Host/SNI profiles retain their one-HEAD cap.
+for (const method of ['HEAD', 'GET']) {
+  const mode = method.toLowerCase();
+  CHECK_CATALOG.push(safeCheck({
+    check_id: `origin.identity_pair.${mode}.v1`, version: '1.0.0',
+    name: `Paired origin identity (${method})`, vector_family: 'origin',
+    description: `Exactly two reviewed ${method} requests: one to the protected declared target and one to its independently verified bound address. No redirects or extra assets. Content and certificates are supporting clues only; no readiness or protected outcome.`,
+    supported_targets: ['ip', 'url'], required_customer_setup: ['reviewed_entry_path_comparison', 'origin_binding', 'both_current_ownership_proofs'],
+    evidence_required: ['probe_result'], default_expected_behavior: 'must_block_before_origin',
+    verdict_logic: 'Observation-only. A fresh same-worker, same-scope nonce-bound permitted baseline may confirm a direct application path, never general WAF bypass, origin protection or capacity.',
+    probe_profile: { kind: 'origin_identity_pair', max_requests: 2, timeout_ms: 5000,
+      scenario_version: `origin-identity-${mode}-v1`, observation_only: true, readiness_conclusion: false },
+    safety_constraints: { max_events: 2, max_duration_seconds: 60, max_concurrent_runs_per_target_group: 1 },
+    probe_simulation_profile: 'external_connected',
+  }));
+}
+
 // Versioned truth projection. Historic run expectations are immutable snapshots;
 // these changed definitions require retesting rather than reinterpreting a prior pass.
 export const PROBE_CATALOG_SEMANTICS_VERSION = 'probe-catalog-v3';
@@ -3666,7 +3685,8 @@ for (const check of CHECK_CATALOG) {
   const observationOnly = OBSERVATION_ONLY_PROBE_KINDS.includes(profile.kind) || unsupportedEvasion;
   check.observation_only = profile.observation_only = observationOnly;
   if (observationOnly) check.readiness_conclusion = profile.readiness_conclusion = false;
-  check.scenario_version = profile.scenario_version = observationOnly ? 'probe-observation-v3' : 'marker-comparison-v4';
+  check.scenario_version = profile.scenario_version = profile.kind === 'origin_identity_pair'
+    ? profile.scenario_version : observationOnly ? 'probe-observation-v3' : 'marker-comparison-v4';
   check.evidence_tier = evidenceTierForCheck(check);
   check.mechanism_id = unsupportedEvasion ? `unsupported:${profile.evasion_transform}` : `${profile.kind}:${profile.evasion_transform ?? profile.entry_path_scenario ?? profile.marker_class ?? profile.payload_profile ?? profile.dns_qtype ?? profile.scenario ?? 'shared'}`;
   const missingPort = ['tcp_connect', 'udp_probe'].includes(profile.kind)
@@ -3679,7 +3699,7 @@ for (const check of CHECK_CATALOG) {
   if (['waf_class_marker_probe', 'waf_evasion_marker_probe', 'outside_in_waf_scan'].includes(profile.kind) && check.mechanism_supported) {
     check.requires_complete_comparison = profile.requires_complete_comparison = true;
   }
-  if (observationOnly && !String(check.check_id).startsWith('nfw.')) {
+  if (observationOnly && profile.kind !== 'origin_identity_pair' && !String(check.check_id).startsWith('nfw.')) {
     const transportNote = missingPort
       ? 'Not runnable until a TCP/UDP port is declared on the target or a catalog default_port is set.'
       : check.mechanism_supported
@@ -3768,6 +3788,36 @@ for (const check of CHECK_CATALOG) {
     continue;
   }
   bumpMinorVersion(check);
+}
+
+// Grading v3: transport completion and grading are separate, and opaque tokens lack
+// an installed-rule binding. These are semantic changes, not presentation renames.
+for (const check of CHECK_CATALOG) {
+  const profile = check.probe_profile;
+  if (!profile || !['waf_class_marker_probe', 'outside_in_waf_scan', 'waf_evasion_marker_probe', 'waf_method_policy_probe', 'rate_limit_canary_probe', 'dns_axfr_leak'].includes(profile.kind)) continue;
+  bumpMinorVersion(check);
+  if (['waf_class_marker_probe', 'outside_in_waf_scan'].includes(profile.kind)) {
+    check.scenario_version = profile.scenario_version = 'marker-comparison-v5';
+    check.verdict_logic = 'The budget-selected marker plan and healthy benign controls must complete. Received unsigned or redirected placements are excluded from grading, not relabelled as missing delivery. At least one graded placement is required; conclusions cover only those placements and tested paths, never exploit mitigation or capacity.';
+  }
+  const custom = profile.kind === 'waf_class_marker_probe' && profile.assurance_scope === 'custom_canary_rule';
+  if (profile.kind === 'waf_class_marker_probe') {
+    check.produces_verdict = profile.produces_verdict = !custom && check.mechanism_supported !== false;
+  }
+  if (custom) {
+    check.observation_only = profile.observation_only = true;
+    check.readiness_conclusion = profile.readiness_conclusion = false;
+    check.setup_required = profile.setup_required = true;
+    check.description = 'Observes the response to an opaque inert token in query, path and header. The current declaration workflow cannot bind an installed exact-token rule to its placements and expected action. This does not test the named attack or establish an installed rule failure.';
+    check.verdict_logic = 'Setup-unavailable observation only. Existing block_signature, expected_action and marker_paths are not proof that an exact-token custom rule is installed; no protection verdict, finding or readiness credit.';
+    check.explanation_template = 'Inert-token observation. Exact installed-rule setup is unavailable; no managed-rule coverage or installed-rule enforcement conclusion.';
+  }
+  if (profile.kind === 'waf_method_policy_probe') {
+    check.observation_only = profile.observation_only = true;
+    check.readiness_conclusion = profile.readiness_conclusion = false;
+    check.produces_verdict = profile.produces_verdict = true;
+  }
+  check.evidence_tier = evidenceTierForCheck(check);
 }
 
 for (const check of CHECK_CATALOG) {
@@ -4101,6 +4151,7 @@ export function checkRequiresAdditionalInput(check, options = {}) {
     return false;
   }
   if (validateCheckDefinition(check).length) return true;
+  if (check.probe_profile?.kind === 'origin_identity_pair') return true;
   if (check.probe_profile?.kind === 'host_sni_bypass' && check.check_id !== 'nfw.origin_lockdown.safe') return true;
   if (check.probe_profile?.kind === 'alert_webhook_ping') return true;
   if (additionalInputRefusal(check, env, { target, declarations, deferTargetRequirements, originBindings, tenantId })) return true;
@@ -4132,6 +4183,7 @@ export function checkAdditionalInputReason(check, options = {}) {
   const refusal = additionalInputRefusal(check, env, { target, declarations, deferTargetRequirements, originBindings, tenantId });
   if (refusal?.error) return refusal.error;
   if (validateCheckDefinition(check).length) return 'invalid_check_definition';
+  if (check.probe_profile?.kind === 'origin_identity_pair') return 'reviewed_origin_identity_comparison_required';
   if (check.probe_profile?.kind === 'host_sni_bypass' && check.check_id !== 'nfw.origin_lockdown.safe') return 'target_bound_direct_address_required';
   if (check.probe_profile?.kind === 'alert_webhook_ping') return 'alert_webhook_required';
   if (

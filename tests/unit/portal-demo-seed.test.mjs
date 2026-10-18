@@ -52,7 +52,7 @@ describe('portal demo seed fixture', () => {
         assert.equal(record.test_run_id, run.id);
       }
       assert.equal(run.producer_kind, 'signed_probe');
-      assert.equal(event.metadata.classifier_version, 'marker-comparison-v4');
+      assert.equal(event.metadata.classifier_version, 'marker-comparison-v5');
       assert.equal(event.metadata.comparison_complete, true);
       assert.equal(event.metadata.permitted_baseline_health, 'healthy');
       assert.deepEqual(verdict.evidence_ids, [event.id]);

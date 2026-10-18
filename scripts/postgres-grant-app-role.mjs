@@ -63,6 +63,14 @@ export async function grantPostgresAppRolePrivileges(db, roleName = DEFAULT_APP_
   ].map((sql) => sql.replaceAll('astranull_app', normalized));
 
   for (const sql of statements) await db.query(sql);
+  // These narrowly audited functions are not executable by PUBLIC. No role membership is granted.
+  for (const signature of [
+    'public.astranull_origin_clue_lifecycle_plan(text,timestamp with time zone,boolean)',
+    'public.astranull_apply_origin_clue_lifecycle(text,text,text,timestamp with time zone)',
+  ]) {
+    const result = await db.query('SELECT to_regprocedure($1) AS function_oid', [signature]);
+    if (result.rows[0]?.function_oid) await db.query(`GRANT EXECUTE ON FUNCTION ${signature} TO ${normalized}`);
+  }
 }
 
 /**

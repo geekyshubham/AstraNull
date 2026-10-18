@@ -27,6 +27,11 @@ import {
 import { deriveRunEvidenceStamp } from '../../src/lib/checkDefinitionVersion.mjs';
 import { deriveAssuranceScope } from '../../src/lib/assuranceScope.mjs';
 import { deriveProtectionFindingCandidates } from '../../src/lib/protectionValidationFindings.mjs';
+import { addAssuredObservation, assuranceWorld } from '../helpers/assurance-fixtures.mjs';
+
+const CURRENT_MARKER_PROOF = addAssuredObservation(assuranceWorld()).event.metadata;
+// This fixture derives outcomes from the actual marker rows below, not a cached summary.
+delete CURRENT_MARKER_PROOF.enforcement;
 
 const TENANT = 'ten_pvr';
 const OTHER = 'ten_pvr_other';
@@ -169,8 +174,7 @@ function proofInputs(evaluations = [...PATH_EVALS, FW_EVAL], targets = TARGETS) 
     const performed = PERFORMED.get(reference.test_run_id) ?? {};
     for (const id of reference.evidence_ids) events.push({ id, nonce_hash: `nonce_${reference.test_run_id}`, tenant_id: evaluation.tenant_id, test_run_id: reference.test_run_id,
       signal_type: 'probe_result', producer_kind: 'signed_probe', timestamp: reference.observed_at, ingested_at: reference.observed_at,
-      metadata: { source_perspective: reference.source_perspective, complete: true, classifier_version: 'marker-comparison-v4', comparison_complete: true,
-        planned_marker_legs: 2, completed_marker_legs: 2, permitted_baseline_health: 'healthy',
+      metadata: { ...CURRENT_MARKER_PROOF, source_perspective: reference.source_perspective, complete: true,
         permitted_baseline: { status_code: 200 }, status_code: 200,
         marker_results: [{ blocked: performed.enforcement === 'enforced', allowed: performed.enforcement !== 'enforced' }],
         application_identity: { confirmed: performed.observation === 'application_identity_confirmed', method: 'nonce_canary' } } });

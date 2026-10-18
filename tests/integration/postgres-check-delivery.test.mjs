@@ -4,6 +4,7 @@ import { test } from 'node:test';
 import { getCheckById } from '../../src/contracts/checks.mjs';
 import { verifyProbeJobSignature } from '../../src/lib/probeJobs.mjs';
 import { probeExecutionEvidenceReceipt } from '../../src/lib/probeExecution.mjs';
+import { hardTimeoutSchedulerToleranceMs } from '../../src/lib/probeResultValidation.mjs';
 import { executeProbeForJob, buildResultBody } from '../../workers/probe-worker.mjs';
 import { createAuditRepository } from '../../src/persistence/postgres/auditRepository.mjs';
 import { createCoreCatalogRepository } from '../../src/persistence/postgres/coreCatalogRepository.mjs';
@@ -24,10 +25,13 @@ import { withEphemeralPostgres, ensureHarnessAppRole, withTenantContextAsAppRole
 import { createCheckDeliveryFixtures, actualDeliveryReceipt, DELIVERY_RUNTIME, DELIVERY_CTX, DELIVERY_WORKER_CTX, DELIVERY_WORKER_SECRET } from '../helpers/check-delivery-fixtures.mjs';
 
 // Only current safe catalog checks; no simulation, synthetic verdicts or historical
-// imported evidence. Socket errors come from an actual owned peer reset.
+// imported evidence. Faults come from actual owned protocol peers under unchanged
+// catalog deadlines; each is followed by another step in the same persisted scan.
 const CASES = [
-  { id: 'l7.expensive_endpoint.safe', scenario: 'success', expected: 'connected' },
+  { id: 'l7.expensive_endpoint.safe', scenario: 'timeout', expected: 'timeout' },
   { id: 'waf.fingerprint.safe', scenario: 'error', expected: 'error' },
+  { id: 'l7.wordpress_xmlrpc.readiness', scenario: 'cancel', expected: 'timeout' },
+  { id: 'protocol.grpc_reflection_stream.safe', scenario: 'malformed_response', expected: 'not_run' },
   { id: 'waf.evasion_body_gzip.safe', scenario: 'success', expected: 'not_run' },
   { id: 'l3.icmp_flood.readiness', scenario: 'success', expected: 'not_run' },
   { id: 'l7.hpack_bomb.readiness', scenario: 'success', expected: 'connected' },
@@ -35,7 +39,7 @@ const CASES = [
   { id: 'l7.password_reset.safe', scenario: 'success', expected: 'connected' },
 ];
 
-test('real PostgreSQL signed scan survives observation -> peer error -> unsupported -> declaration -> later observation', { timeout: 120_000 }, async (t) => {
+test('real PostgreSQL signed scan survives peer reset, timeout, cancellation and malformed response before later success', { timeout: 120_000 }, async (t) => {
   const availability = await resolvePostgresHarnessAvailability(process.env, { tryDocker: false });
   if (!availability.available) { t.skip(availability.reason); return; }
   const fixtures = await createCheckDeliveryFixtures();
@@ -59,6 +63,11 @@ test('real PostgreSQL signed scan survives observation -> peer error -> unsuppor
       appUrl.username = 'astranull_app'; appUrl.password = 'astranull_app_local_dev';
       const pool = createPgPool({ ASTRANULL_DATABASE_URL: appUrl.toString() });
       try {
+        const role = await pool.query('SELECT current_user AS name, rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user');
+        assert.deepEqual(role.rows, [{ name: 'astranull_app', rolsuper: false, rolbypassrls: false }]);
+        const rls = await pool.query("SELECT relname, relrowsecurity, relforcerowsecurity FROM pg_class WHERE relname = ANY($1::text[]) ORDER BY relname", [['events', 'findings', 'probe_jobs', 'test_runs', 'verdicts']]);
+        assert.equal(rls.rows.length, 5);
+        assert.ok(rls.rows.every((row) => row.relrowsecurity && row.relforcerowsecurity));
         const audit = createAuditRepository(pool);
         const repositories = { audit, ownershipVerifications: createOwnershipVerificationRepository(pool), highScale: createHighScaleRepository(pool), coreCatalog: createCoreCatalogRepository(pool), probeJobs: createProbeJobRepository(pool), validationEvidence: createValidationEvidenceRepository(pool), killSwitch: createKillSwitchRepository(pool), validationScans: createPostgresValidationScanRepository(pool, { auditRepository: audit }) };
         const validation = createPostgresValidationServices(repositories);
@@ -84,6 +93,23 @@ test('real PostgreSQL signed scan survives observation -> peer error -> unsuppor
           assert.equal(reservation.authorized, true, JSON.stringify(reservation));
           const outcome = await executeProbeForJob(job, fixture.deps);
           assert.equal(outcome.external_result, entry.expected, JSON.stringify(outcome));
+          assert.ok(outcome.total_operations <= job.constraints.max_total_operations);
+          assert.ok(outcome.duration_ms <= job.constraints.timeout_ms + hardTimeoutSchedulerToleranceMs(job.constraints.timeout_ms));
+          if (entry.scenario === 'timeout') {
+            assert.ok(fixture.peerEvidence().some((row) => row.event === 'request_received'));
+            assert.ok(fixture.peerEvidence().some((row) => row.event === 'response_withheld'));
+          } else if (entry.scenario === 'cancel') {
+            await fixture.waitForCancelledSocketClose();
+            assert.ok(fixture.peerEvidence().some((row) => row.event === 'cancel_requested'));
+            assert.ok(outcome.duration_ms < 1000, 'peer-triggered cancellation must settle before the unrelated signed deadline');
+          } else if (entry.scenario === 'malformed_response') {
+            const response = fixture.peerEvidence().find((row) => row.event === 'grpc_response_sent');
+            assert.ok(response);
+            const frame = Buffer.from(response.response_hex, 'hex');
+            assert.ok(frame.length >= 5 && frame.readUInt32BE(1) > frame.length - 5, 'the actual gRPC response claims an incomplete message');
+            assert.equal(outcome.metadata.protocol_identity_confirmed, false);
+            assert.notEqual(outcome.metadata.reflection_service_routed, true);
+          }
           const body = buildResultBody(job, outcome.external_result, outcome.metadata, outcome);
           assert.equal((await jobs.ingestProbeResult({ ...DELIVERY_WORKER_CTX, tenantId: 'ten_delivery_other' }, job.id, body)).status, 404);
           const accepted = await jobs.ingestProbeResult(DELIVERY_WORKER_CTX, job.id, body);
@@ -116,6 +142,7 @@ test('real PostgreSQL signed scan survives observation -> peer error -> unsuppor
           await fixture.waitForWire(outcome);
           const receipt = actualDeliveryReceipt(check, { run, job: stored, event, verdict, outcome, body, readiness, reservation, wire: fixture.wire() });
           receipt.transport_routes = fixture.routes();
+          receipt.peer_observations = fixture.peerEvidence();
           receipt.declared_target = structuredClone(job.target);
           receipts.push(receipt);
           await scans.advanceScan(DELIVERY_CTX, created.id, { runtimeConfig: DELIVERY_RUNTIME });

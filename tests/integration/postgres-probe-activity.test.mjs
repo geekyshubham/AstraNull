@@ -56,7 +56,10 @@ test('Postgres activity replays immutably under RLS, never publishes a verdict, 
       assert.equal(grants.filter((grant) => grant.error === 'probe_budget_already_reserved').length, 4);
       const reserved = await repositories.probeJobs.getJobById(ctx, job.id);
       assert.equal(reserved.worker_metadata.execution_reservation.max_total_operations, job.constraints.max_total_operations);
-      const body = { leased_at: job.leased_at, items: [{ sequence: 1, at: now.toISOString(), stage: 'request_started', method: 'POST', url: 'https://owned.example.test/path?credential=hidden', request_content_type: 'application/json', request_payload_preview: '{"marker":"inert","token":"hidden-token"}' }] };
+      const body = { leased_at: job.leased_at, items: [{ sequence: 1, at: now.toISOString(), stage: 'request_started', method: 'POST', url: 'https://owned.example.test/path?credential=hidden',
+        capture_version: 'http-exchange.v1', exchange_id: 'exchange_pg', attempt_id: 'attempt_pg', operation_id: 'operation_pg', http_version: '1.1',
+        request_headers: [{ name: 'Content-Type', value: 'application/json' }, { name: 'Cookie', value: 'session=hidden' }],
+        request_content_type: 'application/json', request_payload_preview: '{"marker":"inert","token":"hidden-token"}' }] };
       const accepted = await jobs.ingestProbeActivity(ctx, job.id, body);
       assert.equal(accepted.accepted, 1, JSON.stringify(accepted));
       assert.equal((await jobs.ingestProbeActivity(ctx, job.id, body)).accepted, 0);
@@ -64,6 +67,10 @@ test('Postgres activity replays immutably under RLS, never publishes a verdict, 
       assert.equal((await jobs.ingestProbeActivity({ ...ctx, tenantId: 'ten_other' }, job.id, body)).status, 404);
       const read = await validation.testRuns.getRunActivity(ctx, run.id);
       assert.ok(read.items.some((item) => item.method === 'POST'));
+      const exchange = read.items.find((item) => item.exchange_id === 'exchange_pg');
+      assert.equal(exchange.source_context.job_id, job.id);
+      assert.equal(exchange.source_context.leased_at, job.leased_at);
+      assert.equal(exchange.request_headers.find((header) => header.name === 'cookie').value, '[redacted]');
       assert.ok(read.items.some((item) => item.vector_family === 'waf'));
       assert.ok(read.items.some((item) => item.request_payload_preview?.includes('inert')));
       assert.equal(JSON.stringify(read).includes('hidden'), false);

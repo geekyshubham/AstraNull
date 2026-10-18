@@ -508,7 +508,7 @@ test('enumerated query capabilities match existing actual pure serializer across
       const request = buildEvasionRequest(fixture().target.value, applyEvasionTransform(transform, markerClass));
       assert.equal(request.method, 'GET'); assert.equal(request.delivery.where, 'query');
       assert.equal(request.delivery.body_bytes, 0); assert.equal(request.delivery.path_unchanged, true);
-      assert.deepEqual(request.headers, {});
+      assert.deepEqual(request.headers, { accept: 'text/html,application/xhtml+xml', 'accept-language': 'en-US,en;q=0.9' });
       assert.equal(new URL(request.url).pathname, '/diagnostic');
     }
   }

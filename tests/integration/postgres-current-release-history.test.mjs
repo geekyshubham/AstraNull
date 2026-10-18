@@ -5,6 +5,7 @@ import { describe, it } from 'node:test';
 import { createAuditRepository } from '../../src/persistence/postgres/auditRepository.mjs';
 import { closePgPool, createPgPool } from '../../src/persistence/postgres/pool.mjs';
 import { createTargetHistoryRepository } from '../../src/persistence/postgres/targetHistoryRepository.mjs';
+import { createPortalRevampRepository } from '../../src/persistence/postgres/portalRevampRepository.mjs';
 import { createPostgresTargetHistoryServices } from '../../src/persistence/postgres/targetHistoryServiceAdapters.mjs';
 import { withTenantContext } from '../../src/persistence/postgres/tenantContext.mjs';
 import { compareObservationOrder } from '../../src/services/targetHistory.mjs';
@@ -111,8 +112,9 @@ describe('postgres current-release history', () => {
            ) VALUES
              ('ver_origin', $1, $2, 'dns_verified', 'dns_txt', '{}'::jsonb, $5::timestamptz, 'usr_hist', 'aud_seed'),
              ('ver_agent', $1, $3, 'agent_verified', 'agent_observation', '{}'::jsonb, $5::timestamptz, 'usr_hist', 'aud_seed'),
-             ('ver_provider', $1, $4, 'provider_verified', 'provider_account', '{}'::jsonb, $5::timestamptz, 'usr_hist', 'aud_seed')`,
-          [TENANT, ORIGIN, AGENT, PROVIDER, DECLARED],
+             ('ver_provider', $1, $4, 'provider_verified', 'provider_account', '{}'::jsonb, $5::timestamptz, 'usr_hist', 'aud_seed'),
+             ('ver_protected', $1, $6, 'dns_verified', 'dns_txt', '{}'::jsonb, $5::timestamptz, 'usr_hist', 'aud_seed')`,
+          [TENANT, ORIGIN, AGENT, PROVIDER, DECLARED, APP],
         );
         for (const run of [
           ['run_origin', APP, CHECK, 'verdicted'],
@@ -427,8 +429,18 @@ describe('postgres current-release history', () => {
           source_completed_at: '2026-09-02T00:00:01.000Z',
         }), { now: NOW });
         assert.equal(predates.error, 'observation_predates_binding');
+        await withTenantContext(appPool, TENANT, (client) => client.query(
+          `INSERT INTO test_runs (id, tenant_id, target_group_id, target_id, check_id, status,
+            producer_kind, origin_binding_id, provenance_json, started_at, completed_at)
+           VALUES ('run_bound_origin_history', $1, $2, $3, 'origin.host_sni_bypass.safe', 'verdicted',
+             'signed_probe', $4, $5::jsonb, '2026-09-11T00:00:00Z', '2026-09-11T00:00:01Z')`,
+          [TENANT, GROUP, ORIGIN, binding.id, JSON.stringify({ origin_scope: {
+            host: binding.host, sni: binding.sni, port: binding.port, path: binding.path,
+          } })],
+        ));
         const bound = await services.appendTargetObservation(CTX, observation({
           target_id: ORIGIN,
+          test_run_id: 'run_bound_origin_history',
           family: 'origin_hosting',
           check_id: 'origin.host_sni_bypass.safe',
           nonce: 'bound-origin',
@@ -443,6 +455,26 @@ describe('postgres current-release history', () => {
         assert.equal(reach.lockdown, 'not_established');
         assert.equal(reach.capacity_assurance, false);
         assert.equal(reach.observation_id, bound.id);
+        // Binding-specific reads must retain PostgreSQL microseconds before the
+        // shared JS sorter runs. IDs deliberately oppose chronological order.
+        for (const [id, micro, outcome, digest] of [
+          ['obs_z_older_micro', '123001', 'denied', 'a'.repeat(64)],
+          ['obs_a_newer_micro', '123999', 'reachable', 'b'.repeat(64)],
+        ]) {
+          await repo.insertObservation(CTX, { ...bound, id, nonce: id, event_id: null, digest,
+            observed_at: `2026-09-12T00:00:00.${micro}Z`,
+            source_completed_at: '2026-09-12T00:00:01.000000Z', outcome });
+        }
+        const preciseReach = await services.assessOriginReachability(CTX, binding.id);
+        assert.equal(preciseReach.observation_id, 'obs_a_newer_micro');
+        assert.equal(preciseReach.observed_at, '2026-09-12T00:00:00.123999Z');
+        const portal = createPortalRevampRepository(appPool);
+        for (const targetId of [APP, ORIGIN]) {
+          const detail = await portal.getTargetDetailBundle(CTX, targetId, {});
+          const projected = detail.protection_profile.origin_bindings.find((row) => row.id === binding.id).reachability;
+          assert.equal(projected.observation_id, 'obs_a_newer_micro');
+          assert.equal(projected.observed_at, '2026-09-12T00:00:00.123999Z');
+        }
         const stillUnbound = await ownerPool.query(
           'SELECT origin_binding_id FROM target_observations WHERE id = $1',
           [unbound.id],

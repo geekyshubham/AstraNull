@@ -23,7 +23,7 @@ function capitalizeReason(value) {
   return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
-export const CUSTOM_CANARY_ONLY_REASON = "Custom canary rule only — proves a rule written for AstraNull's inert token, not the managed attack-class rule";
+export const CUSTOM_CANARY_ONLY_REASON = 'Custom token observations only. Exact installed-rule setup is not available, so these checks cannot prove that a protection rule passed or failed.';
 export const NEVER_RUNNABLE_REASON = 'No runnable probe: the only probe check cannot run (no port or declaration source), so nothing is assessed';
 const TWO_PERSPECTIVE_ENV = Object.freeze({
   ASTRANULL_PROBE_PERSPECTIVES: JSON.stringify([{ id: 'coverage-a', label: 'a' }, { id: 'coverage-b', label: 'b' }]),
@@ -81,7 +81,7 @@ export function checkCatalogAssurance(check) {
   if (neverRunnable(check)) return 'not_assessable';
   const observation = new Set(probeEvidenceTiers.OBSERVATION_ONLY_PROBE_KINDS ?? []);
   if (isNfwViolationOnly(check, kind, observation)) return 'violation_only';
-  if (isCustomCanaryCheck(check)) return 'partial';
+  if (isCustomCanaryCheck(check)) return 'observation';
   if (verdictCapableKindSet().has(kind)) return 'verdict';
   return 'observation';
 }
@@ -99,7 +99,7 @@ export const WAF_RULE_CATEGORIES = Object.freeze([
     id: 'custom_canary',
     layer: 'waf',
     name: 'Custom canary rules',
-    description: 'Proves a rule you wrote for an AstraNull inert token fires on the tested path.',
+    description: 'Records responses to inert custom tokens. Exact installed-rule setup is unavailable, so these responses do not prove a protection rule passed or failed.',
     check_ids: [
       'waf.http_method_policy_marker.safe',
       'waf.request_smuggling_marker.safe',
@@ -116,7 +116,6 @@ export const WAF_RULE_CATEGORIES = Object.freeze([
       'waf.file_upload_marker.safe',
       'waf.jwt_tamper_marker.safe',
       'waf.ssti_marker.safe',
-      'waf.scanner_signature_marker.safe',
     ],
   },
   {
@@ -455,7 +454,8 @@ function projectCategory(category) {
     ? RFI_CVE_MISSING_REASON
     : (category.out_of_scope_reason ?? category.not_assessable_reason
       ?? perspectiveReason
-      ?? (assurance === 'partial' ? CUSTOM_CANARY_ONLY_REASON : null));
+      ?? (assurance === 'observation' && checks.some((row) => row.assurance_reason === CUSTOM_CANARY_ONLY_REASON)
+        ? CUSTOM_CANARY_ONLY_REASON : null));
   return {
     id: category.id,
     layer: category.layer,

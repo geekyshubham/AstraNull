@@ -322,7 +322,7 @@ describe('F1a lead follow-ups', () => {
     store.events.push({
       id: 'evt_f1a_reflect', tenant_id: 'ten_demo', test_run_id: 'run_f1a_reflect', target_id: 'tgt_1', check_id: 'reflect.ssdp_exposure.safe',
       source: 'probe_worker', signal_type: 'probe_result', producer_kind: 'signed_probe', nonce_hash: 'nh_reflect', timestamp: NOW.toISOString(),
-      metadata: { probe_kind: 'reflection_service_probe', protocol: 'udp', port: 1900, udp_outcome: 'validated_reply', service_validated: true,
+      metadata: { external_result: 'connected', probe_kind: 'reflection_service_probe', protocol: 'udp', port: 1900, udp_outcome: 'validated_reply', service_validated: true,
         peer_is_cdn: false, sample_agreement: 'agree', payload_profile: 'ssdp_msearch', safety_attestation: { probe_requests_sent: 1 } },
     });
     const finalized = finalizeTestRun({ tenantId: 'ten_demo', userId: 'u1', role: 'engineer' }, 'run_f1a_reflect', { force: true });

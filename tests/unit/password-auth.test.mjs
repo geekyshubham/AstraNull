@@ -9,6 +9,7 @@ import {
   loginWithPassword,
   resetPasswordAuthRateLimitsForTests,
   setPasswordWithInvite,
+  validatePasswordSession,
 } from '../../src/services/passwordAuth.mjs';
 import { createDevPasswordAuthRepository } from '../../src/services/passwordAuthRepository.mjs';
 import { getStore, resetStoreForTests } from '../../src/store.mjs';
@@ -311,7 +312,9 @@ describe('password login', () => {
     assert.equal(Object.hasOwn(result, 'workspaces'), false);
   });
 
-  it('rate limits repeated attempts by normalized email', async () => {
+  it('rate limits repeated attempts by normalized email', async (t) => {
+    let limiterNow = Math.floor(NOW.getTime() / 60_000) * 60_000 + 1_000;
+    t.mock.method(Date, 'now', () => limiterNow);
     const repository = seed();
     for (let attempt = 1; attempt <= 5; attempt += 1) {
       const result = await loginWithPassword(
@@ -327,6 +330,12 @@ describe('password login', () => {
     assert.equal(limited.error, 'rate_limited');
     assert.equal(limited.status, 429);
     assert.ok(limited.retry_after_seconds >= 1);
+    limiterNow += 60_000;
+    const nextWindow = await loginWithPassword(
+      { email: 'UNKNOWN@example.com', password: PASSWORD },
+      { repository, runtimeConfig: RUNTIME_CONFIG, clientKey: 'rate-7', now: NOW },
+    );
+    assert.deepEqual(nextWindow, INVALID_CREDENTIALS);
   });
   it('keeps credential attachment tenant-scoped even when dev data reuses a user id', async () => {
     resetStoreForTests({
@@ -394,6 +403,124 @@ describe('password login', () => {
     );
     assert.equal(res3.error, undefined);
     assert.equal(res3.tenant_id, 'Astra-D1TrtI4HMTSrwKRW-9');
+  });
+
+  it('never accepts or repairs the public demo password for a partial demo identity', async () => {
+    for (const overrides of [
+      { email: 'admin@demo.astranull.local', tenant_id: 'ten_customer' },
+      { email: 'owner@example.com', tenant_id: 'Astra-D1TrtI4HMTSrwKRW-9' },
+      { id: 'admin@demo.astranull.local', email: 'owner@example.com', tenant_id: 'ten_customer' },
+    ]) {
+      const account = user(overrides);
+      const repository = seed({ users: [account], credentials: [credential({ user_id: account.id, tenant_id: account.tenant_id })] });
+      const result = await loginWithPassword({ email: account.email, tenant_id: account.tenant_id, password: 'Astra-D1TrtI4HMTSrwKRW-9' },
+        { repository, runtimeConfig: RUNTIME_CONFIG, clientKey: account.email, now: NOW });
+      assert.deepEqual(result, INVALID_CREDENTIALS);
+      assert.equal(getStore().userCredentials[0].password_hash, PASSWORD_HASH);
+    }
+  });
+
+  it('preserves lockout, password-change and MFA requirements for partial demo identities', async () => {
+    for (const identity of [
+      { email: 'admin@demo.astranull.local', tenant_id: 'ten_customer' },
+      { email: 'owner@example.com', tenant_id: 'Astra-D1TrtI4HMTSrwKRW-9' },
+      { id: 'admin@demo.astranull.local', email: 'owner@example.com', tenant_id: 'ten_customer' },
+    ]) {
+      for (const [state, error] of [
+        [{ locked_until: new Date(NOW.getTime() + 60_000).toISOString() }, 'account_locked'],
+        [{ must_change: true }, 'password_change_required'],
+        [{ mfa_enrolled_at: NOW.toISOString() }, 'password_login_unavailable'],
+      ]) {
+        resetPasswordAuthRateLimitsForTests();
+        const account = user(identity);
+        const repository = seed({ users: [account], credentials: [credential({ user_id: account.id, tenant_id: account.tenant_id, ...state })] });
+        const result = await loginWithPassword({ email: account.email, tenant_id: account.tenant_id, password: PASSWORD },
+          { repository, runtimeConfig: RUNTIME_CONFIG, clientKey: account.email, now: NOW });
+        assert.equal(result.error, error);
+        assert.equal(result.access_token, undefined);
+      }
+    }
+  });
+
+  it('rejects rate-limited ordinary clients before querying accounts', async (t) => {
+    t.mock.method(Date, 'now', () => NOW.getTime());
+    let lookups = 0;
+    const repository = { findUsersByEmail: async () => { lookups += 1; return []; } };
+    for (let index = 0; index < 10; index += 1) {
+      const result = await loginWithPassword({ email: `unknown-${index}@example.com`, password: PASSWORD },
+        { repository, runtimeConfig: RUNTIME_CONFIG, clientKey: 'limited-client', now: NOW });
+      assert.deepEqual(result, INVALID_CREDENTIALS);
+    }
+    const result = await loginWithPassword({ email: 'another@example.com', password: PASSWORD },
+      { repository, runtimeConfig: RUNTIME_CONFIG, clientKey: 'limited-client', now: NOW });
+    assert.equal(result.error, 'rate_limited');
+    assert.equal(lookups, 10);
+  });
+
+  it('keeps existing demo sessions valid when other visitors sign in with password variants', async () => {
+    const demoTenant = 'Astra-D1TrtI4HMTSrwKRW-9';
+    const repository = seed({
+      users: [{ id: 'usr_admin', tenant_id: demoTenant, email: 'admin@demo.astranull.local', name: 'Demo Admin', role: 'admin', status: 'active' }],
+      credentials: [{
+        user_id: 'usr_admin',
+        tenant_id: demoTenant,
+        password_hash: await hashPassword('Astra-D1TrtI4HMTSrwKRW-9'),
+        password_updated_at: NOW.toISOString(),
+        must_change: false,
+        failed_attempts: 0,
+        locked_until: null,
+        last_login_at: null,
+        session_generation: 1,
+        created_at: NOW.toISOString(),
+      }],
+    });
+    const login = (password, clientKey) => loginWithPassword(
+      { email: 'admin@demo.astranull.local', password },
+      { repository, runtimeConfig: RUNTIME_CONFIG, clientKey, now: NOW },
+    );
+    const generationOf = (token) => JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString('utf8')).session_generation;
+
+    const first = await login('Astra-D1TrtI4HMTSrwKRW-9', 'demo-a');
+    for (const [index, variant] of [' Astra-D1TrtI4HMTSrwKRW-9 ', 'astra-d1trti4hmtsrwkrw-9', 'Astra-DlTrtl4HMTSrwKRW-9', 'password: Astra-D1TrtI4HMTSrwKRW-9'].entries()) {
+      const other = await login(variant, `demo-b-${index}`);
+      assert.equal(other.error, undefined);
+      assert.equal(generationOf(other.access_token), generationOf(first.access_token));
+    }
+    const state = await validatePasswordSession(
+      { tenantId: demoTenant, userId: 'usr_admin', sessionGeneration: generationOf(first.access_token) },
+      { repository },
+    );
+    assert.equal(state.valid, true);
+    assert.equal(getStore().userCredentials[0].session_generation, 1);
+  });
+
+  it('repairs a stale demo password hash to the canonical password exactly once', async () => {
+    const demoTenant = 'Astra-D1TrtI4HMTSrwKRW-9';
+    const repository = seed({
+      users: [{ id: 'usr_admin', tenant_id: demoTenant, email: 'admin@demo.astranull.local', name: 'Demo Admin', role: 'admin', status: 'active' }],
+      credentials: [{
+        user_id: 'usr_admin',
+        tenant_id: demoTenant,
+        password_hash: await hashPassword(' astra-d1trti4hmtsrwkrw-9'),
+        password_updated_at: NOW.toISOString(),
+        must_change: false,
+        failed_attempts: 0,
+        locked_until: null,
+        last_login_at: null,
+        session_generation: 3,
+        created_at: NOW.toISOString(),
+      }],
+    });
+    const login = (password, clientKey) => loginWithPassword(
+      { email: 'admin@demo.astranull.local', password },
+      { repository, runtimeConfig: RUNTIME_CONFIG, clientKey, now: NOW },
+    );
+
+    assert.equal((await login('Astra-D1TrtI4HMTSrwKRW-9', 'demo-r1')).error, undefined);
+    assert.equal(getStore().userCredentials[0].session_generation, 4);
+    assert.equal((await login('Astra-D1TrtI4HMTSrwKRW-9', 'demo-r2')).error, undefined);
+    assert.equal((await login('astra-d1trti4hmtsrwkrw-9', 'demo-r3')).error, undefined);
+    assert.equal(getStore().userCredentials[0].session_generation, 4);
   });
 });
 

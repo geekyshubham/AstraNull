@@ -98,6 +98,8 @@ import { createReviewedOperationRepository } from './reviewedOperationRepository
 import { createReviewedOperationService } from '../../services/reviewedOperations.mjs';
 import { createCveApplicabilityReviewRepository } from './cveApplicabilityReviewRepository.mjs';
 import { createCveApplicabilityReviewService } from '../../services/cveApplicabilityReviews.mjs';
+import { createOriginClueService } from '../../services/originClues.mjs';
+import { createPostgresOriginClueRepository } from './originClueRepository.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -522,6 +524,7 @@ export async function createPostgresRuntime(env = process.env, options = {}) {
       wafOrchestrator: wafOrchestratorServices,
       cvePipeline: cvePipelineServices,
       externalDiscovery: externalDiscoveryServices,
+      originClues: createOriginClueService({ repository: createPostgresOriginClueRepository(pool, repositories.audit) }),
       supplyChainRisk: supplyChainRiskServices,
       actionItems: actionItemServices,
       internalManagement: internalManagementServices,

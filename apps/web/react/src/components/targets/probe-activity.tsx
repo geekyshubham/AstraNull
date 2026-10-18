@@ -1,10 +1,11 @@
 import { Fragment, useEffect, useId, useMemo, useState } from 'react';
-import { ChevronDown, ChevronRight, Pause, Play, Search, Square } from 'lucide-react';
+import { ArrowRight, ChevronDown, ChevronRight, Copy, Pause, Play, Search, Square } from 'lucide-react';
 import { Button } from '../ui/button';
 import { Badge } from '../ui/badge';
 import { sessionIdentity } from '../../lib/api';
 import { activityIsLive, captureWarnings, stopStateLabel, type RecordedActivityState } from '../../lib/recorded-activity.mjs';
 import { activityRequestLimitLabel, activityRequestsSentLabel, activityValueLabel } from '../../lib/activity-labels.mjs';
+import { captureHeaders, exchangeCopyText, recordedExchanges, safeCaptureText, safeCaptureUrl, type RecordedExchange } from '../../lib/http-exchanges.mjs';
 import { useRecordedActivity } from '../evidence/use-recorded-activity';
 import { apiErrorMessage } from '../../lib/error-messages';
 import type { DataItem, PortalConfig, Session } from '../../lib/types';
@@ -49,6 +50,63 @@ function describe(item: DataItem) {
   return `${stageLabel(item)}.${identity} The fields below are the recorded facts for this event.`;
 }
 
+function CaptureBlock({ label, value, empty = 'Empty recorded value' }: { label: string; value: unknown; empty?: string }) {
+  return <div className="probe-exchange-field"><h5>{label}</h5>{value == null ? <p className="probe-exchange-missing">Not recorded by worker</p> : <pre>{safeCaptureText(value) || empty}</pre>}</div>;
+}
+
+function ExchangeSide({ side, item, exchange }: { side: 'request' | 'response'; item: DataItem | null; exchange: RecordedExchange }) {
+  const headers = captureHeaders(item?.[`${side}_headers`]);
+  const title = side === 'request' ? 'Request' : 'Response';
+  const available = item?.[`${side}_payload_available`];
+  const partial = item?.[`${side}_payload_truncated`] === true;
+  const preview = item?.[`${side}_payload_preview`];
+  const encoding = text(item?.[`${side}_payload_encoding`]);
+  return <section className="probe-exchange-side" aria-label={`${title} capture`}>
+    <h4>{title}</h4>
+    {!item ? <p className="probe-exchange-missing">{exchange.conflictFields.some((field) => field.startsWith(`${side}.`) || field.startsWith('exchange.')) ? 'Conflicting worker records. This capture is withheld; no merged counterpart is inferred.' : side === 'response' && exchange.failure ? 'No response recorded. The operation failed or was not sent.' : 'Not recorded by worker. No counterpart is inferred.'}</p> : <>
+      <p className="probe-exchange-startline"><strong>{side === 'request' ? text(item.method) || 'Method not recorded' : item.status_code != null ? `HTTP ${String(item.status_code)}` : 'Status not recorded'}</strong>{item.url ? <code>{safeCaptureUrl(item.url)}</code> : null}</p>
+      <dl className="probe-exchange-facts">
+        <div><dt>Protocol</dt><dd>{text(item.http_version) || text(item.protocol) || 'Not recorded'}</dd></div>
+        <div><dt>Content type</dt><dd>{safeCaptureText(item[`${side}_content_type`]) || 'Not recorded'}</dd></div>
+        {item.duration_ms != null ? <div><dt>Duration</dt><dd>{String(item.duration_ms)} ms</dd></div> : null}
+      </dl>
+      <div className="probe-exchange-field"><h5>Headers <span>Recorded subset</span></h5>{headers === null ? <p className="probe-exchange-missing">Not recorded by worker{Array.isArray(item.header_names) ? `; header names only: ${item.header_names.map(safeCaptureText).join(', ')}` : ''}</p> : headers.length ? <dl className="probe-exchange-headers">{headers.map((header, index) => <div key={`${header.name}-${index}`}><dt>{header.name}</dt><dd>{header.value || '(empty value)'}</dd></div>)}</dl> : <p className="probe-exchange-missing">Empty recorded header set. This does not imply no headers were sent.</p>}</div>
+      {side === 'request' ? <CaptureBlock label="Query parameters" value={item.request_query_preview} empty="Empty recorded query" /> : null}
+      <div className="probe-exchange-field"><h5>Body preview <span>{partial ? 'Partial capture' : preview != null ? 'Bounded capture' : 'Not recorded'}</span></h5>
+        {available === false ? <p className="probe-exchange-missing">Not consumed by this check; no response body is inferred.</p> : encoding === 'base64' ? <p className="probe-exchange-missing">Binary preview withheld. No content is decoded or replayed.</p> : preview == null ? <p className="probe-exchange-missing">Not recorded by worker{side === 'response' && !exchange.bodyComplete ? '; body completion was not recorded' : ''}.</p> : <pre>{safeCaptureText(preview) || 'Empty recorded body'}</pre>}
+        {item[`${side}_bytes_observed`] != null ? <p className="probe-exchange-missing">{String(item[`${side}_bytes_observed`])} bytes observed{item[`${side}_bytes_captured`] != null ? `; ${String(item[`${side}_bytes_captured`])} bytes sampled` : ''}.</p> : null}
+      </div>
+    </>}
+  </section>;
+}
+
+function ExchangeInspector({ exchange, open, onToggle }: { exchange: RecordedExchange; open: boolean; onToggle: () => void }) {
+  const [copyState, setCopyState] = useState('');
+  const heading = exchange.request ?? exchange.response ?? exchange.events[0];
+  const stateLabel = exchange.conflictFields.length ? 'Capture conflict' : { captured: 'Bounded capture', partial: 'Partial capture', failed: 'Operation failed', not_sent: 'Not sent' }[exchange.state];
+  async function copy() {
+    try { await navigator.clipboard.writeText(exchangeCopyText(exchange)); setCopyState('Sanitized exchange copied'); }
+    catch { setCopyState('Copy unavailable. Select the visible sanitized text instead.'); }
+  }
+  return <article className="probe-exchange" data-state={exchange.state}>
+    <button type="button" className="probe-exchange-summary" aria-expanded={open} onClick={onToggle}>
+      <span className="probe-exchange-method">{text(heading.method) || text(heading.operation) || 'Recorded operation'}</span>
+      <span className="probe-exchange-endpoint">{safeCaptureUrl(heading.url) || 'Endpoint not recorded'}<small>{text(heading.phase) || 'Phase not recorded'} · {text(heading.http_version) || text(heading.protocol) || 'Protocol not recorded'}</small></span>
+      <ArrowRight size={14} aria-hidden="true" />
+      <span>{exchange.response?.status_code != null ? `HTTP ${String(exchange.response.status_code)}` : exchange.failure ? 'No response recorded' : 'Response not recorded'}</span>
+      <Badge tone={exchange.state === 'failed' ? 'warn' : 'muted'}>{stateLabel}</Badge>
+      {open ? <ChevronDown size={16} aria-hidden="true" /> : <ChevronRight size={16} aria-hidden="true" />}
+    </button>
+    {open ? <div className="probe-exchange-open">
+      <div className="probe-exchange-meta"><span>Exchange <code>{exchange.exchangeId}</code></span><span>Attempt <code>{text(heading.attempt_id) || 'Not recorded'}</code></span><span>Operation <code>{text(heading.operation_id) || 'Not recorded'}</code></span><time dateTime={text(heading.at)}>{time(heading.at)}</time></div>
+      {exchange.conflictFields.length ? <p className="probe-exchange-failure">Capture conflict: {exchange.conflictFields.join(', ')}. Conflicting capture withheld, not a protection verdict.</p> : null}
+      {exchange.failure ? <p className="probe-exchange-failure">{stateLabel}: {safeCaptureText(exchange.failure.error_class || exchange.failure.reason) || 'Reason not recorded'}. Failure is not proof of blocking.</p> : null}
+      <div className="probe-exchange-pair"><ExchangeSide side="request" item={exchange.request} exchange={exchange} /><ExchangeSide side="response" item={exchange.response} exchange={exchange} /></div>
+      <footer className="probe-exchange-footer"><span>Job <code>{text(exchange.source.job_id)}</code> · lease <code>{text(exchange.source.leased_at)}</code></span><Button size="sm" variant="ghost" onClick={() => void copy()}><Copy size={14} aria-hidden="true" />Copy sanitized exchange</Button><span role="status">{copyState}</span></footer>
+    </div> : null}
+  </article>;
+}
+
 type ActivityProps = {
   runId: string; checkName: string; running: boolean; canStop: boolean; onStop: () => void;
   onFollowActive?: () => void; notSent?: { reason: string; at: string } | null;
@@ -78,11 +136,16 @@ export function ProbeActivityView({ runId, checkName, running: fallbackRunning, 
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState('all');
   const [expanded, setExpanded] = useState<string | null>(null);
-  useEffect(() => { setExpanded(null); }, [runId]);
-  const items = useMemo(() => (Array.isArray(snapshot?.items) ? snapshot.items as DataItem[] : notSent ? [{ id: 'scan-decision', stage: 'request_not_sent', source: 'scan_state', reason: notSent.reason, at: notSent.at } as DataItem] : [])
-    .filter((item) => filter === 'all' || severity(item) === filter)
-    .filter((item) => !search.trim() || [item.operation, item.method, item.url, item.stage, item.status_code, item.error_class, item.reason, item.vector_family, item.marker_class, item.phase, item.request_content_type, item.response_content_type].join(' ').toLowerCase().includes(search.trim().toLowerCase()))
-    .slice().reverse(), [snapshot, filter, search, notSent]);
+  const [expandedExchange, setExpandedExchange] = useState<string | null>(null);
+  useEffect(() => { setExpanded(null); setExpandedExchange(null); }, [runId]);
+  const recordedItems = useMemo(() => Array.isArray(snapshot?.items) ? snapshot.items as DataItem[] : notSent ? [{ id: 'scan-decision', stage: 'request_not_sent', source: 'scan_state', reason: notSent.reason, at: notSent.at } as DataItem] : [], [snapshot, notSent]);
+  const grouped = useMemo(() => recordedExchanges(recordedItems), [recordedItems]);
+  const matches = (item: DataItem) => (filter === 'all' || severity(item) === filter)
+    && (!search.trim() || [item.exchange_id, item.operation, item.method, item.url, item.stage, item.status_code, item.error_class, item.reason, item.vector_family, item.marker_class, item.phase, item.request_content_type, item.response_content_type].join(' ').toLowerCase().includes(search.trim().toLowerCase()));
+  // Filter whole exchanges, never remove one half before correlation.
+  const exchanges = grouped.exchanges.filter((exchange) => exchange.events.some(matches)).slice().reverse();
+  const items = grouped.lifecycle.filter(matches).slice().reverse();
+  const accounting = snapshot?.accounting as DataItem | null;
   return (
     <section className="probe-activity" aria-labelledby={headingId}>
       <header className="probe-activity-head">
@@ -98,9 +161,10 @@ export function ProbeActivityView({ runId, checkName, running: fallbackRunning, 
         <Button size="sm" variant="ghost" disabled={!runId} onClick={onPause}>{paused ? <Play size={14} aria-hidden="true" /> : <Pause size={14} aria-hidden="true" />}{paused ? 'Resume updates' : 'Pause updates'}</Button>
       </div>
       <div className="probe-activity-status" role="status" aria-live="polite">
-        <span>{snapshot ? `${items.length} shown · ${Array.isArray(snapshot.items) ? snapshot.items.length : 0} recorded events retained` : notSent ? 'Recorded execution decision · no request dispatched' : runId ? 'Waiting for recorded worker activity' : 'No check selected'}</span>
+        <span>{snapshot ? `${exchanges.length} ${exchanges.length === 1 ? 'exchange' : 'exchanges'} · ${items.length} lifecycle events shown · ${recordedItems.length} recorded events retained` : notSent ? 'Recorded execution decision · no request dispatched' : runId ? 'Waiting for recorded worker activity' : 'No check selected'}</span>
         <span>{paused ? 'Updates paused; execution continues' : error ? 'Disconnected · recorded view may be stale' : running ? 'Live updates · every 2.5s' : valueText(snapshot?.status) || 'No execution recorded'}</span>
-        <span>{activityRequestsSentLabel(snapshot?.requests_sent)}</span>
+        <span>{activityRequestsSentLabel(accounting?.total_operations ?? snapshot?.requests_sent)}</span>
+        {accounting ? <><span>Probe logical attempts: {accounting.probe_logical_attempts == null ? 'not recorded' : String(accounting.probe_logical_attempts)}</span><span>Destination-vetting resolver attempts: {accounting.destination_vetting_resolver_attempts == null ? 'not recorded' : String(accounting.destination_vetting_resolver_attempts)}</span></> : null}
         {activityRequestLimitLabel(maxRequests) ? <span>{activityRequestLimitLabel(maxRequests)}</span> : null}
         <span>{lastUpdated ? <>Last successful update <time dateTime={lastUpdated} title={lastUpdated}>{time(lastUpdated)}</time>{updating && !paused ? ' · refreshing' : ''}</> : 'No successful update yet'}</span>
       </div>
@@ -111,6 +175,12 @@ export function ProbeActivityView({ runId, checkName, running: fallbackRunning, 
         {['worker_id', 'job_id', 'leased_at'].map((key) => <div key={key}><dt>{key.replaceAll('_', ' ')}</dt><dd>{text((snapshot.source_context as DataItem | null)?.[key]) || 'Not recorded'}</dd></div>)}
         {['max_probe_requests', 'max_destination_resolver_attempts', 'max_total_operations', 'timeout_ms', 'not_after', 'authority_version'].map((key) => <div key={key}><dt>{key.replaceAll('_', ' ')}</dt><dd>{(snapshot.authorized_bounds as DataItem | null)?.[key] != null ? String((snapshot.authorized_bounds as DataItem)[key]) : 'Not recorded'}</dd></div>)}
       </dl><p>These are signed authorization limits, not observed requests or duration. Worker identity is not a verified geographic or network perspective. Port, SNI and address family are shown only when an event recorded them.</p></details> : null}
+      <div className="probe-exchanges" role="region" aria-label="Correlated request and response exchanges">
+        <h3>Request / Response</h3><p className="probe-exchange-intro">Inspect the recorded request and response together. Sensitive values are hidden; older logs may not include all details.</p>
+        {exchanges.map((exchange, index) => <ExchangeInspector key={exchange.id} exchange={exchange} open={expandedExchange === exchange.id || expandedExchange === null && index === 0} onToggle={() => setExpandedExchange(expandedExchange === exchange.id || expandedExchange === null && index === 0 ? '' : exchange.id)} />)}
+        {!exchanges.length ? <p className="probe-exchange-empty">{search || filter !== 'all' ? 'No recorded exchanges match these filters.' : !runId ? 'Select a check to inspect its recorded exchange.' : grouped.lifecycle.length ? 'Correlated exchange capture was not recorded by this worker. Legacy lifecycle events remain available below and are not paired.' : running ? 'Waiting for worker-recorded exchanges. Planned requests are not shown as sent.' : 'No exchange capture recorded. A final summary does not reconstruct requests or responses.'}</p> : null}
+      </div>
+      <details className="probe-activity-technical" open={grouped.exchanges.length === 0}><summary>Technical lifecycle events ({grouped.lifecycle.length})</summary>
       <div className="probe-activity-scroll" role="region" aria-label="Recorded request and response activity" tabIndex={0}>
         <table className="probe-activity-table" role="table">
           <caption className="sr-only">Worker-recorded activity for {checkName || 'the selected check'}, including methods, vectors, response formats and redacted payload previews. Credentials and declared private query values are withheld.</caption>
@@ -124,18 +194,19 @@ export function ProbeActivityView({ runId, checkName, running: fallbackRunning, 
                 <tr role="row" data-severity={level}>
                   <td role="cell" data-label="Event"><Badge tone={level === 'error' ? 'danger' : level === 'warning' ? 'warn' : 'default'}>{stageLabel(item)}</Badge>{item.source === 'simulation' ? <small>Simulation · no target traffic</small> : null}</td>
                   <td role="cell" data-label="Time"><time dateTime={text(item.at)} title={text(item.at)}>{time(item.at)}</time></td>
-                  <td role="cell" data-label="Request"><span className="probe-activity-operation">{text(item.method) || (item.operation ? <ActivityValue value={item.operation} /> : 'Not recorded')}</span>{item.url ? <code>{text(item.url)}</code> : null}<small>{vectorParts(item).map((value, index) => <Fragment key={`${String(value)}-${index}`}>{index ? ' · ' : ''}<ActivityValue value={value} /></Fragment>)}</small></td>
-                  <td role="cell" data-label="Response">{item.stage === 'result_received' && running ? <><span>Probe response: {valueText(item.outcome) || (item.status_code != null ? `HTTP ${String(item.status_code)}` : 'not recorded')}</span><small>Not a verdict · correlating</small></> : item.status_code != null ? <strong>HTTP {String(item.status_code)}</strong> : text(item.error_class) || valueText(item.outcome) || valueText(item.reason) || '—'}{item.response_content_type ? <small>{text(item.response_content_type)}</small> : null}{item.duration_ms != null ? <small>{String(item.duration_ms)} ms</small> : null}</td>
+                  <td role="cell" data-label="Request"><span className="probe-activity-operation">{text(item.method) || (item.operation ? <ActivityValue value={item.operation} /> : 'Not recorded')}</span>{item.url ? <code>{safeCaptureUrl(item.url)}</code> : null}<small>{vectorParts(item).map((value, index) => <Fragment key={`${String(value)}-${index}`}>{index ? ' · ' : ''}<ActivityValue value={value} /></Fragment>)}</small></td>
+                  <td role="cell" data-label="Response">{item.stage === 'result_received' && running ? <><span>Probe response: {valueText(item.outcome) || (item.status_code != null ? `HTTP ${String(item.status_code)}` : 'not recorded')}</span><small>Not a verdict · correlating</small></> : item.status_code != null ? <strong>HTTP {String(item.status_code)}</strong> : text(item.error_class) || valueText(item.outcome) || valueText(item.reason) || 'Not recorded'}{item.response_content_type ? <small>{text(item.response_content_type)}</small> : null}{item.duration_ms != null ? <small>{String(item.duration_ms)} ms</small> : null}</td>
                   <td role="cell" data-label="Details"><button className="probe-activity-expand" aria-label={`Details for event ${id}`} aria-expanded={open} onClick={() => setExpanded(open ? null : id)}>{open ? <ChevronDown size={16} /> : <ChevronRight size={16} />}</button></td>
                 </tr>
-                {open ? <tr role="row" className="probe-activity-detail"><td role="cell" colSpan={5}><p className="probe-activity-description">{describe(item)}</p><dl>{Object.entries(item).filter(([key, value]) => !['id', 'sequence', 'stage'].includes(key) && !(value && typeof value === 'object' && !Object.keys(value).length)).map(([key, value]) => <div key={key} data-payload={key.includes('preview') || undefined}><dt>{key.replaceAll('_', ' ')}</dt><dd>{Array.isArray(value) ? value.join(', ') : value && typeof value === 'object' ? JSON.stringify(value, null, 2) : value === '' ? '(empty)' : String(value ?? 'Not recorded')}</dd></div>)}</dl></td></tr> : null}
+                {open ? <tr role="row" className="probe-activity-detail"><td role="cell" colSpan={5}><p className="probe-activity-description">{describe(item)}</p><dl>{Object.entries(item).filter(([key, value]) => !['id', 'sequence', 'stage'].includes(key) && !(value && typeof value === 'object' && !Object.keys(value).length)).map(([key, value]) => <div key={key} data-payload={key.includes('preview') || undefined}><dt>{key.replaceAll('_', ' ')}</dt><dd>{value === '' ? '(empty)' : safeCaptureText(value && typeof value === 'object' ? JSON.stringify(value, null, 2) : value ?? 'Not recorded')}</dd></div>)}</dl></td></tr> : null}
               </Fragment>;
             })}
             {!items.length ? <tr><td colSpan={5} className="probe-activity-empty">{search || filter !== 'all' ? 'No recorded events match these filters.' : !runId ? 'Select a check with a run, or start a reviewed check.' : snapshot?.telemetry_recorded === false && !running ? 'This run has only its final recorded summary. Per-request activity was not captured by that worker.' : 'No worker events have arrived yet. Planned requests are not shown as sent.'}</td></tr> : null}
           </tbody>
         </table>
       </div>
-      <p className="probe-activity-note">Expand an event for the recorded method, endpoint, protocol, vector, status and bounded payload. Previews retain up to 2 KiB and may be partial; credentials and declared private query values are redacted. Missing port, SNI, address family or source perspective remain not recorded. Informational activity never substitutes for verdict evidence or internal-origin visibility.</p>
+      </details>
+      <p className="probe-activity-note">Expand an exchange or event for the recorded method, endpoint, protocol, vector, status and bounded payload. Previews retain up to 2 KiB and may be partial; credentials and declared private query values are redacted. Missing port, SNI, address family or source perspective remain not recorded. Informational activity never substitutes for verdict evidence or internal-origin visibility.</p>
     </section>
   );
 }

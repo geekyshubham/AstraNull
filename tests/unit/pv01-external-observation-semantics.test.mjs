@@ -505,10 +505,14 @@ describe('PV-01 declared lockdown signature is the only lockdown basis', () => {
     const binding = { id: 'ob_1', tenant_id: 't1', origin_target_id: 'tgt_origin', status: 'active', created_at: '2026-01-01T00:00:00.000Z', host: 'edge.example.test', sni: 'edge.example.test' };
     const row = {
       id: 'obs_1', tenant_id: 't1', target_id: 'tgt_origin', origin_binding_id: 'ob_1', family: 'origin_hosting',
+      test_run_id: 'run_bound_denial',
       check_id: 'origin.host_sni_bypass.safe', producer_kind: 'signed_probe', attempt_class: 'successful',
       outcome: 'denied', observed_at: '2026-02-01T00:00:00.000Z', source_completed_at: '2026-02-01T00:00:01.000Z',
     };
-    const assessed = assessOriginReachability(binding, [row], { verified: true });
+    const run = { id: row.test_run_id, tenant_id: binding.tenant_id, target_id: row.target_id,
+      check_id: row.check_id, producer_kind: 'signed_probe', origin_binding_id: binding.id,
+      provenance_json: { origin_scope: { host: binding.host, sni: binding.sni, port: null, path: null } } };
+    const assessed = assessOriginReachability(binding, [row], { verified: true }, { runs: [run] });
     assert.equal(assessed.status, 'denied');
     assert.equal(assessed.lockdown, 'not_established');
   });

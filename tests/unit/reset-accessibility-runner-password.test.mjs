@@ -796,6 +796,6 @@ describe('accessibility password reset static contract', () => {
     assert.match(CI_SOURCE, /YAML\.parse_file\('\.github\/workflows\/reset-accessibility-password\.yml'\)/);
     assert.match(CI_SOURCE, /bash -n ops\/aws\/reset-accessibility-runner-password\.sh/);
     assert.match(CI_SOURCE, /node --check scripts\/reset-accessibility-runner-password\.mjs/);
-    assert.match(CI_SOURCE, /node --test tests\/unit\/\*\.test\.mjs/);
+    assert.match(CI_SOURCE, /node --test --test-concurrency=1 tests\/unit\/\*\.test\.mjs/);
   });
 });

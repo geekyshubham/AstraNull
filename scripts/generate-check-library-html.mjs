@@ -36,6 +36,7 @@ const PROBE_KINDS = {
   http2_settings: 'Reads HTTP/2 SETTINGS frame limits (no reset flood).',
   origin_leak_scan: 'Bounded prefix DNS scan on declared apex (fixed label list, not internet-wide).',
   host_sni_bypass: 'HEAD to declared direct IP using protected hostname as Host/SNI.',
+  origin_identity_pair: 'Two separately reviewed HEAD or bounded GET requests with shared nonce: protected baseline and verified bound origin, preserving Host/SNI. E2 identity observation only; no readiness or general WAF-bypass assurance.',
   port_scan_bounded: 'TCP connect to capped port list on declared host.',
   rate_limit_sequence: 'Up to 5 spaced HEAD requests to observe 429/challenge.',
   waf_enforcement_probe: 'Harmless marker request; blocked/challenged = WAF enforcing.',

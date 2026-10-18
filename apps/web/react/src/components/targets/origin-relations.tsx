@@ -16,6 +16,7 @@ import type { AcceptedExecution, DataItem, PortalConfig, Session } from '../../l
 import { formatDate } from '../../lib/utils';
 import { Badge } from '../ui/badge';
 import { Button } from '../ui/button';
+import { useOpenInspector } from '../evidence/use-inspector';
 
 function str(item: DataItem | null | undefined, key: string) {
   const value = item?.[key];
@@ -42,7 +43,7 @@ const REACH_LABEL: Record<string, string> = {
 
 const REACH_REASON: Record<string, string> = {
   no_bound_finalized_evidence: 'No finished origin check has run under this relation yet.',
-  authorization_lapsed: 'Origin ownership is no longer verified, so earlier results are not shown as current.',
+  authorization_lapsed: 'Ownership authorization is no longer current. Retained historical evidence does not authorize another check.',
   no_active_binding: 'This relation is not active.',
   bound_origin_evidence_is_on_origin_target: 'Results under this relation are recorded on the origin target.',
 };
@@ -81,6 +82,7 @@ export function OriginRelations({
   onChanged: () => void;
 }) {
   const targetId = str(target, 'id');
+  const openInspector = useOpenInspector();
   const startScope = JSON.stringify([targetId, sessionIdentity(session), config.authMode, session.mode, session.access_token, session.expires_at]);
   const startScopeRef = useRef(startScope);
   startScopeRef.current = startScope;
@@ -304,7 +306,7 @@ export function OriginRelations({
               const chosenId = checkChoice[bindingId] ?? (originChecks.length === 1 ? checkIdOf(originChecks[0]) : '');
               const chosenCheck = originChecks.find((check) => checkIdOf(check) === chosenId) ?? null;
               const checkDisabledReason = !canStart ? 'Your role cannot start checks.'
-                : !authorized ? 'Origin ownership is not currently verified.'
+                : !authorized ? 'Relation authorization is not current. Verify both targets and their ownership proofs.'
                   : !ownershipDone ? 'Prove ownership of this target first.'
                     : approved.state === 'loading' ? 'Loading the approved origin checks for this target.'
                       : approved.state === 'error' ? `Approved origin checks could not load: ${approved.message}`
@@ -325,8 +327,24 @@ export function OriginRelations({
                   <p className="small">
                     {observed
                       ? <>{REACH_LABEL[reachStatus]} under this relation (recorded observation <span className="mono">{str(reach, 'observation_id')}</span>). This is a reachability result for this scope only, not an origin lockdown or capacity assurance.</>
-                      : REACH_REASON[str(reach, 'reason') || (role === 'protected' ? 'bound_origin_evidence_is_on_origin_target' : 'no_bound_finalized_evidence')] ?? REACH_REASON.no_bound_finalized_evidence}
+                      : REACH_REASON[str(reach, 'reason') || 'no_bound_finalized_evidence'] ?? REACH_REASON.no_bound_finalized_evidence}
                   </p>
+                  {reach?.historical_evidence_valid === true ? <details className="oe-details">
+                    <summary>Exact recorded evidence</summary>
+                    {!authorized ? <p>Historical evidence retained. Current authorization is separate; this result does not authorize another check.</p> : null}
+                    <dl className="oe-source">
+                      <div><dt>Binding</dt><dd className="mono">{bindingId}</dd></div>
+                      <div><dt>Run / check</dt><dd className="mono">{str(reach, 'test_run_id') || 'Not recorded'} · {str(reach, 'check_id') || 'Not recorded'}</dd></div>
+                      <div><dt>Run target</dt><dd className="mono">{str(reach, 'target_id') || 'Not recorded'}</dd></div>
+                      <div><dt>Declared target</dt><dd className="mono">{str(reach, 'declared_target') || str(rec(reach.declared_target), 'value') || 'Not recorded'}</dd></div>
+                      <div><dt>Actual destination</dt><dd className="mono">{str(reach, 'actual_destination') || str(rec(reach.actual_destination), 'value') || 'Not recorded'}</dd></div>
+                      <div><dt>Recorded scope</dt><dd className="mono">{scopeText(rec(reach.evidence_scope) ?? rec(reach.scope) ?? binding)}</dd></div>
+                      <div><dt>Source</dt><dd>{str(reach, 'producer_kind') || str(reach, 'source_kind') || 'Not recorded'}</dd></div>
+                      <div><dt>Observed</dt><dd>{reach.observed_at ? formatDate(reach.observed_at) : 'Not recorded'}</dd></div>
+                    </dl>
+                    <p>The observation above is not, by itself, paired nonce-confirmed application identity or a bypass of a particular WAF rule. Inspect the exact run for its proof method and limitations.</p>
+                    {str(reach, 'test_run_id') && str(reach, 'check_id') && str(reach, 'target_id') ? <Button size="sm" variant="secondary" data-focus-key={`origin-evidence-${bindingId}`} onClick={() => openInspector({ entry: 'check_result', target_id: str(reach, 'target_id'), test_run_id: str(reach, 'test_run_id'), check_id: str(reach, 'check_id') }, `origin-evidence-${bindingId}`)}>Inspect recorded origin evidence</Button> : null}
+                  </details> : null}
                   {binding.created_at ? <p className="td-muted small">Recorded {formatDate(binding.created_at)}</p> : null}
                   <div className="row-actions">
                     {role === 'origin' && canStart && authorized && originChecks.length > 1 ? (
@@ -362,7 +380,11 @@ export function OriginRelations({
           </p>
         )
       ) : null}
-      {archived.length ? <p className="td-muted small">{archived.length} archived relation{archived.length === 1 ? '' : 's'} kept for history.</p> : null}
+      {archived.length ? <details className="oe-details"><summary>{archived.length} archived relation{archived.length === 1 ? '' : 's'} kept for history</summary><ul className="td-origin-list">{archived.map((binding) => {
+        const reach = rec(binding.reachability);
+        const bindingId = str(binding, 'id');
+        return <li className="td-origin-item" key={bindingId}><span className="mono">{bindingId}</span><Badge tone="muted">Archived · Cannot authorize checks</Badge><p className="td-muted small">{scopeText(binding)}</p>{reach?.historical_evidence_valid === true ? <><p>{REACH_LABEL[str(reach, 'status')] || 'Recorded origin observation'}. Historical only; not current authorization.</p><p className="td-muted small mono">{str(reach, 'observation_id')} · {str(reach, 'test_run_id')} · {str(reach, 'check_id')}</p>{str(reach, 'test_run_id') && str(reach, 'check_id') && str(reach, 'target_id') ? <Button size="sm" variant="secondary" data-focus-key={`archived-origin-evidence-${bindingId}`} onClick={() => openInspector({ entry: 'check_result', target_id: str(reach, 'target_id'), test_run_id: str(reach, 'test_run_id'), check_id: str(reach, 'check_id') }, `archived-origin-evidence-${bindingId}`)}>Inspect historical origin evidence</Button> : null}</> : <p className="td-muted small">No exact finalized origin evidence is available for this archived relation.</p>}</li>;
+      })}</ul></details> : null}
 
       <ConfirmModal
         open={review !== null}

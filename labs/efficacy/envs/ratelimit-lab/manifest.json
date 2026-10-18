@@ -1,0 +1,96 @@
+{
+  "schema": "astranull.efficacy-lab.v1",
+  "lab_id": "ratelimit-lab",
+  "networks": [
+    "anl-ratelimit-lab-net"
+  ],
+  "targets": [
+    {
+      "name": "nginx-rate-limited",
+      "address": "172.31.52.10",
+      "hostname": null,
+      "ports": [
+        {
+          "port": 80,
+          "protocol": "tcp",
+          "service": "http"
+        }
+      ],
+      "planted_condition": "nginx limit_req (rate=18r/m, burst=2): allows exactly 3 requests per 10s from a single client IP, and returns 429 Too Many Requests with recognizable JSON body starting at the 4th request",
+      "declarations": {
+        "waf": {
+          "rate_limit_canary": {
+            "path": "/canary",
+            "method": "GET",
+            "threshold": 3,
+            "window_seconds": 10,
+            "expected_action": "block"
+          }
+        }
+      },
+      "expectations": [
+        {
+          "check": "waf.rate_limit_canary.validation",
+          "expected": "protected",
+          "why": "First 3 requests within window return 200, 4th request is rate-limited (429) within threshold+2 bound"
+        },
+        {
+          "check": "waf.low_rate_limit.safe",
+          "expected": "inconclusive_expected",
+          "why": "waf.low_rate_limit.safe uses observation-only probe kind rate_limit_sequence (E2); correlation engine returns inconclusive without establishing readiness credit"
+        },
+        {
+          "check": "l7.low_rate_rate_limit.safe",
+          "expected": "inconclusive_expected",
+          "why": "l7.low_rate_rate_limit.safe uses observation-only probe kind rate_limit_sequence (E2); correlation engine returns inconclusive without establishing readiness credit"
+        }
+      ]
+    },
+    {
+      "name": "nginx-unlimited",
+      "address": "172.31.52.11",
+      "hostname": null,
+      "ports": [
+        {
+          "port": 80,
+          "protocol": "tcp",
+          "service": "http"
+        }
+      ],
+      "planted_condition": "nginx without rate limiting: all requests return 200 OK without throttling",
+      "declarations": {
+        "waf": {
+          "rate_limit_canary": {
+            "path": "/canary",
+            "method": "GET",
+            "threshold": 3,
+            "window_seconds": 10,
+            "expected_action": "block"
+          }
+        }
+      },
+      "expectations": [
+        {
+          "check": "waf.rate_limit_canary.validation",
+          "expected": "gap",
+          "why": "Origin has no rate limit configured; all canary requests succeed with 200 OK exceeding threshold 3 without rate limiting"
+        },
+        {
+          "check": "waf.low_rate_limit.safe",
+          "expected": "inconclusive_expected",
+          "why": "l7/waf rate_limit_sequence probes are observation-only (E2); correlation engine returns inconclusive regardless of origin response"
+        },
+        {
+          "check": "l7.low_rate_rate_limit.safe",
+          "expected": "inconclusive_expected",
+          "why": "l7/waf rate_limit_sequence probes are observation-only (E2); correlation engine returns inconclusive regardless of origin response"
+        }
+      ]
+    }
+  ],
+  "verification": [
+    "curl -s -o /dev/null -w '%{http_code}\n' http://172.31.52.10/canary for 4 rapid requests yields 200, 200, 200, 429",
+    "curl -s http://172.31.52.10/canary on the 4th request returns recognizable JSON body {\"error\":\"rate_limited\",\"message\":\"Rate limit exceeded: 3 requests per 10s\"}",
+    "curl -s -o /dev/null -w '%{http_code}\n' http://172.31.52.11/canary for 4 rapid requests yields 200, 200, 200, 200"
+  ]
+}

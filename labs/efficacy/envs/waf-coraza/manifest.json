@@ -1,0 +1,94 @@
+{
+  "schema": "astranull.efficacy-lab.v1",
+  "lab_id": "waf-coraza",
+  "verification_note": "Local evidence referenced from /tmp/astranull-efficacy-fix/waf-ground-truth.json (to be consolidated in repository report later; final integration matrix not yet claimed as passed).",
+  "networks": [
+    "anl-waf-coraza-net"
+  ],
+  "targets": [
+    {
+      "name": "origin-behind-coraza-crs-blocking",
+      "address": "172.31.25.10",
+      "hostname": null,
+      "ports": [
+        {
+          "port": 80,
+          "protocol": "tcp",
+          "service": "http"
+        }
+      ],
+      "planted_condition": "Official Coraza WAF with OWASP CRS 4 in blocking mode (SecRuleEngine On, default paranoia) reverse proxy in front of nginx origin-ok",
+      "declarations": {
+        "version": 1,
+        "waf": {
+          "block_signature": {
+            "header_name": "x-waf-blocked",
+            "header_value": "true",
+            "status_codes": [
+              403
+            ]
+          }
+        }
+      },
+      "verification_note": "Local evidence referenced from /tmp/astranull-efficacy-fix/waf-ground-truth.json (to be consolidated in repository report later; final integration matrix not yet claimed as passed).",
+      "expectations": [
+        {
+          "check": "waf.sqli_managed_marker.safe",
+          "expected": "gap",
+          "why": "Coraza OWASP CRS managed SQLi rule 942100 blocks query marker with 403, but path and header placements return 200 origin-ok; expected gap (scoped partial)"
+        },
+        {
+          "check": "waf.path_traversal_managed_marker.safe",
+          "expected": "protected",
+          "why": "Coraza OWASP CRS managed traversal rules block all three placements (query, path, and header) with 403"
+        },
+        {
+          "check": "waf.xss_managed_marker.safe",
+          "expected": "gap",
+          "why": "Coraza OWASP CRS v4 at default paranoia does not match inert marker <astranull-xss-probe/> (libinjection DetectXSS returns 0 and no regex matches), returning 200 across query, path, and header"
+        },
+        {
+          "check": "waf.scanner_signature_marker.safe",
+          "expected": "protected",
+          "why": "Coraza OWASP CRS rule 913100 blocks sqlmap User-Agent marker with 403"
+        },
+        {
+          "check": "waf.evasion_case_fold.safe",
+          "expected": "protected",
+          "why": "Coraza OWASP CRS rule 942100 normalizes and blocks case-folded SQLi marker with 403"
+        },
+        {
+          "check": "waf.evasion_double_url.safe",
+          "expected": "protected",
+          "why": "Coraza OWASP CRS rule 942100 blocks double URL-encoded SQLi marker with 403"
+        },
+        {
+          "check": "waf.ssti_marker.safe",
+          "expected": "inconclusive_expected",
+          "why": "Custom opaque SSTI canary token astranull-ssti-marker-inert cannot establish missing rule absent installed-token binding; setup is unbound rather than confirmed gap"
+        },
+        {
+          "check": "waf.prototype_pollution_marker.safe",
+          "expected": "inconclusive_expected",
+          "why": "Custom opaque prototype pollution canary token astranull-prototype-marker-inert cannot establish missing rule absent installed-token binding; setup is unbound rather than confirmed gap"
+        },
+        {
+          "check": "waf.fingerprint.safe",
+          "expected": "inconclusive_expected",
+          "why": "Fingerprint observation is designed to withhold a conclusive protection/gap verdict"
+        }
+      ]
+    }
+  ],
+  "verification": [
+    "curl from throwaway container on anl-waf-coraza-net shows GET / returns 200 origin-ok",
+    "curl from throwaway container on anl-waf-coraza-net with SQLi marker (astranull' OR '1'='0') returns HTTP 403 Access denied by Coraza WAF (rule 942100)",
+    "curl from throwaway container on anl-waf-coraza-net with path traversal marker (../../astranull-probe) returns HTTP 403 Access denied by Coraza WAF (rules 930100, 930110)",
+    "curl from throwaway container on anl-waf-coraza-net with XSS marker (<astranull-xss-probe/>) returns HTTP 200 origin-ok (Coraza CRS v4 PL1 libinjection DetectXSS returns 0, not blocked)",
+    "curl from throwaway container on anl-waf-coraza-net with scanner UA (sqlmap/1.8 (astranull-inert)) returns HTTP 403 Access denied by Coraza WAF (rule 913100)",
+    "curl from throwaway container on anl-waf-coraza-net with case-fold SQLi marker returns HTTP 403 Access denied by Coraza WAF (rule 942100)",
+    "curl from throwaway container on anl-waf-coraza-net with double URL-encoded SQLi marker returns HTTP 403 Access denied by Coraza WAF (rule 942100)",
+    "curl from throwaway container on anl-waf-coraza-net with SSTI marker (astranull-ssti-marker-inert) returns HTTP 200 origin-ok",
+    "curl from throwaway container on anl-waf-coraza-net with prototype pollution marker (astranull-prototype-marker-inert) returns HTTP 200 origin-ok"
+  ]
+}

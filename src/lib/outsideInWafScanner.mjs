@@ -501,6 +501,9 @@ export function isBlockedOrChallenged(snapshot, baseline = null) {
   if (UNSIGNED_STATUS_REASONS[status]) return result({ inconclusive: true, reason: UNSIGNED_STATUS_REASONS[status] });
   if (status >= 500) return result({ inconclusive: true, reason: 'error_not_attributable' });
   if (status >= 300 && status < 400) {
+    if (typeof snapshot.location !== 'string' || !snapshot.location.trim()) {
+      return result({ inconclusive: true, reason: 'redirect_location_missing' });
+    }
     const changed = locationChanged(snapshot, baseline);
     if (changed) {
       return result({
@@ -1531,9 +1534,11 @@ export async function runOutsideInWafScan(options = {}) {
     && transportErrorClasses.length === 0
     && plan.every((entry) => phasesExecuted.includes(entry.phase));
   const plannedMarkerLegs = phasesPlanned.filter((phase) => !['baseline', 'no_user_agent', 'origin_bypass'].includes(phase)).length;
-  const completedMarkerLegs = markerResults.filter((row) => !row.inconclusive && !row.transport_error && !row.error_class).length;
+  const attemptedMarkerLegs = markerResults.length;
+  const completedMarkerLegs = markerResults.filter((row) => !row.transport_error && !row.error_class && row.outcome !== 'error').length;
+  const gradedMarkerLegs = markerResults.filter((row) => !row.inconclusive && !row.redirected && (row.blocked || row.allowed || row.challenged)).length;
   const comparisonComplete = coverageComplete && baselineHealth(baseline) === 'healthy'
-    && plannedMarkerLegs > 0 && plannedMarkerLegs === completedMarkerLegs;
+    && plannedMarkerLegs > 0 && plannedMarkerLegs === completedMarkerLegs && gradedMarkerLegs > 0;
   const originLockdownConfirmed = originObservation.origin_lockdown_confirmed;
   const posture = buildOutsideInPostureReport({
     wafDetected,
@@ -1592,12 +1597,16 @@ export async function runOutsideInWafScan(options = {}) {
     phases_planned: phasesPlanned,
     phases_executed: phasesExecuted,
     phases_dropped: phasesDropped,
-    classifier_version: 'marker-comparison-v4',
+    classifier_version: 'marker-comparison-v5',
     unsupported_phases: ['content_type_confusion', 'multipart_confusion', ...(!originDeliveryAvailable && directIp ? ['origin_bypass'] : [])],
     coverage_complete: coverageComplete,
     comparison_complete: comparisonComplete,
     planned_marker_legs: plannedMarkerLegs,
+    attempted_marker_legs: attemptedMarkerLegs,
     completed_marker_legs: completedMarkerLegs,
+    graded_marker_legs: gradedMarkerLegs,
+    ungraded_marker_legs: completedMarkerLegs - gradedMarkerLegs,
+    missing_marker_legs: Math.max(0, plannedMarkerLegs - completedMarkerLegs),
     observation_only: !comparisonComplete,
     readiness_conclusion: comparisonComplete,
     assurance_scope: 'completed_supported_inert_marker_rules_only',

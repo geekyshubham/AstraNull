@@ -628,7 +628,7 @@ describe('profile honesty: retained records and origin assurance', () => {
     }
     const queue = read('apps/web/react/src/components/targets/domain-protection.tsx');
     assert.match(queue, /Not live evidence/);
-    assert.match(queue, /Origin assurance: /);
+    assert.doesNotMatch(queue, /<span className="td-provider-title">Origin exposure<\/span>/);
   });
 });
 

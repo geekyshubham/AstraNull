@@ -97,7 +97,7 @@ describe('body-based vendor signatures are read from a bounded body prefix', () 
     assert.equal(undeclared.posture, 'inconclusive');
     const declared = await runWafClassMarkerProbe({
       url: 'https://app.example.test/',
-      marker_class: 'ssrf',
+      marker_class: 'sqli',
       fetchFn: declaredFetch,
       declared_block_signature: { status_code: 406, header: { name: 'x-block-ref', value: 'edge-policy' } },
     });
@@ -125,6 +125,6 @@ describe('evasion check versions', () => {
   it('bumps every waf.evasion_*.safe check for truthful wire and complete-comparison grading', () => {
     const evasion = CHECK_CATALOG.filter((check) => /^waf\.evasion_.+\.safe$/.test(check.check_id));
     assert.equal(evasion.length, 44);
-    assert.ok(evasion.every((check) => check.version === '1.1.1' && check.semantics_version === 'probe-catalog-v3'));
+    assert.ok(evasion.every((check) => check.version === '1.2.0' && check.semantics_version === 'probe-catalog-v3'));
   });
 });

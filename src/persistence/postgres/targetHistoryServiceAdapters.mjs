@@ -20,7 +20,7 @@ import {
 } from '../../services/targetHistory.mjs';
 import {
   assessOriginReachability,
-  currentOriginProof,
+  currentOriginBindingAuthorization,
   planOriginBinding,
   presentOriginBinding,
 } from '../../services/originBindings.mjs';
@@ -165,7 +165,7 @@ export function createPostgresTargetHistoryServices({ repository, audit = null }
       const record = { ...planned.record, id: `obind_${randomBytes(8).toString('hex')}` };
       const stored = await repository.insertBinding(ctx, record, bindingAudit(ctx, 'origin_binding.created', record), audit);
       if (stored.error) return stored;
-      return { ...presentOriginBinding(stored, planned.proof), replayed: stored.replayed === true };
+      return { ...presentOriginBinding(stored, currentOriginBindingAuthorization(stored, records)), replayed: stored.replayed === true };
     },
 
     async archiveOriginBinding(ctx, id, options = {}) {
@@ -180,8 +180,8 @@ export function createPostgresTargetHistoryServices({ repository, audit = null }
         archived_by: ctx.userId ?? null,
       }, bindingAudit(ctx, 'origin_binding.archived', { ...existing, status: 'archived' }), audit);
       if (!stored) return error('already_archived', 409);
-      const records = await repository.loadBindingContext(ctx, [stored.origin_target_id]);
-      return presentOriginBinding(stored, currentOriginProof(records, ctx.tenantId, stored.origin_target_id));
+      const records = await repository.loadBindingContext(ctx, [stored.origin_target_id, stored.protected_target_id]);
+      return presentOriginBinding(stored, currentOriginBindingAuthorization(stored, records));
     },
 
     async getOriginBinding(ctx, id) {
@@ -189,17 +189,17 @@ export function createPostgresTargetHistoryServices({ repository, audit = null }
       if (!allowed.ok) return denied(allowed);
       const row = await repository.getBinding(ctx, id);
       if (!row) return null;
-      const records = await repository.loadBindingContext(ctx, [row.origin_target_id]);
-      return presentOriginBinding(row, currentOriginProof(records, ctx.tenantId, row.origin_target_id));
+      const records = await repository.loadBindingContext(ctx, [row.origin_target_id, row.protected_target_id]);
+      return presentOriginBinding(row, currentOriginBindingAuthorization(row, records));
     },
 
     async listOriginBindings(ctx, query = {}) {
       const allowed = gate(ctx, ['target_group:read'], 'origin_binding');
       if (!allowed.ok) return denied(allowed);
       const rows = await repository.listBindings(ctx, query);
-      const ids = [...new Set(rows.map((row) => row.origin_target_id))];
+      const ids = [...new Set(rows.flatMap((row) => [row.origin_target_id, row.protected_target_id]))];
       const records = ids.length ? await repository.loadBindingContext(ctx, ids) : { targets: [], targetVerifications: [], wafConnectors: [], wafConnectorSnapshots: [] };
-      const items = rows.map((row) => presentOriginBinding(row, currentOriginProof(records, ctx.tenantId, row.origin_target_id)));
+      const items = rows.map((row) => presentOriginBinding(row, currentOriginBindingAuthorization(row, records)));
       return { items, count: items.length };
     },
 
@@ -217,17 +217,10 @@ export function createPostgresTargetHistoryServices({ repository, audit = null }
       if (!allowed.ok) return denied(allowed);
       const binding = await repository.getBinding(ctx, bindingId);
       if (!binding) return error('unknown_origin_binding', 404);
-      const records = await repository.loadBindingContext(ctx, [binding.origin_target_id]);
-      const proof = currentOriginProof(records, ctx.tenantId, binding.origin_target_id);
-      const observations = await repository.listObservations(ctx, {
-        target_id: binding.origin_target_id,
-        family: null,
-        from: null,
-        to: null,
-        cursor: null,
-        limit: 100,
-      });
-      return assessOriginReachability(binding, observations, proof);
+      const records = await repository.loadBindingContext(ctx, [binding.origin_target_id, binding.protected_target_id]);
+      const proof = currentOriginBindingAuthorization(binding, records);
+      const evidence = await repository.listBindingEvidence(ctx, binding.id);
+      return assessOriginReachability(binding, evidence.observations, proof, { runs: evidence.runs });
     },
 
     async registerRetestLineage(ctx, input = {}, options = {}) {

@@ -324,10 +324,10 @@ test('activity values keep dotted identifiers verbatim and humanise only plain s
 });
 
 test('request counts state what was recorded and keep the authorized limit separate', () => {
-  assert.equal(activityRequestsSentLabel(3), '3 requests sent (recorded)');
-  assert.equal(activityRequestsSentLabel(0), '0 requests sent (recorded)');
-  for (const missing of [null, undefined, '', 'n/a']) assert.equal(activityRequestsSentLabel(missing), 'Requests sent: not recorded');
-  assert.equal(activityRequestLimitLabel(16), 'Limit: up to 16 requests');
+  assert.equal(activityRequestsSentLabel(3), '3 logical operations (attested)');
+  assert.equal(activityRequestsSentLabel(0), '0 logical operations (attested)');
+  for (const missing of [null, undefined, '', 'n/a']) assert.equal(activityRequestsSentLabel(missing), 'Logical operations: not recorded');
+  assert.equal(activityRequestLimitLabel(16), 'Signed probe allowance: up to 16 logical attempts');
   assert.equal(activityRequestLimitLabel(null), '');
   const source = readFileSync(new URL('../../apps/web/react/src/components/targets/probe-activity.tsx', import.meta.url), 'utf8');
   assert.doesNotMatch(source, /attested operations|Planned probe maximum/);

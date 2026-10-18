@@ -377,6 +377,9 @@ describe('origin bindings', () => {
     getStore().targetVerifications.push({
       id: 'ver_ip', tenant_id: TENANT, target_id: 'tgt_ip', state: 'dns_verified', transitioned_at: DECLARED, source_ref: {},
     });
+    getStore().targetVerifications.push({
+      id: 'ver_app', tenant_id: TENANT, target_id: 'tgt_app', state: 'dns_verified', transitioned_at: DECLARED, source_ref: {},
+    });
     const before = listObservationsForTests(TENANT).length;
     const prior = acceptTargetObservation(ADMIN, observation({
       target_id: 'tgt_ip',
@@ -414,6 +417,7 @@ describe('origin bindings', () => {
     const bound = acceptTargetObservation(ADMIN, observation({
       target_id: 'tgt_ip',
       nonce: 'bound',
+      test_run_id: 'run_bound_history',
       outcome: 'reachable',
       family: 'origin_hosting',
       check_id: 'origin.host_sni_bypass.safe',
@@ -426,6 +430,10 @@ describe('origin bindings', () => {
       binding,
       listObservationsForTests(TENANT),
       { verified: true, state: 'dns_verified' },
+      { runs: [{ id: 'run_bound_history', tenant_id: TENANT, target_id: 'tgt_ip', check_id: 'origin.host_sni_bypass.safe',
+        origin_binding_id: binding.id, provenance_json: { origin_scope: {
+          host: binding.host, sni: binding.sni, port: binding.port, path: binding.path,
+        } } }] },
     );
     assert.equal(reach.status, 'reachable');
     assert.equal(reach.lockdown, 'not_established');

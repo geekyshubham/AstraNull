@@ -1,3 +1,5 @@
+import { validateOriginClueErasure } from '../../services/privacyRetention.mjs';
+
 /** @type {readonly string[]} */
 export const RETENTION_REPOSITORY_METHODS = Object.freeze(['runMetadataRetention']);
 
@@ -5,6 +7,7 @@ export const RETENTION_REPOSITORY_METHODS = Object.freeze(['runMetadataRetention
 export const POSTGRES_RETENTION_SERVICE_METHODS = Object.freeze([
   'enforceMetadataRetentionForTenant',
   'previewMetadataRetentionForTenant',
+  'eraseOriginCluesForCurrentTenant',
 ]);
 
 /**
@@ -22,6 +25,12 @@ export function createPostgresRetentionServices(repositories) {
   }
 
   return {
+    async eraseOriginCluesForCurrentTenant(ctx, body, options = {}) {
+      const request = validateOriginClueErasure(ctx, body);
+      if (request.error) return request;
+      if (typeof retention.runOriginClueErasure !== 'function') throw new Error('Postgres origin clue erasure repository required.');
+      return retention.runOriginClueErasure(ctx.tenantId, { userId: ctx.userId, role: ctx.role }, request, options);
+    },
     async enforceMetadataRetentionForTenant(ctx, tenantId = ctx?.tenantId, options = {}) {
       return retention.runMetadataRetention(
         tenantId,

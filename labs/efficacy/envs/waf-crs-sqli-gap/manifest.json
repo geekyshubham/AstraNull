@@ -1,0 +1,70 @@
+{
+  "schema": "astranull.efficacy-lab.v1",
+  "lab_id": "waf-crs-sqli-gap",
+  "verification_note": "Local evidence referenced from /tmp/astranull-efficacy-fix/waf-ground-truth.json (to be consolidated in repository report later; final integration matrix not yet claimed as passed).",
+  "networks": [
+    "anl-waf-crs-sqli-gap-net"
+  ],
+  "targets": [
+    {
+      "name": "nginx-behind-crs-sqli-gap",
+      "address": "172.31.23.10",
+      "hostname": null,
+      "ports": [
+        {
+          "port": 80,
+          "protocol": "tcp",
+          "service": "http"
+        }
+      ],
+      "planted_condition": "OWASP ModSecurity CRS 4 in blocking mode with REQUEST-942 (SQLi) rule class excluded/removed, other classes active, in front of nginx origin-ok",
+      "declarations": {
+        "version": 1,
+        "waf": {
+          "block_signature": {
+            "header_name": "x-astranull-lab-block",
+            "header_value": "crs",
+            "status_codes": [
+              403
+            ]
+          }
+        }
+      },
+      "verification_note": "Local evidence referenced from /tmp/astranull-efficacy-fix/waf-ground-truth.json (to be consolidated in repository report later; final integration matrix not yet claimed as passed).",
+      "expectations": [
+        {
+          "check": "waf.sqli_managed_marker.safe",
+          "expected": "gap",
+          "why": "REQUEST-942 is excluded; inert SQLi markers across query, path, and header return 200 origin-ok"
+        },
+        {
+          "check": "waf.xss_managed_marker.safe",
+          "expected": "gap",
+          "why": "OWASP CRS v4 at default paranoia does not match inert marker <astranull-xss-probe/>, returning 200 origin-ok across query, path, and header (AstraNull marker limitation)"
+        },
+        {
+          "check": "waf.path_traversal_managed_marker.safe",
+          "expected": "protected",
+          "why": "ModSecurity CRS REQUEST-930 rule 930100 blocks query and header markers with 403; encoded path returns 400 Bad Request due to generic nginx parser refusal which is an ungraded parser refusal not attributed to WAF control, but check is expected protected over graded marker placements"
+        },
+        {
+          "check": "waf.scanner_signature_marker.safe",
+          "expected": "protected",
+          "why": "ModSecurity CRS REQUEST-913 rule 913100 blocks sqlmap User-Agent marker with 403"
+        },
+        {
+          "check": "waf.fingerprint.safe",
+          "expected": "inconclusive_expected",
+          "why": "Fingerprint observation is designed to withhold a conclusive protection/gap verdict"
+        }
+      ]
+    }
+  ],
+  "verification": [
+    "curl from container on lab net returns HTTP 200 origin-ok for GET /",
+    "curl with SQLi marker (astranull' OR '1'='0) returns HTTP 200 origin-ok (REQUEST-942 excluded)",
+    "curl with XSS marker (<astranull-xss-probe/>) returns HTTP 200 origin-ok (CRS does not match this inert tag)",
+    "curl with path traversal marker (../../astranull-probe) returns HTTP 403 Forbidden",
+    "curl with scanner UA (sqlmap/1.8 (astranull-inert)) returns HTTP 403 Forbidden"
+  ]
+}

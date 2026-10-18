@@ -6,6 +6,16 @@ import {
   probeResultCompletesEvidence,
 } from '../../src/services/correlation.mjs';
 
+import { WAF_GRADING_VERSION } from '../../src/lib/externalObservationOutcomes.mjs';
+
+const completeScannerComparison = {
+  classifier_version: 'marker-comparison-v5', grading_version: WAF_GRADING_VERSION,
+  assurance_scope: 'completed_supported_inert_marker_rules_only', coverage_complete: true,
+  comparison_complete: true, baseline_health: 'healthy', source_penalized: false,
+  planned_marker_legs: 1, attempted_marker_legs: 1, completed_marker_legs: 1,
+  graded_marker_legs: 1, ungraded_marker_legs: 0, missing_marker_legs: 0,
+};
+
 // ADR-0008: agents are removed. Verdicts come from external probe evidence only, so the
 // former agent-corroborated `correlateVerdict` truth table is gone. `correlateExternalOnlyVerdict`
 // is the sole safe-run correlation entry point (confidence `external_only`).
@@ -16,6 +26,7 @@ describe('correlateExternalOnlyVerdict', () => {
       externalResult: 'blocked',
       probeKind: 'outside_in_waf_scan',
       probeIoObserved: true,
+      probeMetadata: completeScannerComparison,
       expectedBehavior: 'must_block_before_origin',
     });
     assert.equal(r.verdict, 'edge_protected');
@@ -27,6 +38,8 @@ describe('correlateExternalOnlyVerdict', () => {
     const r = correlateExternalOnlyVerdict({
       externalResult: 'connected',
       probeKind: 'outside_in_waf_scan',
+      probeIoObserved: true,
+      probeMetadata: completeScannerComparison,
       expectedBehavior: 'must_block_before_origin',
     });
     assert.equal(r.verdict, 'edge_exposed');

@@ -32,6 +32,7 @@ import {
   gradeMarkerSnapshot,
   gradingMeta,
   isGradedLeg,
+  markerLegAccounting,
   postureFromEnforcement,
   redactedResponseFeature,
   resolveClassMarkerPaths,
@@ -191,8 +192,8 @@ export function buildWafClassProbeProfile({ marker_class, max_requests, timeout_
 function buildProbeUrl(baseUrl, markerClass, marker, placement) {
   const url = new URL(baseUrl);
   if (placement === 'path') {
-    const joined = `${url.pathname.replace(/\/$/, '')}/${marker}`.replace(/\/+/g, '/');
-    url.pathname = joined.startsWith('/') ? joined : `/${joined}`;
+    // Keep the marker in one segment: URL normalizes literal ../ before it reaches the WAF.
+    url.pathname = `${url.pathname.replace(/\/$/, '')}/${encodeURIComponent(marker)}`;
     return url.href;
   }
   url.searchParams.set(`astranull_${markerClass}_probe`, marker);
@@ -358,6 +359,13 @@ export async function runWafClassMarkerProbe(options = {}) {
   const pathResults = [];
   const responseFeatures = [];
   const combinedPlacements = [];
+  // Fix the budget-selected plan before executing it; early failures cannot shrink its denominator.
+  let plannedBudget = maxRequests;
+  const plannedMarkerLegs = paths.reduce((total) => {
+    const count = Math.min(placementsForClass(markerClass).length, Math.max(0, plannedBudget - 2));
+    plannedBudget -= count + 2;
+    return total + count;
+  }, 0);
   let requestsSent = 0;
   let sourcePenalized = false;
   let declaredMatchesBaseline = false;
@@ -420,21 +428,37 @@ export async function runWafClassMarkerProbe(options = {}) {
     }
   }
   const health = markerBaselineHealth(lastBaseline);
+  const accounting = markerLegAccounting(combinedPlacements, plannedMarkerLegs);
   const comparisonComplete = health === 'healthy' && !sourcePenalized && !declaredMatchesBaseline
-    && graded.length >= 1;
-  const planned = graded.length;
-  const completed = graded.length;
+    && graded.length >= 1 && accounting.missing_marker_legs === 0
+    && pathResults.every((row) => row.trailing_control?.outcome === 'allowed');
+  const custom = assuranceScopeForMarkerClass(markerClass) === 'custom_canary_rule';
+  if (!comparisonComplete || custom) {
+    mapped.posture = posture = 'inconclusive';
+    mapped.posture_status = postureStatus = sourcePenalized ? 'source_penalized' : 'inconclusive';
+    mapped.enforcement = 'unknown';
+  }
+  if (custom) {
+    inconclusiveReason = 'custom_canary_rule_setup_unavailable';
+    for (const path of pathResults) {
+      path.posture = 'inconclusive';
+      path.posture_status = 'inconclusive';
+      path.enforcement = 'unknown';
+      path.setup_required = true;
+      path.produces_verdict = false;
+    }
+  }
 
   return {
-    classifier_version: 'marker-comparison-v4',
+    classifier_version: 'marker-comparison-v5',
     assurance_scope: assuranceScopeForMarkerClass(markerClass),
     ...gradingMeta(),
-    planned_marker_legs: planned,
-    completed_marker_legs: completed,
+    ...accounting,
+    ...(custom ? { setup_required: true, produces_verdict: false } : { produces_verdict: true }),
     comparison_complete: comparisonComplete,
     baseline_health: health,
-    observation_only: !comparisonComplete,
-    readiness_conclusion: comparisonComplete && mapped.posture !== 'inconclusive',
+    observation_only: custom || !comparisonComplete,
+    readiness_conclusion: !custom && comparisonComplete && mapped.posture !== 'inconclusive',
     marker_class: markerClass,
     marker_inert: true,
     requests_sent: requestsSent,
@@ -690,17 +714,25 @@ export async function runEntryPathMarkerProbe(options = {}) {
     mapped.enforcement = 'unknown';
   }
   const identityConfirmed = health === 'healthy' && baseline.canary_echo_matched === true;
-  const comparisonComplete = health === 'healthy' && !sourcePenalized && !declaredMatchesBaseline && graded.length >= 1;
+  const accounting = markerLegAccounting(markerResults, Math.min(variations.length, Math.max(0, maxRequests - 2)));
+  const comparisonComplete = health === 'healthy' && !sourcePenalized && !declaredMatchesBaseline && graded.length >= 1
+    && accounting.missing_marker_legs === 0 && trailingControl?.outcome === 'allowed';
+  const custom = assuranceScopeForMarkerClass(markerClass) === 'custom_canary_rule';
+  if (!comparisonComplete || custom) {
+    mapped.posture = 'inconclusive';
+    mapped.posture_status = sourcePenalized ? 'source_penalized' : 'inconclusive';
+    mapped.enforcement = 'unknown';
+  }
   return {
     entry_path_scenario: scenario,
-    classifier_version: 'marker-comparison-v4',
+    classifier_version: 'marker-comparison-v5',
     assurance_scope: assuranceScopeForMarkerClass(markerClass),
     ...gradingMeta(),
-    planned_marker_legs: graded.length,
-    completed_marker_legs: graded.length,
+    ...accounting,
+    ...(custom ? { setup_required: true, produces_verdict: false, inconclusive_reason: 'custom_canary_rule_setup_unavailable' } : { produces_verdict: true }),
     comparison_complete: comparisonComplete,
-    observation_only: !comparisonComplete,
-    readiness_conclusion: comparisonComplete && mapped.posture !== 'inconclusive',
+    observation_only: custom || !comparisonComplete,
+    readiness_conclusion: !custom && comparisonComplete && mapped.posture !== 'inconclusive',
     marker_class: markerClass,
     marker_inert: true,
     requests_sent: requestsSent,

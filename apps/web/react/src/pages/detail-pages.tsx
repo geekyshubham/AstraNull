@@ -87,6 +87,7 @@ import { effectivePolicyTargetKind, isPolicyTargetCompatible } from '../lib/poli
 import { TargetDetailView } from './target-detail-view';
 import { FindingDetailView as FindingDetailViewRevamp } from './finding-detail-view';
 import './detail-pages.css';
+import { checkPresentation } from '../lib/check-presentation.mjs';
 // @ts-ignore Plain ESM keeps executive labels directly testable with node:test.
 import { plainCheckName, plainCodeLabel, plainExpectedVerdictLabel, plainFindingTitle, plainInlineText, plainVerdictLabel, plainVerdictShortLabel } from '../lib/plain-language.mjs';
 import { DetailBackLink, type DetailListLink } from '../components/layout/detail-back-link';
@@ -170,7 +171,7 @@ function humanizeSignalType(value: string) {
 
 function checkDisplayName(checks: DataItem[], checkId: string) {
   const check = checks.find((entry) => getString(entry, ['check_id'], '') === checkId);
-  return plainCheckName(getString(check ?? {}, ['name', 'title'], checkId));
+  return checkPresentation(check ?? checkId).name;
 }
 
 function runDisplayLabel(runs: DataItem[], runId: string) {
@@ -3655,8 +3656,9 @@ function CheckDetailPage({
   const safetyClass = getString(check, ['safety_class'], '');
   const execution = checkExecutionSemantics(check);
   const customerRunnable = safetyClass === 'safe';
-  const description = getString(check, ['description', 'summary'], '');
-  const title = plainCheckName(getString(check, ['name', 'check_id', 'id'], entityId));
+  const presentation = checkPresentation(check);
+  const description = presentation.purpose;
+  const title = presentation.name;
   const toList = catalogValueList;
   const spaced = (value: string) => value.replace(/_/g, ' ');
   const humanize = (value: string) => {
@@ -3677,7 +3679,8 @@ function CheckDetailPage({
     : recordedExplanation;
   const expectedBehavior = getString(check, ['default_expected_behavior'], '');
   const evidenceTier = getString(check, ['evidence_tier'], '').toUpperCase();
-  const observationOnly = check.observation_only === true || check.readiness_conclusion === false || ['E1', 'E2'].includes(evidenceTier);
+  const scopedVerdict = check.produces_verdict !== false && (check.produces_verdict === true || getNestedString(check, ['probe_profile', 'kind'], '') === 'waf_method_policy_probe');
+  const observationOnly = !scopedVerdict && (check.observation_only === true || check.readiness_conclusion === false || ['E1', 'E2'].includes(evidenceTier));
   const checkSpecificRemediation = Boolean(recordedRemediation) && recordedRemediation !== GENERIC_CHECK_REMEDIATION;
   const tailoredRemediation = execution.kind === 'Request only' || execution.kind === 'Metadata evaluation' || execution.kind === 'Operations self-check';
   const recordedObservationExplanation = getString(check, ['explanation_template'], '');
@@ -3845,7 +3848,7 @@ function CheckDetailPage({
         <CardContent className="check-explainer">
           <div>
             <p className="check-fact-label">What is sent</p>
-            <p className="check-detail-text"><strong>{execution.kind}</strong>{probeKind ? <span className="muted"> · {plainCodeLabel(probeKind)}</span> : null}</p>
+            <p className="check-detail-text"><strong>{presentation.mechanism}</strong></p>
             <p className="check-detail-text">{execution.cap}</p>
             {probeTimeout ? <p className="muted small">{formatNumber(probeTimeout)} ms timeout</p> : null}
           </div>
@@ -3867,7 +3870,9 @@ function CheckDetailPage({
               <p className="muted small" title={expectedBehavior}>Reference control, not verified by this check: {plainCodeLabel(expectedBehavior).toLowerCase()}.</p>
             ) : null}
           </div>
-          <p className="muted small full">A bounded check proves one recorded behavior on one target. It does not establish volumetric capacity or protection for other targets.</p>
+          <p className="muted small full">{presentation.limitations}</p>
+          <div className="full"><p className="check-fact-label">Next step</p><p className="check-detail-text">{presentation.next_step}</p></div>
+          {scopedVerdict && evidenceTier === 'E2' ? <p className="muted small full">Produces a scoped verdict, with no readiness credit.</p> : null}
         </CardContent>
       </Card>
 

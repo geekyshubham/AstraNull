@@ -1,0 +1,24 @@
+# Lab Status: waf-coraza
+
+- [x] Initialized lab directory `labs/efficacy/envs/waf-coraza/` and scratch `/tmp/astranull-lab/waf-coraza/`
+- [x] Researched official Coraza images published by OWASP Coraza (`ghcr.io/corazawaf/coraza-spoa:snapshot`, embedding Coraza v3 and OWASP CRS v4)
+- [x] Pinned published images with verified digests: `ghcr.io/corazawaf/coraza-spoa:snapshot`, `haproxy:3.0-alpine`, `nginx:1.27-alpine`, `curlimages/curl:8.10.1`
+- [x] Configured official Coraza SPOA daemon with OWASP CRS v4 (`@coraza.conf-recommended`, `@crs-setup.conf.example`, `@owasp_crs/*.conf`, `SecRuleEngine On`)
+- [x] Configured HAProxy reverse proxy at `172.31.25.10:80` with SPOE filter and Coraza WAF 403 error page
+- [x] Configured Nginx origin at `172.31.25.20:80` returning HTTP 200 `origin-ok`
+- [x] Constructed `docker-compose.yml`, `up.sh`, and `down.sh` for compose project `anl-waf-coraza` on `anl-waf-coraza-net` (`172.31.25.0/24`, `internal: true`)
+- [x] Brought up environment with `./up.sh` and verified health
+- [x] Executed independent proofs via throwaway container on lab network:
+  - `GET /` returns HTTP 200 `origin-ok`
+  - SQLi marker (`astranull' OR '1'='0`) is blocked with HTTP 403 (Coraza CRS rule 942100)
+  - XSS marker (`<astranull-xss-probe/>`) is not blocked, returning HTTP 200 `origin-ok` (libinjection DetectXSS returns 0)
+  - Path traversal marker (`../../astranull-probe`) is blocked with HTTP 403 (Coraza CRS rules 930100, 930110)
+  - Scanner User-Agent (`sqlmap/1.8 (astranull-inert)`) is blocked with HTTP 403 (Coraza CRS rule 913100)
+  - Case-fold SQLi marker (`AsTrAnUlL' oR '1'='0`) is blocked with HTTP 403 (Coraza CRS rule 942100)
+  - Double URL-encoded SQLi marker is blocked with HTTP 403 (Coraza CRS rule 942100)
+  - SSTI canary (`astranull-ssti-marker-inert`) returns HTTP 200 `origin-ok`
+  - Prototype pollution canary (`astranull-prototype-marker-inert`) returns HTTP 200 `origin-ok`
+- [x] Analyzed AstraNull codebase for Coraza treatment: confirmed `src/lib/externalObservationOutcomes.mjs` attributes Coraza block signatures to `id: 'modsecurity_default_block'`, `vendor: 'modsecurity'`
+- [x] Created `manifest.json` with justified expectations based on proved conditions
+- [x] Created `REPORT.md` documenting architecture, image digests, health proofs, expectations, and limitations
+- [x] Verified environment remains running for harness runners

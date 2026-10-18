@@ -113,11 +113,11 @@ export function buildPortalActionCoverage({ inventory = buildPortalActionInvento
       let applicable = states[state].applicable;
       let reason = states[state].reason;
       const guards = action.traits?.authorizationGuards ?? [];
-      if (action.traits?.authorizationUnresolved && applicable !== false) { applicable = null; reason = 'Permission references exist but their exact eligibility expression is unresolved; neither successful access nor denied access is established for this identity. This is a blocking classification gap, not N/A.'; }
+      if (action.traits?.authorizationUnresolved && (applicable !== false || state === 'denial')) { applicable = null; reason = 'Permission references exist but their exact eligibility expression is unresolved; neither successful access nor denied access is established for this identity. This is a blocking classification gap, not N/A.'; }
       if (guards.length) {
         const eligible = actionEligibilityDecision(identity, guards);
         if (!eligible && state !== 'denial') { applicable = false; reason = 'Resolved source permission expression denies this identity; only the explicit hidden/disabled action denial is applicable, not successful transaction states.'; }
-        if (state === 'denial') { applicable = !eligible; reason = eligible ? 'This identity satisfies the resolved action guard; denial is asserted with actually denied identities instead.' : 'This identity fails the exact resolved action permission expression; assert action absence/disabled state and zero forbidden writes.'; }
+        if (state === 'denial' && (!eligible || !action.traits?.authorizationUnresolved)) { applicable = !eligible; reason = eligible ? 'This identity satisfies the resolved action guard; denial is asserted with actually denied identities instead.' : 'This identity fails the exact resolved action permission expression; assert action absence/disabled state and zero forbidden writes.'; }
       }
       const dataset = state === 'empty' ? 'empty' : 'baseline';
       const cell = { action: action.id, route: identity.route, principal: identity.principal, role: identity.role, dataset, state, channel: 'ui', applicable, reason };

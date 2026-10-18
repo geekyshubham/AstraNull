@@ -1,0 +1,51 @@
+{
+  "schema": "astranull.efficacy-lab.v1",
+  "lab_id": "waf-crs-detect",
+  "networks": [
+    "anl-waf-crs-detect-net"
+  ],
+  "targets": [
+    {
+      "name": "origin-behind-crs-detection-only",
+      "address": "172.31.22.10",
+      "hostname": null,
+      "ports": [
+        {
+          "port": 80,
+          "protocol": "tcp",
+          "service": "http"
+        }
+      ],
+      "planted_condition": "ModSecurity CRS 4 in DetectionOnly (SecRuleEngine DetectionOnly): WAF inspects traffic and logs alerts, but never blocks; all requests pass through to nginx origin returning HTTP 200 origin-ok",
+      "declarations": {},
+      "expectations": [
+        {
+          "check": "waf.sqli_managed_marker.safe",
+          "expected": "gap",
+          "why": "DetectionOnly does not block SQLi marker; request reaches origin and returns HTTP 200 origin-ok"
+        },
+        {
+          "check": "waf.xss_managed_marker.safe",
+          "expected": "gap",
+          "why": "DetectionOnly does not block XSS marker; request reaches origin and returns HTTP 200 origin-ok"
+        },
+        {
+          "check": "waf.path_traversal_managed_marker.safe",
+          "expected": "gap",
+          "why": "DetectionOnly does not block path traversal marker; request reaches origin and returns HTTP 200 origin-ok"
+        },
+        {
+          "check": "waf.fingerprint.safe",
+          "expected": "inconclusive_expected",
+          "why": "Check profile uses waf_fingerprint_observation which is an observation-only probe (isObservationOnlyProbeKind) that always yields an inconclusive verdict in correlation.mjs; DetectionOnly returns Server: nginx on 200 without block page signals"
+        }
+      ]
+    }
+  ],
+  "verification": [
+    "curl from throwaway container on anl-waf-crs-detect-net shows GET / returns 200 origin-ok",
+    "curl from throwaway container on anl-waf-crs-detect-net with SQLi marker (astranull' OR '1'='0') returns 200 origin-ok (audit log records rule 942100, 949110 with is_interrupted: false)",
+    "curl from throwaway container on anl-waf-crs-detect-net with XSS marker (<astranull-xss-probe/>) returns 200 origin-ok (audit log records rule 920350 with is_interrupted: false)",
+    "curl from throwaway container on anl-waf-crs-detect-net with path traversal marker (../../astranull-probe) returns 200 origin-ok (audit log records rule 930100, 930110, 949110 with is_interrupted: false)"
+  ]
+}

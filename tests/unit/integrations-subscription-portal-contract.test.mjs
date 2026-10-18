@@ -210,61 +210,15 @@ describe('Integrations portal annotations', () => {
   });
 });
 
-describe('Subscription portal annotations', () => {
-  const subscription = section('const SUBSCRIPTION_PAGE_STYLES', 'export function StaffSurfacePage');
-
-  it('prioritizes load error and retry before loading and empty subscription states', () => {
-    const loadErrorBranch = subscription.indexOf('if (subscriptionLoadError)');
-    const loadingBranch = subscription.indexOf('if (!data.loaded)');
-    const emptyBranch = subscription.indexOf('if (!hasSubscription)');
-    assert.ok(loadErrorBranch >= 0 && loadErrorBranch < loadingBranch);
-    assert.ok(loadingBranch < emptyBranch);
-    assert.match(subscription, /Subscription data could not be loaded/);
-    assert.match(subscription, /window\.location\.reload\(\)/);
-    assert.match(subscription, /Loading subscription…/);
-    assert.match(subscription, /No subscription record is available/);
+describe('Retired Plan & usage page', () => {
+  it('ships no customer subscription page, route, or page-scoped styles', () => {
+    assert.doesNotMatch(SOURCE, /export function SubscriptionPage\(|SUBSCRIPTION_PAGE_STYLES|SubscriptionEntitlementIndicator/);
+    assert.doesNotMatch(ROUTER_SOURCE, /SubscriptionPage|route === 'subscription'/);
+    const styles = readFileSync(new URL('../../apps/web/react/src/styles.css', import.meta.url), 'utf8');
+    assert.doesNotMatch(styles, /\.subscription-page|\.subscription-usage/);
   });
 
-  it('uses a three, two, one responsive usage-card grid', () => {
-    assert.match(subscription, /\.subscription-usage-grid \{[\s\S]*?grid-template-columns: repeat\(3, minmax\(0, 1fr\)\)/);
-    assert.match(subscription, /@media \(max-width: 960px\)[\s\S]*?\.subscription-usage-grid \{[\s\S]*?repeat\(2, minmax\(0, 1fr\)\)/);
-    assert.match(subscription, /@media \(max-width: 620px\)[\s\S]*?\.subscription-usage-grid \{[\s\S]*?grid-template-columns: 1fr/);
-    assert.match(subscription, /role="list" aria-label="Subscription usage"/);
-  });
-
-  it('shows freshness and one authoritative entitlement table with labeled indicators', () => {
-    assert.match(subscription, /subscriptionRecordedTimestamp/);
-    assert.match(subscription, /Source snapshot/);
-    assert.match(subscription, /source timestamp not provided/);
-    assert.match(subscription, /> Refresh\s*<\/Button>/);
-    assert.match(subscription, /title="Feature access"/);
-    assert.match(subscription, /label: 'Access',/);
-    assert.match(subscription, /value=\{item\.effective_enabled\} enabledLabel="Available" disabledLabel="Unavailable"/);
-    assert.match(subscription, /item\.plan_enabled === true \? 'Included in plan' : item\.plan_enabled === false \? 'Not in plan' : 'Plan inclusion not recorded'/);
-    assert.match(subscription, /Source: \{source\}/);
-    assert.match(subscription, /CheckCircle2 : value === false \? CircleMinus : CircleHelp/);
-    assert.match(SOURCE, /const label = value === true \? enabledLabel : value === false \? disabledLabel : 'Not recorded';/);
-    assert.doesNotMatch(subscription, /subscription-entitlement-pill|Entitlement breakdown/);
-  });
-
-  it('keeps feature access separate from configured or working integrations', () => {
-    assert.match(subscription, /label: 'What access does not mean'/);
-    assert.match(subscription, /Available does not mean it is configured or working/);
-    assert.match(SOURCE, /connectors: 'Not that a provider is connected; set one up in Integrations\.'/);
-    assert.match(SOURCE, /high_scale_program: 'Not self-service\. Only SOC can approve and run high-scale validation\.'/);
-  });
-
-  it('never presents unknown usage or limits as zero or unlimited and states units and windows', () => {
-    assert.match(subscription, /Unit: checks · window: last 60 minutes/);
-    assert.match(subscription, /usage not measured \(not zero\)/);
-    assert.match(subscription, /limit not recorded \(not unlimited\)/);
-    assert.match(subscription, /Progress is unavailable until both usage and a plan limit are recorded/);
-    assert.doesNotMatch(subscription, /high_scale_requests_per_month|High-scale requests/);
-  });
-
-  it('keeps subscription styling token-scoped', () => {
-    assert.doesNotMatch(subscription, /#[0-9a-f]{3,8}\b/i);
-    assert.match(subscription, /var\(--proof-surface\)/);
-    assert.match(subscription, /var\(--success\)/);
+  it('keeps the account summary dataset for the support page', () => {
+    assert.match(API_SOURCE, /subscriptionSummary: \(\) => opt\('\/v1\/subscription\/current'/);
   });
 });

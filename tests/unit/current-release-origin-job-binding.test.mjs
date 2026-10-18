@@ -23,7 +23,11 @@ import {
   runBoundOriginScope,
   verifyProbeJobSignature,
 } from '../../src/lib/probeJobs.mjs';
-import { createOriginBinding } from '../../src/services/originBindings.mjs';
+import { createOriginBinding, archiveOriginBinding, bindingRecordsFromStore, assessOriginReachability,
+  currentOriginBindingAuthorization, validateOriginBindingForExecution, validateOriginBindingForRun } from '../../src/services/originBindings.mjs';
+import { originBindingAuthority, resolveOriginLockdownBinding } from '../../src/lib/originLockdownResolution.mjs';
+import { historyReadModel } from '../../src/services/protectionProfile.mjs';
+import { listPendingProbeJobsForWorker, reserveProbeExecution } from '../../src/services/probeCoordinator.mjs';
 import { finalizeTestRun, startTestRun } from '../../src/services/testRuns.mjs';
 import { getStore } from '../../src/store.mjs';
 import { freshStore } from '../helpers/reset.mjs';
@@ -572,5 +576,141 @@ describe('stamped run expected behavior snapshot at finalization', () => {
       (error) => error instanceof BoundRunScopeMissingError,
       'even without signing inputs the bound record fails closed',
     );
+  });
+});
+
+function executionFixture(side = 'origin') {
+  const tenant = 'ten_origin_grant';
+  const origin = { id: 'origin', tenant_id: tenant, target_group_id: 'group', kind: 'ip', value: '93.184.216.34' };
+  const protectedTarget = { id: 'protected', tenant_id: tenant, target_group_id: 'group', kind: 'fqdn', value: 'owned.example',
+    declaration_json: { allowed_scope: { ports: [8443], paths: ['/health'] } } };
+  const binding = { id: 'binding', tenant_id: tenant, status: 'active', origin_target_id: origin.id,
+    protected_target_id: protectedTarget.id, host: 'owned.example', sni: 'owned.example', port: 8443, path: '/health', created_at: DECLARED };
+  const scope = { host: binding.host, sni: binding.sni, port: binding.port, path: binding.path };
+  const authority = originBindingAuthority(binding, origin, protectedTarget);
+  const target = side === 'origin' ? origin : protectedTarget;
+  const checkId = side === 'origin' ? 'origin.direct_reachability.safe' : 'nfw.origin_lockdown.safe';
+  const run = { id: 'run', tenant_id: tenant, target_id: target.id, check_id: checkId,
+    origin_binding_id: side === 'origin' ? binding.id : null,
+    provenance_json: side === 'origin' ? { origin_scope: scope, origin_authority: authority }
+      : { origin_lockdown: { ...scope, binding_id: binding.id, address: origin.value, authority } } };
+  const job = { id: 'job', tenant_id: tenant, test_run_id: run.id, target_id: target.id, check_id: checkId,
+    target: structuredClone(target), probe_profile: { kind: 'host_sni_bypass', ...(side === 'protected' ? { direct_ip: origin.value } : {}) },
+    constraints: { origin_scope: structuredClone(scope), origin_authority: structuredClone(authority) } };
+  const records = { targets: [origin, protectedTarget], targetVerifications: [origin, protectedTarget].map((row) => ({
+    id: `proof_${row.id}`, tenant_id: tenant, target_id: row.id, state: 'dns_verified', source_kind: 'dns_txt',
+    source_ref: {}, transitioned_at: DECLARED,
+  })) };
+  return { binding, run, job, records, origin, protectedTarget, scope };
+}
+
+for (const side of ['origin', 'protected']) {
+  describe(`${side}-side binding grant current authority`, () => {
+    it('requires both live targets, both current proofs and exact signed immutable scope', () => {
+      assert.equal(validateOriginBindingForExecution(executionFixture(side)).ok, true);
+      for (const [label, mutate] of [
+        ['archived binding', (f) => { f.binding.status = 'archived'; }],
+        ['deleted origin', (f) => { f.origin.deleted_at = DECLARED; }],
+        ['archived protected target', (f) => { f.protectedTarget.archived_at = DECLARED; }],
+        ['deleted protected target', (f) => { f.protectedTarget.deleted_at = DECLARED; }],
+        ['origin missing', (f) => { f.records.targets = [f.protectedTarget]; }],
+        ['protected missing', (f) => { f.records.targets = [f.origin]; }],
+        ['origin address drift', (f) => { f.origin.value = '93.184.216.35'; }],
+        ['origin descriptor port drift', (f) => { f.origin.port = 9443; }],
+        ['protected host drift', (f) => { f.protectedTarget.value = 'other.example'; }],
+        ['protected descriptor protocol drift', (f) => { f.protectedTarget.protocol = 'http'; }],
+        ['declaration port drift', (f) => { f.protectedTarget.declaration_json.allowed_scope.ports = [443]; }],
+        ['declaration path drift', (f) => { f.protectedTarget.declaration_json.allowed_scope.paths = ['/other']; }],
+        ['signed Host drift', (f) => { f.job.constraints.origin_scope.host = 'other.example'; }],
+        ['signed SNI drift', (f) => { f.job.constraints.origin_scope.sni = 'other.example'; }],
+        ['signed port drift', (f) => { f.job.constraints.origin_scope.port = 443; }],
+        ['signed path drift', (f) => { f.job.constraints.origin_scope.path = '/other'; }],
+        ['missing signed authority', (f) => { delete f.job.constraints.origin_authority; }],
+        ['cross tenant counterpart', (f) => { f.protectedTarget.tenant_id = 'other'; }],
+        ['swapped binding', (f) => { f.binding.id = 'other'; }],
+      ]) {
+        const fixture = executionFixture(side); mutate(fixture);
+        assert.ok(validateOriginBindingForExecution(fixture).error, label);
+      }
+      for (const targetId of ['origin', 'protected']) {
+        for (const state of ['unverified', 'pending', 'agent_verified']) {
+          const fixture = executionFixture(side);
+          fixture.records.targetVerifications.push({ tenant_id: fixture.binding.tenant_id, target_id: targetId,
+            state, source_kind: 'manual_override', source_ref: {}, transitioned_at: '2026-10-01T00:00:00.000Z' });
+          assert.equal(validateOriginBindingForExecution(fixture).error, 'ownership_not_verified', `${targetId} ${state}`);
+        }
+      }
+    });
+  });
+}
+
+describe('binding lifecycle and exact historical workspace evidence', () => {
+  it('rechecks authority after signing and leasing, and archival cancels queued work without deleting history', () => {
+    freshStore();
+    const { origin, protectedTarget, binding } = boundFixture();
+    const started = startTestRun(CONTEXT, { check_id: 'origin.direct_reachability.safe', target_group_id: GROUP,
+      target_id: origin.id, origin_binding_id: binding.id }, SIGNED_WORKER);
+    assert.equal(started.error, undefined, JSON.stringify(started));
+    const worker = { tenantId: TENANT, workerId: 'worker' };
+    listPendingProbeJobsForWorker(worker, SIGNED_WORKER);
+    const job = getStore().probeJobs.find((row) => row.test_run_id === started.run.id);
+    const prior = structuredClone(protectedTarget.declaration_json);
+    protectedTarget.declaration_json.allowed_scope.paths = ['/other'];
+    assert.equal(reserveProbeExecution(worker, job.id, { leased_at: job.leased_at }).error, 'probe_execution_not_authorized');
+    assert.equal(job.worker_metadata.execution_reservation, undefined);
+    protectedTarget.declaration_json = prior;
+    const archived = archiveOriginBinding(CONTEXT, binding.id);
+    assert.equal(archived.status, 'archived');
+    assert.equal(getStore().testRuns.find((row) => row.id === started.run.id).status, 'cancelled');
+    assert.equal(job.status, 'cancelled');
+    assert.equal(reserveProbeExecution(worker, job.id, { leased_at: job.leased_at }).error, 'job_not_open');
+    assert.deepEqual(started.run.provenance_json.origin_scope.path, '/health');
+  });
+
+  it('protected resolver requires the protected proof independently of the origin proof', () => {
+    const fixture = executionFixture('protected');
+    const input = { check: { check_id: 'nfw.origin_lockdown.safe', probe_profile: { kind: 'host_sni_bypass' } },
+      target: fixture.protectedTarget, tenantId: fixture.binding.tenant_id, bindings: [fixture.binding], records: fixture.records };
+    assert.equal(resolveOriginLockdownBinding(input).ok, true);
+    fixture.records.targetVerifications = fixture.records.targetVerifications.filter((row) => row.target_id === fixture.origin.id);
+    assert.equal(resolveOriginLockdownBinding(input).proof, 'protected');
+  });
+
+  it('both views resolve the same hostname-side exact evidence, never a sibling binding or scope, despite proof revocation', () => {
+    const fixture = executionFixture('protected');
+    const { binding, run, records } = fixture;
+    const observation = { id: 'observation', tenant_id: binding.tenant_id, target_id: binding.protected_target_id,
+      origin_binding_id: binding.id, test_run_id: run.id, check_id: run.check_id, family: 'origin_hosting',
+      attempt_class: 'successful', producer_kind: 'signed_probe', source_kind: 'validation_run', outcome: 'reachable',
+      observed_at: '2026-10-01T00:00:00.000Z', source_completed_at: '2026-10-01T00:00:01.000Z' };
+    const project = (targetId) => historyReadModel({ observations: targetId === observation.target_id ? [observation] : [],
+      bindingObservations: [observation], bindings: [binding], records, runs: [run], targetId }).origin_bindings[0];
+    assert.deepEqual(project(binding.origin_target_id).reachability, project(binding.protected_target_id).reachability);
+    assert.equal(project(binding.origin_target_id).reachability.test_run_id, run.id);
+    assert.equal(project(binding.origin_target_id).currently_authorized, true);
+    records.targetVerifications = [];
+    const historical = project(binding.protected_target_id);
+    assert.equal(historical.currently_authorized, false);
+    assert.equal(historical.reachability.status, 'reachable');
+    assert.equal(historical.reachability.historical_evidence_valid, true);
+    binding.status = 'archived';
+    assert.equal(project(binding.origin_target_id).reachability.observation_id, observation.id);
+    for (const mutate of [
+      (copy) => { copy.origin_binding_id = 'sibling'; },
+      (copy) => { copy.test_run_id = 'unrelated_newer'; },
+      (copy) => { copy.target_id = 'sibling_host'; },
+      (copy) => { copy.producer_kind = 'simulation'; },
+    ]) {
+      const copy = structuredClone(observation); mutate(copy);
+      assert.equal(assessOriginReachability(binding, [copy], null, { runs: [run] }).observation_id, null);
+    }
+    for (const key of ['host', 'sni', 'port', 'path']) {
+      const copy = structuredClone(run);
+      copy.provenance_json.origin_lockdown[key] = key === 'port' ? 443 : 'different';
+      assert.equal(assessOriginReachability(binding, [observation], null, { runs: [copy] }).observation_id, null, key);
+    }
+    assert.equal(currentOriginBindingAuthorization(binding, records).verified, false);
+    assert.equal(validateOriginBindingForRun({ binding }).error, 'unknown_origin_binding');
+    assert.equal(bindingRecordsFromStore(getStore(), TENANT).targets.some((row) => row.deleted_at), false);
   });
 });

@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { CHECK_CATALOG, checkAdditionalInputReason, checkRequiresAdditionalInput, getCheckById } from '../../src/contracts/checks.mjs';
+import { CHECK_CATALOG, checkAdditionalInputReason, checkRequiresAdditionalInput, customerSelectableChecks, getCheckById } from '../../src/contracts/checks.mjs';
 import { normalizeControlDeclarations } from '../../src/contracts/controlDeclarations.mjs';
 import {
+  DECLARATION_SECTION_GROUPS,
   checkPrerequisite,
   controlsHref,
+  declarationSectionStates,
   declarationPresent,
   declarationSummary,
   declarationsDraftSignature,
@@ -16,7 +18,7 @@ import {
   targetRunnableIndex,
   validateDeclarationsDraft,
 } from '../../apps/web/react/src/lib/control-declarations.mjs';
-import { assessmentChecks, runAllChecks } from '../../apps/web/react/src/lib/domain-checks.mjs';
+import { assessmentChecks, runAllChecks, targetCheckAvailability, withTargetRunnableChecks } from '../../apps/web/react/src/lib/domain-checks.mjs';
 
 const TARGET = { id: 'tgt_demo', kind: 'fqdn', value: 'shop.example.test' };
 const STORED = {
@@ -179,10 +181,76 @@ describe('check prerequisites', () => {
     assert.ok(!runAllChecks(CHECK_CATALOG, TARGET, { declarations: { version: 1 }, perspectiveCount: 1 }).some((entry) => entry.check_id === 'waf.rate_limit_canary.validation'));
   });
 
+  it('includes every eligible full-catalog check in the evaluation after target declarations are satisfied', () => {
+    const defaultChecks = customerSelectableChecks(CHECK_CATALOG);
+    for (const declarations of [{ version: 1 }, { ...STORED, perspectives: { allowlisted_perspective_ids: [], denied_perspective_ids: ['default'] } }]) {
+      const targetCatalog = CHECK_CATALOG.map((entry) => served(entry, declarations, 2));
+      const context = { declarations, perspectiveCount: 2, serverRunnableIndex: targetRunnableIndex(targetCatalog) };
+      const expected = targetCatalog.filter((entry) => targetCheckAvailability(entry, TARGET, context).state === 'ready');
+      const selected = assessmentChecks(withTargetRunnableChecks(defaultChecks, targetCatalog), TARGET, context);
+      assert.deepEqual(selected.map((entry) => entry.check_id).sort(), expected.map((entry) => entry.check_id).sort(), 'no eligible definition may be display-only');
+      assert.equal(new Set(selected.map((entry) => entry.check_id)).size, selected.length);
+      assert.ok(selected.some((entry) => entry.evidence_tier === 'E2'), 'observations run too, without readiness credit');
+      if (declarations.network_policy) assert.ok(selected.some((entry) => entry.check_id === 'l3.forbidden_udp_port.safe'), 'the server-approved UDP deny check must be evaluated');
+      else assert.ok(!selected.some((entry) => entry.check_id === 'l3.forbidden_udp_port.safe'), 'missing declarations still block dispatch');
+    }
+  });
+
   it('agrees with the server on which declarations are present', () => {
     assert.equal(declarationPresent(STORED, 'waf.rate_limit_canary'), true);
     assert.equal(declarationPresent({ origin: { lockdown_expected: false } }, 'origin.lockdown_expected'), false);
     assert.equal(declarationPresent({ perspectives: { allowlisted_perspective_ids: [], denied_perspective_ids: [] } }, 'perspectives'), false);
     assert.equal(controlsHref('tgt 1', 'network'), '#target-detail?id=tgt+1&tab=controls&section=network');
+  });
+});
+
+describe('control declarations section overview', () => {
+  it('groups every editor section exactly once', () => {
+    const grouped = DECLARATION_SECTION_GROUPS.flatMap((group) => group.sections);
+    const states = declarationSectionStates(null).map((state) => state.id);
+    assert.deepEqual([...grouped].sort(), [...states].sort());
+    assert.equal(new Set(grouped).size, grouped.length);
+  });
+
+  it('reports nothing declared and nothing edited for an empty document', () => {
+    const states = declarationSectionStates(null, draftFromDeclarations(null));
+    assert.ok(states.every((state) => !state.declared && !state.edited));
+    assert.equal(states.find((state) => state.id === 'waf_action').detail, 'Catalog default');
+    assert.equal(states.find((state) => state.id === 'marker_paths').detail, 'Root path only');
+  });
+
+  it('counts saved sections from the stored document with plain details', () => {
+    const states = Object.fromEntries(declarationSectionStates(STORED, draftFromDeclarations(STORED)).map((state) => [state.id, state]));
+    assert.ok(Object.values(states).every((state) => state.declared && !state.edited));
+    assert.equal(states.network.detail, '2 rules, 2 denied');
+    assert.equal(states.connection_limits.detail, '1 limit');
+    assert.equal(states.perspectives.detail, '1 allowed, 0 denied');
+    assert.equal(states.waf_signature.detail, 'Header x-blocked-by');
+    assert.equal(states.waf_action.detail, 'Block');
+    assert.equal(states.rate_limit.detail, 'GET /rl-canary');
+    assert.equal(states.origin.detail, 'CDN traffic only');
+    assert.equal(states.canary_sink.detail, 'URL declared');
+    assert.ok(!JSON.stringify(states).includes('edge-waf'), 'the block header value never appears in the overview');
+  });
+
+  it('treats an origin declared as directly reachable as declared', () => {
+    const origin = declarationSectionStates({ origin: { lockdown_expected: false } }).find((state) => state.id === 'origin');
+    assert.equal(origin.declared, true);
+    assert.equal(origin.detail, 'Direct access by design');
+  });
+
+  it('marks only the sections a draft changes as edited, without counting unsaved values as declared', () => {
+    const draft = draftFromDeclarations(STORED);
+    draft.block_header_value = 'other-value';
+    draft.connection_limits = [];
+    const states = Object.fromEntries(declarationSectionStates(STORED, draft).map((state) => [state.id, state]));
+    assert.deepEqual(Object.values(states).filter((state) => state.edited).map((state) => state.id).sort(), ['connection_limits', 'waf_signature']);
+    assert.equal(states.connection_limits.declared, true, 'declared reflects the saved document until the draft is saved');
+
+    const fresh = draftFromDeclarations(null);
+    fresh.network_policy = [{ ...emptyNetworkRule(), port: '22' }];
+    const added = declarationSectionStates(null, fresh).find((state) => state.id === 'network');
+    assert.equal(added.edited, true);
+    assert.equal(added.declared, false);
   });
 });

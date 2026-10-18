@@ -57,7 +57,7 @@ export const CANARY_NONCE_REQUEST_HEADER = 'x-astranull-nonce';
 export const CANARY_ECHO_RESPONSE_HEADER = 'x-astranull-canary-echo';
 export const MARKER_ECHO_RESPONSE_HEADER = 'x-astranull-marker-echo';
 
-export const WAF_GRADING_VERSION = 'waf-grading.v2';
+export const WAF_GRADING_VERSION = 'waf-grading.v3';
 export const SIGNATURE_CORPUS_VERSION = 'waf-signatures.2026-10-13.2';
 export const WAF_RESPONSE_OUTCOMES = Object.freeze([
   'blocked', 'challenged', 'allowed', 'redirected', 'inconclusive', 'error',

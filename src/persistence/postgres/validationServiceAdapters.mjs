@@ -65,7 +65,9 @@ import {
 } from '../../lib/findingList.mjs';
 import { authorizeFindingWrite, planFindingPatch, planFixVerifiedFromRetest, computeDenyRulesDigest } from '../../lib/findingLifecycle.mjs';
 import { isProtectionValidationFinding, protectionRetestContext, protectionRetestRunScopeMatches } from '../../lib/protectionValidationFindings.mjs';
-import { currentOriginProof, deriveBindingScope, validateOriginBindingForRun } from '../../services/originBindings.mjs';
+import { currentOriginProof, deriveBindingScope, validateOriginBindingForRun, historicalOriginBindingForRun } from '../../services/originBindings.mjs';
+import { originIdentityScenario, buildOriginIdentityPairSnapshot } from '../../lib/originIdentityPair.mjs';
+import { reviewedOriginIdentityPair } from '../../lib/entryPathComparison.mjs';
 import { simulateProbeResult } from '../../services/probeStub.mjs';
 import { buildTargetRuleCoverage } from '../../services/ruleCoverage.mjs';
 import { buildVerdictReplay } from '../../lib/verdictReplay.mjs';
@@ -242,8 +244,9 @@ function isCollectionWindowExpired(run, nowMs) {
 function hasExternalProbeEvidence(run, events) {
   if (run.probe_external_result != null && run.probe_external_result !== '') return true;
   const nonce = run.correlation?.nonce_hash;
+  if (typeof nonce !== 'string' || !nonce.length) return false;
   return events.some(
-    (e) => e.test_run_id === run.id
+    (e) => e.test_run_id === run.id && e.tenant_id === run.tenant_id
       && e.signal_type === 'probe_result'
       && isTrustedProducerEvent(e)
       && e.nonce_hash === nonce,
@@ -252,9 +255,10 @@ function hasExternalProbeEvidence(run, events) {
 
 function findProbeEvent(run, events) {
   const nonce = run.correlation?.nonce_hash;
+  if (typeof nonce !== 'string' || !nonce.length) return undefined;
   return events.find(
     (e) =>
-      e.test_run_id === run.id
+      e.test_run_id === run.id && e.tenant_id === run.tenant_id
       && e.signal_type === 'probe_result'
       && isTrustedProducerEvent(e)
       && e.nonce_hash === nonce,
@@ -306,9 +310,7 @@ function hasStoredControlDeclarations(stored) {
 }
 
 function runOriginBindingRef(run) {
-  if (run?.origin_binding_id) return { id: run.origin_binding_id, status: 'active' };
-  const lockdownBindingId = run?.provenance_json?.origin_lockdown?.binding_id;
-  return typeof lockdownBindingId === 'string' && lockdownBindingId ? { id: lockdownBindingId, status: 'active' } : null;
+  return historicalOriginBindingForRun(run);
 }
 
 function orchestrationNotWired() {
@@ -1095,7 +1097,7 @@ export function createPostgresValidationServices(repositories, options = {}) {
   async function finalizeOpsReadinessVerdict(ctx, run, probe, options = {}) {
     const repositoryOptions = options.client ? { client: options.client } : {};
     const events = await validationEvidence.listRunEvents(ctx, run.id, {
-      limit: 1000,
+      signalType: 'probe_result', limit: 1000,
       ...repositoryOptions,
     });
     const existingVerdict = await validationEvidence.getVerdictForRun(
@@ -1112,7 +1114,9 @@ export function createPostgresValidationServices(repositories, options = {}) {
       opsValidationOk: probe.metadata?.ops_validation_ok,
     });
 
-    const evidenceIds = events.map((e) => e.id);
+    const evidenceIds = events
+      .filter((event) => event.id === probe.event_id && event.test_run_id === run.id && event.tenant_id === run.tenant_id)
+      .map((event) => event.id);
 
     const nowIso = nowFn().toISOString();
     const verdictRecord = {
@@ -1152,7 +1156,7 @@ export function createPostgresValidationServices(repositories, options = {}) {
   async function finalizeVerdictIfReady(ctx, run, options = {}) {
     const repositoryOptions = options.client ? { client: options.client } : {};
     const events = await validationEvidence.listRunEvents(ctx, run.id, {
-      limit: 1000,
+      signalType: 'probe_result', limit: 1000,
       ...repositoryOptions,
     });
     const existingVerdict = await validationEvidence.getVerdictForRun(
@@ -1180,13 +1184,13 @@ export function createPostgresValidationServices(repositories, options = {}) {
       return null;
     }
 
-    const externalResult = run.probe_external_result ?? probeEvent?.metadata?.external_result;
+    const probeMetadata = probeEvent?.metadata ?? probeEvent?.metadata_json ?? {};
+    const externalResult = probeMetadata.external_result ?? 'not_run';
     // Stamped runs finalize against the immutable start snapshot; legacy unstamped runs keep
     // the historical catalog fallback (see verdictExpectedBehaviorForRun).
     const expectedBehavior = verdictExpectedBehaviorForRun(run);
     const probeKind = check?.probe_profile?.kind ?? null;
     const probeIoObserved = probeEventHasProbeIo(probeEvent);
-    const probeMetadata = probeEvent?.metadata ?? probeEvent?.metadata_json ?? {};
     run.probe_metadata = probeMetadata;
     const originBinding = runOriginBindingRef(run);
     const targetDeclarations = await storedTargetDeclarations(ctx, run.target_id);
@@ -1212,7 +1216,8 @@ export function createPostgresValidationServices(repositories, options = {}) {
       checkId: run.check_id,
     });
 
-    const evidenceIds = events.map((event) => event.id);
+    // Cite the same accepted result the classifier evaluated, never run activity.
+    const evidenceIds = probeEvent ? [probeEvent.id] : [];
 
     const nowIso = nowFn().toISOString();
     const verdictRecord = {
@@ -1900,6 +1905,11 @@ export function createPostgresValidationServices(repositories, options = {}) {
       }
       const originBindingId = typeof body.origin_binding_id === 'string' ? body.origin_binding_id.trim() : '';
       let originScopeSnapshot = null;
+      let originAuthoritySnapshot = null;
+      let originIdentityPairSnapshot = null;
+      if (originIdentityScenario(check) && (!originBindingId || !dispatchOptions.reviewedComparison)) {
+        return { error: 'origin_identity_review_required', status: 409 };
+      }
       if (originBindingId) {
         if (typeof validationEvidence.loadOriginBindingProof !== 'function') {
           return { error: 'origin_binding_unavailable', status: 503 };
@@ -1927,6 +1937,14 @@ export function createPostgresValidationServices(repositories, options = {}) {
         // so signed job creation — including repair/recovery rebuilds — signs the approved
         // Host/SNI/port/path exactly.
         originScopeSnapshot = bindingDecision.scope;
+        originAuthoritySnapshot = bindingDecision.authority;
+        if (originIdentityScenario(check)) {
+          const paired = buildOriginIdentityPairSnapshot({ check, binding: loaded.binding, originTarget: target,
+            protectedTarget, scope: bindingDecision.scope, records, tenantId: ctx.tenantId,
+            reviewedPair: reviewedOriginIdentityPair(dispatchOptions.reviewedComparison, check, target, originBindingId) });
+          if (paired.error) return paired;
+          originIdentityPairSnapshot = paired.snapshot;
+        }
       }
       const opsReadiness = isOpsReadinessProbeKind(check);
       const stamp = deriveRunEvidenceStamp(check, body, {
@@ -1979,6 +1997,8 @@ export function createPostgresValidationServices(repositories, options = {}) {
         provenance_json: originScopeSnapshot
           ? {
             ...(stamp.provenance_json ?? {}),
+            origin_authority: originAuthoritySnapshot,
+            ...(originIdentityPairSnapshot ? { origin_identity_pair: originIdentityPairSnapshot } : {}),
             origin_scope: {
               host: originScopeSnapshot.host,
               sni: originScopeSnapshot.sni,

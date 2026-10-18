@@ -238,7 +238,7 @@ describe('R2 item 7: rule coverage customer copy is plain language', () => {
 });
 
 describe('R2 item 8: custom canary rollup keeps each member answer', () => {
-  it('adds rolled_up_pairs without changing pair counts or scoring', () => {
+  it('excludes unbound custom canaries without manufacturing a scored rollup', () => {
     const target = { id: 'tgt_r2', tenant_id: 'ten_demo', target_group_id: 'tg_1', kind: 'fqdn', value: 'app.r2.example.com' };
     const canaries = CHECK_CATALOG.filter((check) => check.rule_family === 'custom_canary' && check.supported_targets.includes('fqdn')).slice(0, 2);
     assert.equal(canaries.length, 2);
@@ -252,18 +252,12 @@ describe('R2 item 8: custom canary rollup keeps each member answer', () => {
     }];
     const coverage = coverageFrom({ target, observations, catalog: canaries });
     assert.equal(coverage.coverage.pairs.length, 2);
-    assert.equal(coverage.coverage.custom_canary_rollups.length, 1);
-    assert.equal(coverage.coverage.applicable_count, 1);
-    const row = coverage.coverage.custom_canary_rollups[0];
-    assert.ok(row);
-    assert.deepEqual(row.rolled_up_check_ids.sort(), [first.check_id, second.check_id].sort());
-    const members = Object.fromEntries(row.rolled_up_pairs.map((member) => [member.check_id, member]));
-    assert.deepEqual(Object.keys(members).sort(), [first.check_id, second.check_id].sort());
-    assert.deepEqual(members[first.check_id], { check_id: first.check_id, last_run_id: null, state: 'not_run', fresh: false, version_gap: null, verdict: null, observed_at: null });
-    assert.equal(members[second.check_id].state, 'partial');
-    assert.equal(members[second.check_id].version_gap, 'signature_corpus_version_mismatch');
-    assert.equal(members[second.check_id].verdict, 'protected');
-    assert.equal(members[second.check_id].observed_at, observedAt);
+    assert.equal(coverage.coverage.custom_canary_rollups.length, 0);
+    assert.equal(coverage.coverage.applicable_count, 0);
+    assert.equal(coverage.coverage.passed_count, 0);
+    assert.deepEqual(coverage.coverage.pairs.map((pair) => pair.check_id).sort(), [first.check_id, second.check_id].sort());
+    assert.ok(coverage.coverage.pairs.every((pair) => pair.state === 'excluded' && pair.exclusion_reason === 'observation_only'));
+    assert.equal(observations[0].verdict.verdict, 'protected', 'retained publication is not rewritten');
   });
 });
 

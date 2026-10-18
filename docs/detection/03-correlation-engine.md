@@ -12,6 +12,18 @@ There are no customer agents, environments, or internal packet observers. Confid
 
 Implementation: `src/services/correlation.mjs` (`correlateExternalOnlyVerdict`).
 
+## Current proof and comparison contract (2026-10-15)
+
+[ADR-0030](../adr/0030-verdict-proof-and-correlated-exchange-evidence.md) separates verdict publication from live assurance. Both publishers cite the exact accepted result consumed by correlation, never informational activity. Live coverage additionally requires every citation to resolve to same-tenant/run, nonce-bound signed results with valid observation and ingestion availability. Empty citations and invalid/unresolved citations have different diagnostics and no live credit. Historical publications are immutable; no verifier relaxation or automatic repair/retest is introduced.
+
+Current WAF grading is `waf-grading.v3`. Class-marker and outside-in comparisons use `marker-comparison-v5`: planned, completed and graded marker legs are separate, every planned leg must complete, at least one must be graded, and baseline/trailing-control health must hold. A completed ungraded 404 can coexist with a conclusive tested placement; an aborted required leg cannot. Existing two-leg evasion comparisons retain their distinct v4 contract. Budget-limited paths are not described as fully tested.
+
+Opaque custom-canary profiles have no installed exact-token/placement binding in the current declaration contract. They therefore yield setup-required observations, not confirmed failed customer rules, managed-rule assurance or readiness. Existing Controls declarations cannot enable a binding this release does not implement. Managed class markers and the actual method-policy producer keep their separate semantics. Method-policy verdict capability does not imply readiness credit.
+
+A 3xx is comparable only when both Locations are present and comparable. A changed or missing Location is inconclusive; no redirect is followed. A comparable unchanged redirect means only that this edge hop did not block the marker, never that the origin handled it. Specialized marker/method/evasion metadata is checked against actual result state, attested I/O, completeness and control health before a conclusive claim.
+
+The all-ID audit and finite branch coverage are separate ledgers. See [catalog index](../implementation/verified-capability-audit-catalog-index.md) and [remediation](../implementation/verified-capability-audit-remediation.md). Local invocation receipts do not certify every fault branch or all possible target behavior.
+
 ## Inputs
 
 | Input | Source |
@@ -32,7 +44,7 @@ Correlation does **not** consume agent observation, agent no-observation, agent 
 |---|---|
 | `test_run_id` | Parent run. |
 | `check_id` / `check_version` | Catalog identity. |
-| `grading_version` | `waf-grading.v2` on WAF marker results. |
+| `grading_version` | `waf-grading.v3` on current WAF marker results. Historical v2 remains immutable. |
 | `signature_corpus_version` | `waf-signatures.2026-10-13.2` on WAF marker results. |
 | `target_id` | Target under test. |
 | `nonce_hash` | Run correlation nonce (readiness proof matching). |
@@ -44,6 +56,7 @@ Correlation does **not** consume agent observation, agent no-observation, agent 
 Kinds that may produce a control verdict live in `VERDICT_CAPABLE_PROBE_KINDS` (`src/lib/probeEvidenceTiers.mjs`):
 
 - Semantic-safe: `ops_readiness`, `dns_axfr_leak`, `outside_in_waf_scan`, `waf_class_marker_probe`, `waf_evasion_marker_probe`, `rate_limit_canary_probe`.
+- Actual HTTP-method policy: `waf_method_policy_probe` (E2 verdict-capable, no readiness credit).
 - Network / origin (violation-only for NFW and origin lockdown): `tcp_connect`, `udp_probe`, `port_scan_bounded`, `reflection_service_probe`, `connection_limit_probe`, `host_sni_bypass`.
 
 Network kinds above also remain on `OBSERVATION_ONLY_PROBE_KINDS`. Correlation runs the NFW / origin violation path **first**. If that path does not fire, the kind falls through to an observation-only `inconclusive` result. `protected` is never emitted for those NFW kinds.
@@ -109,7 +122,7 @@ Class-marker and evasion probes send a trailing benign request after marker legs
 
 ### Per-placement grading
 
-Each placement (query, path, header, or scanner User-Agent) is graded alone. A 404 or unsigned leg is excluded (`isGradedLeg`); it does not void the others. At least one graded leg is required for a complete marker comparison (`marker-comparison-v4`).
+Each placement (query, path, header, or scanner User-Agent) is graded alone. A completed 404 or unsigned leg is excluded (`isGradedLeg`); it does not void the others. A complete class-marker comparison (`marker-comparison-v5`) requires every planned leg completed, at least one graded leg, and healthy controls. Counts retain completed ungraded legs instead of redefining delivery from graded outcomes. Evasion retains its exact two-leg `marker-comparison-v4` contract.
 
 Legs are shuffled (`leg_order`). Every request carries cache-buster `an_cb`.
 
@@ -119,11 +132,11 @@ Legs are shuffled (`leg_order`). Every request carries cache-buster `an_cb`.
 
 | `assurance_scope` | Marker classes | What a `protected` result proves |
 |---|---|---|
-| `custom_canary_rule` | Opaque tokens (SSRF, XXE, SSTI, JNDI/LDAP token without `${`, deserialization prefix, smuggling token, …) | A customer rule matched AstraNull’s inert token on the tested placements/paths. |
+| `custom_canary_rule` | Opaque tokens (SSRF, XXE, SSTI, JNDI/LDAP token without `${`, deserialization prefix, smuggling token, …) | No protected/exposed rule claim: current declarations do not bind installed exact tokens and placements. Setup-required observation only. |
 | `managed_rule_marker` | `sqli`, `xss`, `path_traversal`, `scanner_user_agent` | The plain inert class token that managed OWASP-style rulesets recognise was enforced. |
 | `inert_marker_rule_action_only` | Evasion probes | The inspector still blocked the transformed inert marker (or a normalization gap was observed). |
 
-Custom-canary `exposed` is severity `low`. Managed-marker `exposed` is severity `medium`. Partial enforcement is `exposed` at `low` and names unenforced placements.
+Custom-canary observations create no failed-rule finding. Managed-marker `exposed` is severity `medium`. Partial managed enforcement is `exposed` at `low` and names unenforced placements.
 
 Lookup, external-entity, URL-fetch, template-evaluation, and property-assignment marker forms are absent. There is no self-serve RFI, Log4Shell `${…}`, or Spring4Shell marker.
 
@@ -203,7 +216,7 @@ Generic `rate_limit_sequence` checks remain observation-only.
 ## What an outside-in probe can prove
 
 - A named WAF signature (vendor or declared header/status) appeared on a marker request from this source.
-- A custom canary token was blocked on the tested placements.
+- A custom inert token received a recorded response on tested placements, without establishing an installed rule or failed rule.
 - A managed-rule inert token was blocked, or a supported evasion transform was allowed after that token was blocked.
 - A declared TCP/UDP deny was violated by a handshake or protocol-validated reply from a non-CDN peer.
 - A declared origin binding (with `origin.lockdown_expected`) answered 2xx with application identity from a non-CDN source.

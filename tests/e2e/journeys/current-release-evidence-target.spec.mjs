@@ -783,11 +783,12 @@ test.describe('current release: target history, origin relations and retest line
     const item = section.locator('.td-origin-item');
     await expect(item).toContainText('203.0.113.10');
     await expect(item).toContainText('Declared relation, no lockdown claim');
-    await expect(item).toContainText('Results under this relation are recorded on the origin target.');
+    await expect(item).toContainText('No finished origin check has run under this relation yet.');
+    await expect(item.getByRole('button', { name: 'Inspect recorded origin evidence' })).toHaveCount(0);
 
     await item.getByRole('button', { name: 'Archive relation' }).click();
     await page.getByRole('dialog', { name: 'Archive this origin relation?' }).getByRole('button', { name: 'Archive relation' }).click();
-    await expect(section).toContainText('1 archived relation kept for history.');
+    await expect(section.locator('details > summary').filter({ hasText: /^1 archived relation kept for history$/ })).toBeVisible();
     expect(writes.at(-1).path).toMatch(/^\/v1\/origin-bindings\/obind_[a-f0-9]+\/archive$/);
   });
 
@@ -867,7 +868,7 @@ test.describe('current release: target history, origin relations and retest line
     });
     await open(page, `target-detail?id=${ORIGIN_IP}`);
     const section = page.locator('section.td-origin-relations');
-    const item = section.locator('.td-origin-item').filter({ hasText: 'checkout.acme.com' });
+    const item = section.locator('.td-origin-item').filter({ has: page.getByRole('link', { name: 'checkout.acme.com', exact: true }) });
     await expect(item).toContainText('No finished origin check has run under this relation yet.');
     const review = item.getByRole('button', { name: 'Review origin check' });
     await expect(review).toBeDisabled();
@@ -901,7 +902,7 @@ test.describe('current release: target history, origin relations and retest line
     await captureRunStarts(page, starts, { run: { status: 'planned' }, jobs_dispatched: 0 });
     await open(page, `target-detail?id=${ORIGIN_IP}`);
     const section = page.locator('section.td-origin-relations');
-    const item = section.locator('.td-origin-item').filter({ hasText: 'checkout.acme.com' });
+    const item = section.locator('.td-origin-item').filter({ has: page.getByRole('link', { name: 'checkout.acme.com', exact: true }) });
     await item.getByRole('combobox', { name: 'Approved origin check' }).selectOption('origin.direct_bypass.safe');
     await item.getByRole('button', { name: 'Review origin check' }).click();
     await page.getByRole('dialog', { name: 'Start the origin check under this relation?' }).getByRole('button', { name: 'Start origin check' }).click();
@@ -920,7 +921,7 @@ test.describe('current release: target history, origin relations and retest line
     await captureRunStarts(page, starts, { run: { id: 'run_wrong_check', target_id: ORIGIN_IP, check_id: 'other.check.safe', status: 'planned' } });
     await open(page, `target-detail?id=${ORIGIN_IP}`);
     const section = page.locator('section.td-origin-relations');
-    const item = section.locator('.td-origin-item').filter({ hasText: 'checkout.acme.com' });
+    const item = section.locator('.td-origin-item').filter({ has: page.getByRole('link', { name: 'checkout.acme.com', exact: true }) });
     await item.getByRole('combobox', { name: 'Approved origin check' }).selectOption('origin.direct_bypass.safe');
     await item.getByRole('button', { name: 'Review origin check' }).click();
     await page.getByRole('dialog', { name: 'Start the origin check under this relation?' }).getByRole('button', { name: 'Start origin check' }).click();
@@ -944,13 +945,13 @@ test.describe('current release: target history, origin relations and retest line
       return route.fulfill({ response, json: { ...body, checks: body.checks.filter(keep), coverage: { ...body.coverage, pairs: body.coverage.pairs.filter(keep) } } });
     });
     await open(page, `target-detail?id=${ORIGIN_IP}`);
-    const item = page.locator('section.td-origin-relations .td-origin-item').first();
+    const item = page.locator('section.td-origin-relations .td-origin-item').filter({ has: page.getByRole('link', { name: 'checkout.acme.com', exact: true }) });
     await expect(item.getByRole('button', { name: 'Review origin check' })).toBeDisabled();
     await expect(item).toContainText('No approved origin check is available for this target.');
 
     mode = 'error';
     await page.reload({ waitUntil: 'networkidle' });
-    const failed = page.locator('section.td-origin-relations .td-origin-item').first();
+    const failed = page.locator('section.td-origin-relations .td-origin-item').filter({ has: page.getByRole('link', { name: 'checkout.acme.com', exact: true }) });
     await expect(failed.getByRole('button', { name: 'Review origin check' })).toBeDisabled();
     await expect(failed).toContainText('Approved origin checks could not load');
     mode = 'none';
@@ -1037,11 +1038,11 @@ test.describe('current release: target history, origin relations and retest line
           expect(await serious('.td-panel'), `history ${width} ${theme}`).toEqual([]);
           expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth), `history overflow ${width} ${theme}`).toBeLessThanOrEqual(0);
           await open(page, `target-detail?id=${ids.targetId}`, { theme });
-          await expect(page.locator('section.td-origin-relations .td-origin-item')).toBeVisible();
+          await expect(page.locator('section.td-origin-relations .td-origin-item').filter({ has: page.getByText('Declared relation, no lockdown claim', { exact: true }) })).toBeVisible();
           await page.getByRole('button', { name: 'Declare origin relation' }).click();
           expect(await serious('section.td-origin-relations'), `origin relations ${width} ${theme}`).toEqual([]);
           await open(page, `target-detail?id=${ORIGIN_IP}`, { theme });
-          await expect(page.locator('section.td-origin-relations .td-origin-item')).toBeVisible();
+          await expect(page.locator('section.td-origin-relations .td-origin-item').filter({ has: page.getByText('Declared relation, no lockdown claim', { exact: true }) })).toBeVisible();
           expect(await serious('section.td-origin-relations'), `origin side ${width} ${theme}`).toEqual([]);
           await open(page, 'finding-detail?id=fnd_checkout_1', { theme });
           await expect(page.locator('tr.finding-artifact-row').first()).toBeVisible();

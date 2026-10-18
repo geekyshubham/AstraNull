@@ -33,6 +33,7 @@ describe('runtime auth config', () => {
     delete process.env.ASTRANULL_AUTH_MODE;
     delete process.env.ASTRANULL_PASSWORD_LOGIN_ENABLED;
     delete process.env.ASTRANULL_NO_PERSIST;
+    delete process.env.ASTRANULL_ORIGIN_CLUES_ENABLED_TENANTS;
     process.env.NODE_ENV = 'test';
     assert.equal(resolveAuthMode(), 'dev-headers');
     const cfg = loadRuntimeConfig();
@@ -52,6 +53,7 @@ describe('runtime auth config', () => {
     assert.deepEqual(cfg.featureFlags, {
       wafPostureEnabled: false,
       externalDiscoveryEnabled: false,
+      originCluesEnabledTenants: {},
       connectorsEnabledDefault: false,
       connectorsEnabledTenants: {},
       protectionValidationEnabledDefault: false,

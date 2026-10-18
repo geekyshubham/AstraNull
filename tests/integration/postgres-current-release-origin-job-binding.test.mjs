@@ -27,6 +27,9 @@ import { createCoreCatalogRepository } from '../../src/persistence/postgres/core
 import { createKillSwitchRepository } from '../../src/persistence/postgres/killSwitchRepository.mjs';
 import { createOwnershipVerificationRepository } from '../../src/persistence/postgres/ownershipVerificationRepository.mjs';
 import { createProbeJobRepository } from '../../src/persistence/postgres/probeJobRepository.mjs';
+import { recordProbeResultEdgeDetection } from '../../src/persistence/postgres/probeJobServiceAdapters.mjs';
+import { createPortalRevampRepository } from '../../src/persistence/postgres/portalRevampRepository.mjs';
+import { createPostgresRuntime } from '../../src/persistence/postgres/runtime.mjs';
 import { createTargetHistoryRepository } from '../../src/persistence/postgres/targetHistoryRepository.mjs';
 import { createPostgresTargetHistoryServices } from '../../src/persistence/postgres/targetHistoryServiceAdapters.mjs';
 import { withTenantContext } from '../../src/persistence/postgres/tenantContext.mjs';
@@ -201,6 +204,216 @@ async function seedRunRow(pool, runId, overrides = {}) {
         JSON.stringify(overrides.provenance_json ?? null),
       ],
     );
+  });
+}
+
+for (const side of ['origin', 'protected']) {
+  it(`postgres ${side}-side grant locks both current descriptors/proofs and exact immutable scope`, { timeout: 180_000 }, async (t) => {
+    const availability = await resolvePostgresHarnessAvailability(process.env);
+    if (!availability.available) return t.skip(availability.reason);
+    await withEphemeralPostgres(async (pool) => {
+      await ensureHarnessAppRole(pool);
+      await seedTenant(pool);
+      await withTenantContext(pool, TENANT, (client) => client.query(`UPDATE targets SET metadata_json =
+        jsonb_build_object('control_declarations', jsonb_build_object('version', 1, 'origin', jsonb_build_object('lockdown_expected', true)))
+        WHERE tenant_id = $1 AND id = $2`, [TENANT, PROTECTED]));
+      const { testRuns, history, repositories } = buildServices(pool);
+      const binding = await createBinding(history);
+      const body = side === 'origin' ? boundStartBody(binding.id) : {
+        check_id: 'nfw.origin_lockdown.safe', target_group_id: GROUP, target_id: PROTECTED,
+      };
+      const started = await testRuns.startTestRun(CTX, body, SIGNED_WORKER);
+      assert.equal(started.error, undefined, JSON.stringify(started));
+      const worker = { tenantId: TENANT, workerId: 'grant_worker' };
+      const [job] = await repositories.probeJobs.leasePendingJobsForWorker(worker, worker.workerId);
+      assert.ok(job, 'signed job is leased without making a socket');
+      const reserve = (client) => repositories.probeJobs.reserveExecution(worker, job, { id: 'fixture_reservation' }, { client });
+      await withTenantContext(pool, TENANT, async (client) => {
+        for (const [label, statement, params] of [
+          ['binding archive', `UPDATE origin_bindings SET status = 'archived', archived_at = now() WHERE tenant_id = $1 AND id = $2`, [TENANT, binding.id]],
+          ['origin soft delete', `UPDATE targets SET deleted_at = now() WHERE tenant_id = $1 AND id = $2`, [TENANT, ORIGIN]],
+          ['protected soft delete', `UPDATE targets SET deleted_at = now() WHERE tenant_id = $1 AND id = $2`, [TENANT, PROTECTED]],
+          ['policy archive', `UPDATE target_groups SET archived_at = now() WHERE tenant_id = $1 AND id = $2`, [TENANT, GROUP]],
+          ['origin destination drift', `UPDATE targets SET value = '93.184.216.35' WHERE tenant_id = $1 AND id = $2`, [TENANT, ORIGIN]],
+          ['protected Host drift', `UPDATE targets SET value = 'other.example' WHERE tenant_id = $1 AND id = $2`, [TENANT, PROTECTED]],
+          ['protected port drift', `UPDATE targets SET port = 9443 WHERE tenant_id = $1 AND id = $2`, [TENANT, PROTECTED]],
+          ['declared port drift', `UPDATE targets SET declaration_json = '{"allowed_scope":{"ports":[443],"paths":["/health"]}}' WHERE tenant_id = $1 AND id = $2`, [TENANT, PROTECTED]],
+          ['declared path drift', `UPDATE targets SET declaration_json = '{"allowed_scope":{"ports":[8443],"paths":["/other"]}}' WHERE tenant_id = $1 AND id = $2`, [TENANT, PROTECTED]],
+          ...[ORIGIN, PROTECTED].map((id) => [`${id} proof revoked`, `INSERT INTO target_verifications
+            (id,tenant_id,target_id,state,source_kind,source_ref,transitioned_at,transitioned_by,audit_entry_id)
+            VALUES ($1,$2,$3,'unverified','manual_override','{}',now(),'system','audit_fixture')`, [`revoked_${id}`, TENANT, id]]),
+        ]) {
+          await client.query('SAVEPOINT before_authority_change');
+          await client.query(statement, params);
+          assert.equal(await reserve(client), null, label);
+          await client.query('ROLLBACK TO SAVEPOINT before_authority_change');
+        }
+        assert.ok(await reserve(client), 'unchanged exact current authority grants once');
+      });
+      const stored = await repositories.probeJobs.getJobById(CTX, job.id);
+      assert.equal(stored.worker_metadata.execution_reservation.id, 'fixture_reservation');
+      // The real accepted-result history producer must bind either execution side
+      // to the same immutable evidence, without a sibling-target history lookup.
+      const observedAt = new Date().toISOString();
+      await recordProbeResultEdgeDetection(repositories.validationEvidence, CTX, {
+        run: started.run, job, observedAt,
+        probeMetadata: { external_result: 'connected', source_completed_at: observedAt },
+      });
+      const portal = createPortalRevampRepository(pool);
+      const assertBothViews = async (authorized) => {
+        const assessed = await history.assessOriginReachability(CTX, binding.id);
+        assert.equal(assessed.historical_evidence_valid, true, JSON.stringify(assessed));
+        assert.equal(assessed.currently_authorized, authorized);
+        assert.equal(assessed.test_run_id, started.run.id);
+        for (const targetId of [ORIGIN, PROTECTED]) {
+          const detail = await portal.getTargetDetailBundle(CTX, targetId);
+          const projected = detail.protection_profile.origin_bindings.find((row) => row.id === binding.id);
+          assert.deepEqual(projected.reachability, assessed, `${side} evidence is identical on ${targetId}`);
+          assert.equal(projected.reachability.target_id, job.target_id);
+          assert.equal(projected.reachability.actual_destination, '203.0.113.10');
+          assert.equal(projected.reachability.assurance, 'none');
+        }
+      };
+      await assertBothViews(true);
+      await withTenantContext(pool, TENANT, async (client) => {
+        await client.query('SAVEPOINT before_counterpart_revocation');
+        await client.query(`INSERT INTO target_verifications
+          (id,tenant_id,target_id,state,source_kind,source_ref,transitioned_at,transitioned_by,audit_entry_id)
+          VALUES ('revoked_history_counterpart',$1,$2,'unverified','manual_override','{}',now(),'system','audit_fixture')`,
+        [TENANT, side === 'origin' ? PROTECTED : ORIGIN]);
+        await assertBothViews(false);
+        await client.query('ROLLBACK TO SAVEPOINT before_counterpart_revocation');
+      });
+      const archived = await history.archiveOriginBinding(CTX, binding.id);
+      await assertBothViews(false);
+      assert.equal(archived.status, 'archived');
+      const cancelledRun = await repositories.validationEvidence.getTestRun(CTX, started.run.id);
+      assert.equal(cancelledRun.status, 'cancelled');
+      assert.equal((await repositories.probeJobs.getJobById(CTX, job.id)).status, 'cancelled');
+      assert.equal(await repositories.probeJobs.reserveExecution(worker, job, { id: 'never_after_archive' }), null);
+      assert.deepEqual(cancelledRun.provenance_json, started.run.provenance_json, 'archival never rewrites immutable historical scope');
+    });
+  });
+}
+
+for (const method of ['HEAD', 'GET']) {
+  it(`postgres reviewed paired ${method} start captures both proofs and grant rejects either proof-reference drift`, { timeout: 180_000 }, async (t) => {
+    const availability = await resolvePostgresHarnessAvailability(process.env);
+    if (!availability.available) return t.skip(availability.reason);
+    await withEphemeralPostgres(async (pool) => {
+      await ensureHarnessAppRole(pool);
+      await seedTenant(pool);
+      const runtimeConfig = { ...SIGNED_WORKER, featureFlags: { protectionValidationEnabled: true } };
+      const runtime = await createPostgresRuntime({ ...process.env, NODE_ENV: 'test',
+        ASTRANULL_PERSISTENCE_MODE: 'postgres', ASTRANULL_DATABASE_URL: pool.options.connectionString,
+        ASTRANULL_PROTECTION_VALIDATION_ENABLED: '1', ASTRANULL_APPROVED_PROBE_SOURCES: '' }, {
+        createPool: () => pool, closePool: async () => {}, entryPathComparisonRuntimeConfig: runtimeConfig,
+      });
+      try {
+        const { history, repositories } = buildServices(pool);
+        const binding = await createBinding(history);
+        const pv = runtime.services.protectionValidation;
+        const entry = await pv.createEntryPath(CTX, PROTECTED, { entry_target_id: ORIGIN,
+          relation_kind: 'origin', origin_binding_id: binding.id, owner: 'App team', purpose: 'Reviewed identity',
+          expected_behavior: 'must_not_be_reachable', required_layers: [] });
+        assert.equal(entry.error, undefined, JSON.stringify(entry));
+        const paths = await pv.listEntryPaths(CTX, PROTECTED, { limit: 10 });
+        const entryId = paths.items.find((row) => row.entry_target_id === ORIGIN).id;
+        const request = { mode: 'plan', anchor_target_id: PROTECTED, primary_entry_path_id: entryId, entry_path_ids: [entryId],
+          expectation: { scenario: `origin.identity_pair.${method.toLowerCase()}.v1`, layer_outcomes: { waf: 'no_expectation' } } };
+        const plan = await pv.planOrStartEntryPathComparison(CTX, request, { runtimeConfig });
+        assert.equal(plan.error, undefined, JSON.stringify(plan));
+        assert.equal(plan.items[0].paired_plan.method, method);
+        const started = await pv.planOrStartEntryPathComparison(CTX, { ...request, mode: 'start', reviewed_plan_digest: plan.plan_digest }, { runtimeConfig });
+        assert.equal(started.error, undefined, JSON.stringify(started));
+        const worker = { tenantId: TENANT, workerId: 'pg_pair_worker' };
+        const [job] = await repositories.probeJobs.leasePendingJobsForWorker(worker, worker.workerId);
+        assert.ok(job, JSON.stringify(started));
+        assert.equal(verifyProbeJobSignature(job, SECRET), true);
+        const run = await repositories.validationEvidence.getTestRun(CTX, job.test_run_id);
+        assert.deepEqual(job.constraints.origin_identity_pair, run.provenance_json.origin_identity_pair);
+        assert.equal(job.constraints.origin_identity_pair.origin_ownership_binding.target_id, ORIGIN);
+        assert.equal(job.constraints.origin_identity_pair.protected_ownership_binding.target_id, PROTECTED);
+        await withTenantContext(pool, TENANT, async (client) => {
+          for (const targetId of [ORIGIN, PROTECTED]) {
+            await client.query('SAVEPOINT before_pair_proof_drift');
+            await client.query(`UPDATE target_verifications SET source_ref = '{"challenge":"different"}'
+              WHERE tenant_id=$1 AND target_id=$2`, [TENANT, targetId]);
+            assert.equal(await repositories.probeJobs.reserveExecution(worker, job, { id: 'pair_proof_drift' }, { client }), null,
+              `${targetId} proof-source drift cannot reuse the reviewed signed authority`);
+            await client.query('ROLLBACK TO SAVEPOINT before_pair_proof_drift');
+          }
+          assert.ok(await repositories.probeJobs.reserveExecution(worker, job, { id: 'pair_authority_unchanged' }, { client }));
+        });
+      } finally { await runtime.close(); }
+    }, availability.env ?? process.env);
+  });
+}
+
+async function waitForDatabaseWaiter(pool, blockingPid) {
+  const deadline = Date.now() + 5000;
+  do {
+    const { rows } = await pool.query(`SELECT EXISTS (
+      SELECT 1 FROM pg_stat_activity WHERE $1::int = ANY(pg_blocking_pids(pid))
+    ) AS waiting`, [blockingPid]);
+    if (rows[0].waiting) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  } while (Date.now() < deadline);
+  assert.fail('the concurrent authority mutation must contend on the held database locks');
+}
+
+for (const side of ['origin', 'protected']) {
+  it(`postgres ${side}-side concurrent counterpart revocation and archive serialize with durable grants`, { timeout: 180_000 }, async (t) => {
+    const availability = await resolvePostgresHarnessAvailability(process.env);
+    if (!availability.available) return t.skip(availability.reason);
+    await withEphemeralPostgres(async (pool) => {
+      await ensureHarnessAppRole(pool);
+      await seedTenant(pool);
+      await withTenantContext(pool, TENANT, (client) => client.query(`UPDATE targets SET metadata_json =
+        '{"control_declarations":{"version":1,"origin":{"lockdown_expected":true}}}' WHERE tenant_id=$1 AND id=$2`, [TENANT, PROTECTED]));
+      const { testRuns, history, repositories } = buildServices(pool);
+      const binding = await createBinding(history);
+      const started = await testRuns.startTestRun(CTX, side === 'origin' ? boundStartBody(binding.id) : {
+        check_id: 'nfw.origin_lockdown.safe', target_group_id: GROUP, target_id: PROTECTED,
+      }, SIGNED_WORKER);
+      assert.equal(started.error, undefined, JSON.stringify(started));
+      const worker = { tenantId: TENANT, workerId: 'concurrent_grant_worker' };
+      const [job] = await repositories.probeJobs.leasePendingJobsForWorker(worker, worker.workerId);
+      const held = await pool.connect();
+      let pending;
+      try {
+        await held.query('BEGIN');
+        await held.query(`SELECT set_config('app.tenant_id', $1, true)`, [TENANT]);
+        const { rows: [{ pid }] } = await held.query('SELECT pg_backend_pid() AS pid');
+        const counterpart = side === 'origin' ? PROTECTED : ORIGIN;
+        await held.query(`INSERT INTO target_verifications
+          (id,tenant_id,target_id,state,source_kind,source_ref,transitioned_at,transitioned_by,audit_entry_id)
+          VALUES ('concurrent_revoke',$1,$2,'unverified','manual_override','{}',now(),'system','audit_fixture')`, [TENANT, counterpart]);
+        pending = repositories.probeJobs.reserveExecution(worker, job, { id: 'revocation_must_win' });
+        await waitForDatabaseWaiter(pool, pid);
+        await held.query('COMMIT');
+        assert.equal(await pending, null, 'revocation commits before the blocked grant revalidates both proofs');
+        pending = null;
+        await withTenantContext(pool, TENANT, (client) => client.query(`INSERT INTO target_verifications
+          (id,tenant_id,target_id,state,source_kind,source_ref,transitioned_at,transitioned_by,audit_entry_id)
+          VALUES ('concurrent_restore',$1,$2,'dns_verified','dns_txt','{}',now(),'system','audit_fixture')`, [TENANT, counterpart]));
+        await held.query('BEGIN');
+        await held.query(`SELECT set_config('app.tenant_id', $1, true)`, [TENANT]);
+        assert.ok(await repositories.probeJobs.reserveExecution(worker, job, { id: 'grant_before_archive' }, { client: held }));
+        pending = history.archiveOriginBinding(CTX, binding.id);
+        await waitForDatabaseWaiter(pool, pid);
+        await held.query('COMMIT');
+        assert.equal((await pending).status, 'archived');
+        pending = null;
+        assert.equal((await repositories.probeJobs.getJobById(CTX, job.id)).status, 'cancelled');
+        assert.equal((await repositories.validationEvidence.getTestRun(CTX, started.run.id)).status, 'cancelled');
+        assert.equal(await repositories.probeJobs.reserveExecution(worker, job, { id: 'after_archive' }), null);
+      } finally {
+        await held.query('ROLLBACK');
+        held.release();
+        if (pending) await pending.catch(() => {});
+      }
+    }, availability.env ?? process.env);
   });
 }
 

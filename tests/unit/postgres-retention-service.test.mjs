@@ -1,3 +1,4 @@
+import '../helpers/dev-data-dir.mjs';
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
@@ -12,6 +13,7 @@ describe('postgres retention service adapters', () => {
     assert.deepEqual(POSTGRES_RETENTION_SERVICE_METHODS, [
       'enforceMetadataRetentionForTenant',
       'previewMetadataRetentionForTenant',
+      'eraseOriginCluesForCurrentTenant',
     ]);
   });
 

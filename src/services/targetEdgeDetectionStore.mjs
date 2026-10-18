@@ -66,12 +66,12 @@ function stampedRun(store, tenantId, testRunId) {
   return (store.testRuns ?? []).find((row) => row.tenant_id === tenantId && row.id === testRunId) ?? null;
 }
 
-function bindingForOrigin(store, tenantId, bindingId, targetId) {
+function bindingForOrigin(store, tenantId, bindingId, targetId, checkId = null) {
   if (!bindingId) return null;
   const binding = (store.originBindings ?? []).find((row) => row.tenant_id === tenantId
-    && row.id === bindingId
-    && row.status === 'active') ?? null;
-  if (!binding || binding.origin_target_id !== targetId) return null;
+    && row.id === bindingId) ?? null;
+  if (!binding || (binding.origin_target_id !== targetId
+    && !(checkId === 'nfw.origin_lockdown.safe' && binding.protected_target_id === targetId))) return null;
   return binding;
 }
 
@@ -268,11 +268,12 @@ export function recordSignedProbeHistory({
     })
     : null;
   const check = checkId ? getCheckById(checkId) : null;
-  if (check?.probe_profile?.kind !== 'host_sni_bypass' || !tenantId || !targetId) return edge;
+  if (!['host_sni_bypass', 'origin_identity_pair'].includes(check?.probe_profile?.kind) || !tenantId || !targetId) return edge;
   const store = getStore();
   const target = declaredTarget(store, tenantId, targetId);
   const run = stampedRun(store, tenantId, testRunId);
-  const binding = bindingForOrigin(store, tenantId, run?.origin_binding_id, targetId);
+  const binding = bindingForOrigin(store, tenantId,
+    run?.origin_binding_id ?? run?.provenance_json?.origin_lockdown?.binding_id, targetId, checkId);
   const outcome = originOutcomeFromProbe(metadata);
   if (!target || !binding || !outcome) return edge;
   const resolvedObserved = resolveObservedAt(observedAt);
@@ -311,6 +312,15 @@ export function getTargetEdgeDetection(tenantId, targetId) {
   return collection.find(
     (row) => row.tenant_id === tenantId && row.target_id === targetId,
   ) ?? null;
+}
+
+/** Current detections keyed by target id for every target in a tenant. */
+export function listTargetEdgeDetectionsForTenant(tenantId) {
+  const map = new Map();
+  for (const row of ensureCollection(getStore())) {
+    if (row.tenant_id === tenantId) map.set(row.target_id, row);
+  }
+  return map;
 }
 
 /** Current detections keyed by target id for every target in a group. */

@@ -1,0 +1,28 @@
+services:
+  target:
+    image: nginx:1.27-alpine
+    container_name: anl-l7-surface-lab-target
+    restart: unless-stopped
+    cpus: 1.0
+    mem_limit: 768m
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    networks:
+      lab-net:
+        ipv4_address: 172.31.53.10
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/api/health || exit 1"]
+      interval: 2s
+      timeout: 2s
+      retries: 5
+      start_period: 1s
+
+networks:
+  lab-net:
+    name: anl-l7-surface-lab-net
+    driver: bridge
+    internal: true
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.31.53.0/24

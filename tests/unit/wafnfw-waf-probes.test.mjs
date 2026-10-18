@@ -78,7 +78,7 @@ describe('T1 WAF marker probes and grading', () => {
   it('1 injected RNG randomizes marker leg order and records it', async () => {
     const fetchFn = async () => res(200);
     const identity = await runWafClassMarkerProbe({
-      url: 'https://target.example/', marker_class: 'ssrf', fetchFn, rng: () => 0.99,
+      url: 'https://target.example/', marker_class: 'sqli', fetchFn, rng: () => 0.99,
     });
     const rotated = await runWafClassMarkerProbe({
       url: 'https://target.example/', marker_class: 'ssrf', fetchFn, rng: () => 0,
@@ -95,7 +95,7 @@ describe('T1 WAF marker probes and grading', () => {
       return res(200, { 'cf-cache-status': 'DYNAMIC' });
     };
     const result = await runWafClassMarkerProbe({
-      url: 'https://target.example/', marker_class: 'ssrf', fetchFn, rng: () => 0.99, nonce: 'run-nonce-1',
+      url: 'https://target.example/', marker_class: 'sqli', fetchFn, rng: () => 0.99, nonce: 'run-nonce-1',
     });
     assert.ok(urls.length >= 5);
     for (const url of urls) {
@@ -112,7 +112,7 @@ describe('T1 WAF marker probes and grading', () => {
       return res(403, BLOCK);
     };
     const result = await runWafClassMarkerProbe({
-      url: 'https://target.example/', marker_class: 'ssrf', fetchFn, rng: () => 0.99,
+      url: 'https://target.example/', marker_class: 'sqli', fetchFn, rng: () => 0.99,
     });
     const byPlacement = Object.fromEntries(result.placements.map((row) => [row.placement, row]));
     assert.equal(byPlacement.path.outcome, 'inconclusive');
@@ -127,7 +127,7 @@ describe('T1 WAF marker probes and grading', () => {
   it('4 a challenge never yields enforced', async () => {
     const fetchFn = async (url, init) => (markerish(url, init) ? res(403, CHALLENGE) : res(200));
     const result = await runWafClassMarkerProbe({
-      url: 'https://target.example/', marker_class: 'ssrf', fetchFn, rng: () => 0.99,
+      url: 'https://target.example/', marker_class: 'sqli', fetchFn, rng: () => 0.99,
     });
     assert.ok(result.placements.every((row) => row.outcome === 'challenged'));
     assert.equal(result.enforcement, 'challenged');
@@ -240,7 +240,7 @@ describe('T1 WAF marker probes and grading', () => {
       fetchFn: async () => res(200, { 'x-block-ref': 'edge-policy' }),
     });
     assert.equal(result.posture, 'inconclusive');
-    assert.equal(result.inconclusive_reason, 'declared_signature_matches_baseline');
+    assert.equal(result.inconclusive_reason, 'custom_canary_rule_setup_unavailable');
     assert.equal(result.enforcement, 'unknown');
   });
 
@@ -370,7 +370,9 @@ describe('T1 WAF marker probes and grading', () => {
         : res(200)),
       rng: () => 0.99,
     });
-    assert.equal(result.enforcement, 'enforced');
+    assert.equal(result.enforcement, 'unknown');
+    assert.equal(result.produces_verdict, false);
+    assert.equal(result.setup_required, true);
     assert.equal(result.assurance_scope, 'custom_canary_rule');
     assert.equal(result.grading_version, WAF_GRADING_VERSION);
     assert.equal(result.signature_corpus_version, SIGNATURE_CORPUS_VERSION);

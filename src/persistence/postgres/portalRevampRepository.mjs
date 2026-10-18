@@ -25,6 +25,7 @@ import {
   remediationOwnerGroup,
 } from '../../lib/targetDetailRows.mjs';
 import { withTenantContext } from './tenantContext.mjs';
+import { createTargetHistoryRepository } from './targetHistoryRepository.mjs';
 
 /** Durable edge-detection columns. Label-only evidence; the table holds no raw header/body data. */
 const TARGET_EDGE_DETECTION_COLUMNS = `target_id, status, reason, waf_status, waf_vendor, waf_type,
@@ -1317,41 +1318,43 @@ export function createPortalRevampRepository(pool) {
         bump();
         const originBindingRows = await client.query(
           `SELECT id, tenant_id, protected_target_id, origin_target_id, host, sni, port, path, status,
-                  created_at
+                  to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS created_at
            FROM origin_bindings
-           WHERE tenant_id = $1 AND status = 'active'
+           WHERE tenant_id = $1
              AND (origin_target_id = $2 OR protected_target_id = $2)`,
           [ctx.tenantId, targetId],
         );
+        if (originBindingRows.rows.length) bump();
+        const bindingEvidence = originBindingRows.rows.length ? await client.query(
+          `SELECT evidence.*,
+             to_char(evidence.observed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS observed_at,
+             to_char(evidence.source_completed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS source_completed_at,
+             to_char(evidence.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS created_at
+           FROM origin_bindings binding CROSS JOIN LATERAL (
+             SELECT observation.*, to_jsonb(run) AS binding_run
+             FROM target_observations observation JOIN test_runs run
+               ON run.tenant_id = observation.tenant_id AND run.id = observation.test_run_id
+             WHERE observation.tenant_id = binding.tenant_id AND observation.origin_binding_id = binding.id
+               AND observation.family = 'origin_hosting' AND observation.producer_kind = 'signed_probe'
+               AND observation.attempt_class = 'successful'
+               AND observation.target_id = run.target_id AND observation.check_id = run.check_id
+               AND (run.origin_binding_id = binding.id OR run.provenance_json->'origin_lockdown'->>'binding_id' = binding.id)
+               AND COALESCE(run.provenance_json->'origin_scope', run.provenance_json->'origin_lockdown')->>'host' = binding.host
+               AND COALESCE(run.provenance_json->'origin_scope', run.provenance_json->'origin_lockdown')->>'sni' = binding.sni
+               AND (COALESCE(run.provenance_json->'origin_scope', run.provenance_json->'origin_lockdown')->>'port') IS NOT DISTINCT FROM binding.port::text
+               AND (COALESCE(run.provenance_json->'origin_scope', run.provenance_json->'origin_lockdown')->>'path') IS NOT DISTINCT FROM binding.path
+             ORDER BY observation.observed_at DESC, observation.source_completed_at DESC NULLS LAST, observation.id COLLATE "C" DESC
+             LIMIT 100
+           ) evidence WHERE binding.tenant_id = $1 AND binding.id = ANY($2::text[])`,
+          [ctx.tenantId, originBindingRows.rows.map((row) => row.id)],
+        ) : { rows: [] };
         let proofRecords = { targets: [], targetVerifications: [], wafConnectors: [], wafConnectorSnapshots: [] };
         if (originBindingRows.rows.length) {
-          bump();
           const boundIds = [...new Set(originBindingRows.rows.flatMap((row) => [row.origin_target_id, row.protected_target_id]))];
-          const proof = await client.query(
-            `SELECT
-               (SELECT json_agg(json_build_object(
-                  'id', t.id, 'tenant_id', t.tenant_id, 'target_group_id', t.target_group_id,
-                  'kind', t.kind, 'value', t.value, 'created_at', t.created_at
-                )) FROM targets t WHERE t.tenant_id = $1 AND t.id = ANY($2::text[]) AND t.deleted_at IS NULL) AS targets,
-               (SELECT json_agg(v) FROM target_verifications v WHERE v.tenant_id = $1 AND v.target_id = ANY($2::text[])) AS verifications,
-               (SELECT json_agg(json_build_object(
-                  'id', c.id, 'tenant_id', c.tenant_id, 'provider', c.provider, 'status', c.status,
-                  'has_secret', c.secret_id IS NOT NULL
-                )) FROM waf_connectors c WHERE c.tenant_id = $1) AS connectors,
-               (SELECT json_agg(json_build_object(
-                  'id', s.id, 'tenant_id', s.tenant_id, 'connector_id', s.connector_id, 'provider', s.provider,
-                  'snapshot_kind', s.snapshot_kind, 'resource_ref_hash', s.resource_ref_hash,
-                  'summary', s.summary_json, 'evidence_source', s.evidence_source, 'observed_at', s.observed_at
-                )) FROM waf_connector_snapshots s WHERE s.tenant_id = $1) AS snapshots`,
-            [ctx.tenantId, boundIds],
-          );
-          const proofRow = proof.rows[0] ?? {};
-          proofRecords = {
-            targets: proofRow.targets ?? [],
-            targetVerifications: proofRow.verifications ?? [],
-            wafConnectors: proofRow.connectors ?? [],
-            wafConnectorSnapshots: proofRow.snapshots ?? [],
-          };
+          // Reuse the same current-proof context as binding detail: explicit inherited
+          // parents, full provider custody metadata, and exact verification clocks.
+          proofRecords = await createTargetHistoryRepository(pool).loadBindingContext(ctx, boundIds, { client });
+          for (let index = 0; index < 4; index += 1) bump();
         }
         const edgeRow = edgeDetection.rows[0] ?? null;
         bump();
@@ -1379,6 +1382,9 @@ export function createPortalRevampRepository(pool) {
         const attached = attachHistoryReadModel(derived, historyReadModel({
           observations: observationHistory.rows,
           bindings: originBindingRows.rows,
+          bindingObservations: bindingEvidence.rows,
+          runs: bindingEvidence.rows.map((row) => row.binding_run),
+          records: proofRecords,
           proofFor: (id) => currentOriginProof(proofRecords, ctx.tenantId, id),
           targetId: target.id,
         }));

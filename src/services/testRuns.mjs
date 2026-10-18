@@ -32,12 +32,15 @@ import {
   currentOriginProof,
   deriveBindingScope,
   validateOriginBindingForRun,
+  historicalOriginBindingForRun,
 } from './originBindings.mjs';
 import { registerRetestLineage } from './retestLineage.mjs';
 import { isProtectionValidationFinding, protectionRetestRunScopeMatches } from '../lib/protectionValidationFindings.mjs';
 import { resolveDevProtectionRetestAuthorization } from './protectionValidationRetest.mjs';
 import { executeOpsReadinessProbe, isOpsReadinessProbeKind, resolveOpsReadinessScenario } from '../lib/opsReadinessValidation.mjs';
 import { simulateProbeResult } from './probeStub.mjs';
+import { buildOriginIdentityPairSnapshot, originIdentityScenario } from '../lib/originIdentityPair.mjs';
+import { reviewedOriginIdentityPair } from '../lib/entryPathComparison.mjs';
 import { targetOwnershipProof } from './ownershipVerification.mjs';
 import { getTestPolicyForDispatch } from './testPolicies.mjs';
 import { isWithinPolicySafeWindow } from '../contracts/testPolicyManagement.mjs';
@@ -175,9 +178,10 @@ function hasExternalProbeEvidence(run) {
   const store = getStore();
   return store.events.some(
     (e) =>
-      e.test_run_id === run.id &&
+      e.test_run_id === run.id && e.tenant_id === run.tenant_id &&
       e.signal_type === 'probe_result' &&
       isTrustedProducerEvent(e) &&
+      typeof run.correlation?.nonce_hash === 'string' && run.correlation.nonce_hash.length > 0 &&
       e.nonce_hash === run.correlation.nonce_hash,
   );
 }
@@ -227,13 +231,8 @@ export function getTestRun(ctx, id) {
   return scrubRunForCustomer({ ...run, verdict: verdict ?? null });
 }
 
-function devRunOriginBinding(run, target) {
-  const lockdownBindingId = run.provenance_json?.origin_lockdown?.binding_id ?? null;
-  return (getStore().originBindings ?? []).find((row) => row.tenant_id === run.tenant_id
-    && row.status !== 'archived' && row.status !== 'deleted'
-    && (row.id === run.origin_binding_id || (lockdownBindingId && row.id === lockdownBindingId)
-      || row.protected_target_id === target?.id || row.origin_target_id === target?.id))
-    ?? (run.origin_binding_id ? { id: run.origin_binding_id, status: 'active' } : null);
+function devRunOriginBinding(run) {
+  return historicalOriginBindingForRun(run);
 }
 
 export function getVerdictReplay(ctx, id) {
@@ -473,6 +472,11 @@ export function startTestRun(ctx, body, runtimeConfig = { probeMode: 'simulation
   if (!selection.legacy) return { error: 'reviewed_operation_execution_unavailable', status: 409 };
   const check = getCheckById(body.check_id);
   if (!check) return { error: 'unknown_check', status: 400 };
+  if (originIdentityScenario(check) && (!options.reviewedComparison || !body.origin_binding_id)) {
+    return denySafeStart(ctx, 'test_run.origin_identity_review_denied', body.target_group_id,
+      { check_id: check.check_id, origin_binding_id: body.origin_binding_id ?? null },
+      'origin_identity_review_required', 409);
+  }
   if (!isCustomerRunnable(check, ctx)) {
     audit({
       tenant_id: ctx.tenantId,
@@ -788,6 +792,8 @@ export function startTestRun(ctx, body, runtimeConfig = { probeMode: 'simulation
   }
   const originBindingId = typeof body.origin_binding_id === 'string' ? body.origin_binding_id.trim() : '';
   let originScopeSnapshot = null;
+  let originAuthoritySnapshot = null;
+  let originIdentityPairSnapshot = null;
   if (originBindingId) {
     const records = bindingRecordsFromStore(getStore(), ctx.tenantId);
     const binding = (getStore().originBindings ?? []).find((row) => row.tenant_id === ctx.tenantId && row.id === originBindingId);
@@ -806,6 +812,14 @@ export function startTestRun(ctx, body, runtimeConfig = { probeMode: 'simulation
     // these safe fields may leave this gate; carry them into the version stamp provenance
     // so the signed job serialization can sign the approved Host/SNI/port/path exactly.
     originScopeSnapshot = bindingDecision.scope;
+    originAuthoritySnapshot = bindingDecision.authority;
+    if (originIdentityScenario(check)) {
+      const paired = buildOriginIdentityPairSnapshot({ check, binding, originTarget: target, protectedTarget,
+        scope: originScopeSnapshot, records, tenantId: ctx.tenantId,
+        reviewedPair: reviewedOriginIdentityPair(options.reviewedComparison, check, target, originBindingId) });
+      if (paired.error) return paired;
+      originIdentityPairSnapshot = paired.snapshot;
+    }
   }
   const opsReadiness = isOpsReadinessProbeKind(check);
   const stamp = deriveRunEvidenceStamp(check, body, {
@@ -850,6 +864,8 @@ export function startTestRun(ctx, body, runtimeConfig = { probeMode: 'simulation
     provenance_json: originScopeSnapshot
       ? {
         ...(stamp.provenance_json ?? {}),
+        ...(originAuthoritySnapshot ? { origin_authority: originAuthoritySnapshot } : {}),
+        ...(originIdentityPairSnapshot ? { origin_identity_pair: originIdentityPairSnapshot } : {}),
         origin_scope: {
           host: originScopeSnapshot.host,
           sni: originScopeSnapshot.sni,
@@ -1076,8 +1092,9 @@ function finalizeOpsReadinessVerdict(run, probe) {
     opsValidationOk: probe.metadata?.ops_validation_ok,
   });
 
+  // Retain only the inline result actually evaluated, never unrelated activity.
   const evidenceIds = store.events
-    .filter((e) => e.test_run_id === run.id)
+    .filter((e) => e.id === probe.event_id && e.test_run_id === run.id && e.tenant_id === run.tenant_id)
     .map((e) => e.id);
 
   const verdict = {
@@ -1123,9 +1140,10 @@ function finalizeVerdictIfReady(run, options = {}) {
   const target = store.targets.find((t) => t.id === run.target_id);
   const probeEvent = store.events.find(
     (e) =>
-      e.test_run_id === run.id &&
+      e.test_run_id === run.id && e.tenant_id === run.tenant_id &&
       e.signal_type === 'probe_result' &&
       isTrustedProducerEvent(e) &&
+      typeof run.correlation?.nonce_hash === 'string' && run.correlation.nonce_hash.length > 0 &&
       e.nonce_hash === run.correlation.nonce_hash,
   );
 
@@ -1138,17 +1156,14 @@ function finalizeVerdictIfReady(run, options = {}) {
     return null;
   }
 
-  const externalResult = run.probe_external_result ?? probeEvent?.metadata?.external_result;
+  const probeMetadata = probeEvent?.metadata ?? probeEvent?.metadata_json ?? {};
+  const externalResult = probeMetadata.external_result ?? 'not_run';
   // Stamped runs finalize against the immutable start snapshot; legacy unstamped runs keep
   // the historical catalog fallback (see verdictExpectedBehaviorForRun).
   const expectedBehavior = verdictExpectedBehaviorForRun(run);
   const probeKind = getCheckById(run.check_id)?.probe_profile?.kind ?? null;
   const probeIoObserved = probeEventHasProbeIo(probeEvent);
-  const probeMetadata = probeEvent?.metadata ?? probeEvent?.metadata_json ?? {};
-  const originBinding = (store.originBindings ?? []).find((row) => row.tenant_id === run.tenant_id
-    && row.status !== 'archived' && row.status !== 'deleted'
-    && (row.id === run.origin_binding_id || row.protected_target_id === target?.id || row.origin_target_id === target?.id))
-    ?? (run.origin_binding_id ? { id: run.origin_binding_id, status: 'active' } : null);
+  const originBinding = devRunOriginBinding(run);
 
   const signedJob = (store.probeJobs ?? []).find((j) => j.test_run_id === run.id);
   const signedDeclarations = signedJob?.probe_profile?.declarations ?? null;
@@ -1171,9 +1186,9 @@ function finalizeVerdictIfReady(run, options = {}) {
     checkId: run.check_id,
   });
 
-  const evidenceIds = store.events
-    .filter((e) => e.test_run_id === run.id)
-    .map((e) => e.id);
+  // Cite exactly the accepted result used above. Activity is inspection metadata,
+  // not verdict proof; including it makes an otherwise valid citation set invalid.
+  const evidenceIds = probeEvent ? [probeEvent.id] : [];
 
   const verdict = {
     id: newId('evidence'),

@@ -13,7 +13,7 @@ import { verifyCustodyManifest } from '../../src/lib/custody.mjs';
 import { createServer } from '../../src/server.mjs';
 import * as wafPosture from '../../src/services/wafPosture.mjs';
 import { getStore } from '../../src/store.mjs';
-import { demoHeaders, request } from '../helpers/http.mjs';
+import { closeServer, demoHeaders, request } from '../helpers/http.mjs';
 import { freshStore } from '../helpers/reset.mjs';
 
 const envSnapshot = { ...process.env };
@@ -44,12 +44,22 @@ function wafOrchestratorEnv() {
   };
 }
 
-function startServer(env = wafEnabledEnv()) {
+async function startServer(env = wafEnabledEnv()) {
   const runtimeConfig = loadRuntimeConfig(env);
   const server = createServer({ runtimeConfig, env });
-  server.listen(0);
-  const { port } = server.address();
-  return { server, baseUrl: `http://127.0.0.1:${port}` };
+  try {
+    await new Promise((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(0, '127.0.0.1', resolve);
+    });
+    const { address, family, port } = server.address();
+    assert.equal(address, '127.0.0.1');
+    assert.equal(family, 'IPv4');
+    return { server, baseUrl: `http://127.0.0.1:${port}` };
+  } catch (error) {
+    await closeServer(server);
+    throw error;
+  }
 }
 
 async function createDemoAsset(baseUrl, headers, extra = {}) {
@@ -297,15 +307,15 @@ describe('WAF posture API feature flag', () => {
   let server;
   let baseUrl;
 
-  before(() => {
+  before(async () => {
     freshStore();
     const env = { ...process.env, ASTRANULL_NO_PERSIST: '1' };
     delete env.ASTRANULL_WAF_POSTURE_ENABLED;
-    ({ server, baseUrl } = startServer(env));
+    ({ server, baseUrl } = await startServer(env));
   });
 
-  after(() => {
-    server?.close();
+  after(async () => {
+    await closeServer(server);
     restoreEnv();
   });
 
@@ -330,18 +340,23 @@ describe('WAF posture API', () => {
   let server;
   let baseUrl;
 
-  before(() => {
+  before(async () => {
     freshStore();
-    ({ server, baseUrl } = startServer());
+    ({ server, baseUrl } = await startServer());
   });
 
-  after(() => {
-    server?.close();
+  after(async () => {
+    await closeServer(server);
     restoreEnv();
   });
 
   afterEach(() => {
     freshStore();
+  });
+
+  it('binds the WAF API fixture to the IPv4 loopback used by its clients', () => {
+    assert.equal(server.address().address, '127.0.0.1');
+    assert.equal(server.address().family, 'IPv4');
   });
 
   it('lets viewers read but not create or run validations', async () => {
@@ -1099,12 +1114,15 @@ describe('WAF posture API', () => {
     assertFindingSerializedSafe(fromApi);
   });
 
-  it('updates the same open WAF finding on repeat failed finalize for the asset', async () => {
+  it('updates the same open WAF finding on repeat failed finalize for the asset', async (t) => {
+    t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
     const engineer = demoHeaders('engineer');
     const asset = await createDemoAsset(baseUrl, engineer);
     const firstRun = await finalizeUnderprotectedMarkerLeak(baseUrl, engineer, asset);
     const first = openWafPostureFindingsForAsset(asset.id)[0];
     const firstUpdatedAt = first.updated_at;
+    const secondUpdatedAt = Date.parse(firstUpdatedAt) + 1;
+    t.mock.timers.setTime(secondUpdatedAt);
 
     const second = await finalizeUnderprotectedMarkerLeak(baseUrl, engineer, asset, {
       safeRun: firstRun.safeRun,
@@ -1114,6 +1132,7 @@ describe('WAF posture API', () => {
     assert.equal(findings[0].id, first.id);
     assert.equal(findings[0].last_waf_validation_run_id, second.validationRunId);
     assert.notEqual(findings[0].updated_at, firstUpdatedAt);
+    assert.equal(findings[0].updated_at, new Date(secondUpdatedAt).toISOString());
 
     const createdAudits = getStore().auditLog.filter(
       (e) => e.action === 'finding.created' && e.resource_id === first.id,
@@ -1210,13 +1229,13 @@ describe('WAF drift events API', () => {
   let server;
   let baseUrl;
 
-  before(() => {
+  before(async () => {
     freshStore();
-    ({ server, baseUrl } = startServer());
+    ({ server, baseUrl } = await startServer());
   });
 
-  after(() => {
-    server?.close();
+  after(async () => {
+    await closeServer(server);
     restoreEnv();
   });
 
@@ -1477,13 +1496,13 @@ describe('WAF connector API', () => {
   let server;
   let baseUrl;
 
-  before(() => {
+  before(async () => {
     freshStore();
-    ({ server, baseUrl } = startServer());
+    ({ server, baseUrl } = await startServer());
   });
 
-  after(() => {
-    server?.close();
+  after(async () => {
+    await closeServer(server);
     restoreEnv();
   });
 
@@ -1781,13 +1800,13 @@ describe('WAF remediation action items and connector payloads', () => {
   let server;
   let baseUrl;
 
-  before(() => {
+  before(async () => {
     freshStore();
-    ({ server, baseUrl } = startServer());
+    ({ server, baseUrl } = await startServer());
   });
 
-  after(() => {
-    server?.close();
+  after(async () => {
+    await closeServer(server);
     restoreEnv();
   });
 
@@ -2008,14 +2027,14 @@ describe('WAF orchestrator API (dev-json)', () => {
   let server;
   let baseUrl;
 
-  before(() => {
+  before(async () => {
     freshStore();
     Object.assign(process.env, wafOrchestratorEnv());
-    ({ server, baseUrl } = startServer(wafOrchestratorEnv()));
+    ({ server, baseUrl } = await startServer(wafOrchestratorEnv()));
   });
 
-  after(() => {
-    server?.close();
+  after(async () => {
+    await closeServer(server);
     restoreEnv();
   });
 
@@ -2204,13 +2223,13 @@ describe('WAF report export API', () => {
   let server;
   let baseUrl;
 
-  before(() => {
+  before(async () => {
     freshStore();
-    ({ server, baseUrl } = startServer());
+    ({ server, baseUrl } = await startServer());
   });
 
-  after(() => {
-    server?.close();
+  after(async () => {
+    await closeServer(server);
     restoreEnv();
   });
 

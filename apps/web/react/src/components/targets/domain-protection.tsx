@@ -57,7 +57,8 @@ import { buildScanLiveLogs, generateCheckProbeLogs } from '../../lib/live-probe-
 import { Badge } from '../ui/badge';
 import { NotTestedNote } from '../runs/not-tested-note';
 import { AnchorButton, Button } from '../ui/button';
-import { CheckClassChips, CheckClassLegend } from '../checks/check-class-chips';
+import { CheckClassChips, CheckClassLegend, CheckImpactBadge, CheckImpactIcon } from '../checks/check-class-chips';
+import { CHECK_IMPACT_CLASSES, classifyCheckImpact, type CheckImpactId } from '../../lib/check-classification.mjs';
 import { Progress } from '../ui/progress';
 import { ProviderLogo, type ProviderLogoId } from '../integrations/provider-logos';
 import { LiveProbeTerminal } from './live-probe-terminal';
@@ -83,6 +84,7 @@ const STATUS_ICONS: Record<RowStatus, LucideIcon> = {
   inconclusive: CircleMinus,
   not_tested: CircleSlash,
   observed: Eye,
+  retained: Hourglass,
   running: LoaderCircle,
   queued: CircleDashed,
   waiting: Hourglass,
@@ -98,6 +100,13 @@ const TIER_COPY: Record<string, string> = {
 };
 
 type QueueFilter = 'all' | 'verdict' | RowStatus;
+type ImpactFilter = 'all' | CheckImpactId;
+
+const IMPACT_FILTERS: Array<{ id: ImpactFilter; label: string }> = [
+  { id: 'all', label: 'All' },
+  { id: 'non_invasive', label: CHECK_IMPACT_CLASSES.non_invasive.label },
+  { id: 'invasive', label: CHECK_IMPACT_CLASSES.invasive.label },
+];
 
 const FILTERS: Array<{ id: QueueFilter; label: string }> = [
   { id: 'all', label: 'All' },
@@ -107,6 +116,7 @@ const FILTERS: Array<{ id: QueueFilter; label: string }> = [
   { id: 'inconclusive', label: 'Inconclusive' },
   { id: 'not_tested', label: ROW_STATUS_META.not_tested.label },
   { id: 'observed', label: 'Observed' },
+  { id: 'retained', label: 'Retained, not current' },
   { id: 'running', label: 'Running' },
   { id: 'waiting', label: 'Waiting' },
   { id: 'queued', label: 'Queued' },
@@ -114,16 +124,6 @@ const FILTERS: Array<{ id: QueueFilter; label: string }> = [
   { id: 'not_run', label: 'Not run' },
 ];
 
-const ORIGIN_COPY: Record<string, { label: string; tone: 'muted' | 'danger' | 'success' | 'warn'; detail: string }> = {
-  not_tested: { label: 'Not tested', tone: 'muted', detail: 'No authorized check has tested a declared origin for this target.' },
-  reachable: { label: 'Origin response observed', tone: 'danger', detail: 'A declared origin answered the recorded direct request, so the direct path is reachable for that scope. Application identity is shown in the check evidence.' },
-  exposed: { label: 'Origin response observed', tone: 'danger', detail: 'A declared origin answered the recorded direct request, so the direct path is reachable for that scope. Application identity is shown in the check evidence.' },
-  denied: { label: 'Explicit denial observed', tone: 'muted', detail: 'The declared origin explicitly denied the recorded direct request for this host, path, source and time. The responsible control is not identified.' },
-  unreachable: { label: 'No response; enforcement unverified', tone: 'warn', detail: 'An earlier check version recorded no direct answer. Silence does not prove a firewall or lockdown is enforcing; rerun the current check version.' },
-  not_reachable: { label: 'No response; enforcement unverified', tone: 'warn', detail: 'The declared origin did not answer the recorded direct request. Silence does not prove a firewall or lockdown is enforcing.' },
-  inconclusive: { label: 'Inconclusive', tone: 'warn', detail: 'The recorded origin check did not reach a conclusion.' },
-  unknown: { label: 'Reachability recorded, no assurance', tone: 'muted', detail: 'A direct-origin reachability result is recorded, but no authorized origin binding exists, so it is not an origin lockdown.' },
-};
 
 function Spinner({ size = 16 }: { size?: number }) {
   return <LoaderCircle size={size} className="td-spin" aria-hidden="true" />;
@@ -132,8 +132,6 @@ function Spinner({ size = 16 }: { size?: number }) {
 export type ProviderObservationsProps = {
   rows: ProviderFamilyRow[];
   effectiveness: MarkerEffectiveness | null;
-  originStatus: string;
-  originDetail?: { assurance: string; reachabilityStatus: string; testedTargetId: string; scenarioId: string; limitations: string[] };
   evaluating: boolean;
   note?: ReactNode;
   action?: ReactNode;
@@ -149,21 +147,14 @@ export type ProviderObservationsProps = {
 };
 
 /** Flat, ruled list: one row per family, each from its own recorded source only. */
-export function ProviderObservations({ rows, effectiveness, originStatus, originDetail, evaluating, note, action, onInspect, efficacy = null, wafRules = null, canaryMembers = [], checkName, onOpenChecks }: ProviderObservationsProps) {
+export function ProviderObservations({ rows, effectiveness, evaluating, note, action, onInspect, efficacy = null, wafRules = null, canaryMembers = [], checkName, onOpenChecks }: ProviderObservationsProps) {
   const ruleLines = wafRuleSentences(wafRules);
   const edgeProxyRow = rows.find(
     (r) => (r.family === 'cdn' || r.family === 'waf') && r.status === 'detected'
   );
   const hasEdgeProxy = Boolean(edgeProxyRow);
-  const detectedProxyName = edgeProxyRow?.providerName || (rows.find((r) => r.providerName)?.providerName ?? '');
+  const detectedProxyName = edgeProxyRow?.providerName || 'an edge provider';
 
-  const origin = hasEdgeProxy && originStatus === 'not_tested'
-    ? {
-        label: 'Masked (Not tested)',
-        tone: 'muted' as const,
-        detail: `Origin is masked behind ${detectedProxyName || 'the edge proxy'}. Bind an origin under Origin Relations to test direct reachability.`,
-      }
-    : (ORIGIN_COPY[originStatus] ?? { label: humanizeReason(originStatus) || 'Not recorded', tone: 'muted' as const, detail: '' });
   return (
     <section className="td-observations" aria-labelledby="td-observations-title" aria-busy={evaluating || undefined}>
       <header className="td-section-head">
@@ -176,20 +167,15 @@ export function ProviderObservations({ rows, effectiveness, originStatus, origin
       {note ? <div className="td-callout">{note}</div> : null}
       <ul className="td-provider-list">
         {rows.map((row) => {
-          let statusLabel = row.statusLabel;
+          const statusLabel = row.statusLabel;
           let metaText = '';
 
           if (hasEdgeProxy && row.family === 'cloud' && (row.status === 'not_detected' || row.status === 'not_recorded')) {
-            statusLabel = 'Masked by edge proxy';
-            metaText = `Public traffic routes through ${detectedProxyName || 'the edge proxy'}; direct cloud hosting layer is masked.`;
+            metaText = `An edge fingerprint for ${detectedProxyName} does not establish the cloud hosting provider.`;
           } else if (hasEdgeProxy && row.family === 'origin_hosting' && (row.status === 'unknown' || row.status === 'not_recorded')) {
-            statusLabel = 'Unknown · Masked';
-            metaText = `Origin server is masked behind ${detectedProxyName || 'the edge proxy'}. Bind an origin under Origin Relations to test.`;
-          } else if (hasEdgeProxy && row.family === 'dns' && (row.status === 'unknown' || row.status === 'not_recorded')) {
-            statusLabel = row.statusLabel;
-            metaText = detectedProxyName
-              ? `No DNS connector configured; authoritative DNS is managed or masked behind ${detectedProxyName}.`
-              : 'No DNS connector configured in Integrations; authoritative DNS not recorded.';
+            metaText = `An edge fingerprint for ${detectedProxyName} does not establish origin hosting, reachability, or lockdown. Declare an origin under Origin Relations to test.`;
+          } else if (row.family === 'dns' && (row.status === 'unknown' || row.status === 'not_recorded')) {
+            metaText = 'The edge scan does not look up authoritative nameservers, so the DNS provider is not recorded yet.';
           } else {
             const timeText = row.observedAt
               ? `Observed ${formatDate(row.observedAt)}`
@@ -238,20 +224,6 @@ export function ProviderObservations({ rows, effectiveness, originStatus, origin
             </li>
           );
         })}
-        <li className="td-provider-row" data-status={originStatus}>
-          <span className="td-provider-mark" aria-hidden="true"><Server size={18} /></span>
-          <span className="td-provider-copy">
-            <span className="td-provider-title">Origin exposure</span>
-            <span className="td-provider-value"><Badge tone={origin.tone}>{origin.label}</Badge></span>
-            <span className="td-provider-meta">
-              {origin.detail}
-              {originDetail && originDetail.reachabilityStatus && originDetail.reachabilityStatus !== 'not_tested' ? ` Recorded reachability: ${humanizeReason(originDetail.reachabilityStatus).toLowerCase()}${originDetail.testedTargetId ? ` for tested target ${originDetail.testedTargetId}` : ''}${originDetail.scenarioId ? `, scenario ${originDetail.scenarioId}` : ''}.` : ''}
-              {originDetail && originDetail.assurance && originDetail.assurance !== 'none' && originDetail.assurance !== 'not_recorded' ? ` Origin assurance: ${humanizeReason(originDetail.assurance).toLowerCase()}.` : ''}
-              {originDetail?.limitations?.length ? ` Limits: ${originDetail.limitations.map((item) => humanizeReason(item).toLowerCase()).join(', ')}.` : ''}
-            </span>
-          </span>
-          <span />
-        </li>
       </ul>
       <div className="td-efficacy" role="group" aria-labelledby="td-efficacy-title">
         <div className="td-efficacy-head">
@@ -284,7 +256,7 @@ export function ProviderObservations({ rows, effectiveness, originStatus, origin
                                   {canaryMembers.map((member) => (
                                     <li key={`${member.checkId}|${member.runId}`}>
                                       <span className="td-canary-name">{checkName?.(member.checkId) || member.checkId}</span>
-                                      {member.verdict ? <Badge tone={verdictTone(member.verdict)}>{plainVerdictShortLabel(member.verdict)}</Badge> : null}
+                                      {member.verdict ? <Badge tone={member.evidence === 'fresh' ? verdictTone(member.verdict) : 'muted'}>{member.evidence === 'fresh' ? plainVerdictShortLabel(member.verdict) : `Stored: ${member.verdict}`}</Badge> : null}
                                       <span className="td-muted">{member.label}{member.observedAt ? ` · ${formatDate(member.observedAt)}` : ''}</span>
                                       {member.runId
                                         ? <a className="detail-entity-link mono" href={buildDetailHref('run-detail', member.runId)} aria-label={`Run ${member.runId} for ${checkName?.(member.checkId) || member.checkId}`}>{member.runId}</a>
@@ -316,7 +288,7 @@ export function ProviderObservations({ rows, effectiveness, originStatus, origin
             Only results from the coverage freshness window, recorded with the current check version, count. A layer reads <b>Protecting</b> only with at least 3 fresh concluded checks across 2 rule categories and no failure. A DNS zone-transfer refusal never counts toward the CDN, and <b>Bypassable via origin</b> appears only when an origin-lockdown check finds your origin answering directly.
           </p>
           <p className="td-copy">
-            <b>Managed rule markers</b> are harmless strings that common managed rule sets (SQL injection, cross-site scripting, path traversal, scanner detection) recognise. <b>Custom canary rules</b> use AstraNull&apos;s own token, which only a rule you wrote for it will block, so they prove that rule acts, not that the attack class is covered. Each rule is counted once, however many checks use it.
+            <b>Managed rule markers</b> are harmless strings that common managed rule sets (SQL injection, cross-site scripting, path traversal, scanner detection) recognise. <b>Custom canary observations</b> use AstraNull&apos;s own token. Installed rule tokens and placements are not bound to these checks, so they do not verify custom-rule action or attack-class coverage. Only current, verified verdicts count above.
           </p>
         </details>
       </div>
@@ -346,12 +318,21 @@ function rowResultLine(row: CheckRow) {
   if (row.status === 'not_run') return 'Not run on this target yet.';
   if (row.status === 'not_tested') return row.missingInput?.message || 'Not tested — this check needs more input, so nothing was sent.';
   if (row.status === 'skipped' || row.status === 'cancelled') return row.reason ? humanizeReason(row.reason) : `${row.label}.`;
-  if (row.status === 'observed') return row.explanation || 'Recorded transport behavior. Transport-only checks inform the picture but never decide a verdict.';
+  if (row.status === 'retained') return row.coverageReason === 'no_evidence'
+    ? 'The stored outcome has no evidence references. It is not a current verified result; rerun this check.'
+    : row.coverageReason === 'invalid_or_unresolved_evidence'
+      ? 'The stored outcome could not be verified against its evidence. It is not a current gap or pass; rerun this check.'
+      : 'This outcome is retained for history, but does not count as a current verified result. Review its evidence or rerun this check.';
+  if (row.status === 'observed') return row.explanation || 'Recorded external behavior, with no readiness credit.';
   return row.explanation || (row.verdict ? plainVerdictLabel(row.verdict) : row.label);
 }
 
 function checkClassInput(row: CheckRow) {
   return { check_id: row.checkId, vector_family: row.category.id, probe_profile: { kind: row.probeKind } };
+}
+
+export function rowImpact(row: CheckRow): CheckImpactId {
+  return classifyCheckImpact(checkClassInput(row)).id;
 }
 
 function CheckQueueRow({
@@ -390,7 +371,7 @@ function CheckQueueRow({
   const blocked = Boolean(prerequisite && prerequisite.state !== 'ready');
   const prerequisiteId = `td-prereq-${row.checkId.replace(/[^a-zA-Z0-9_-]/g, '-')}`;
   const sent = rowSentLine(row);
-  const resultType = row.readinessCapable ? 'Produces a verdict' : 'Observation only — no verdict';
+  const resultType = row.producesVerdict ? row.readinessCapable ? 'Produces a verdict' : 'Scoped verdict · no readiness credit' : 'Observation only · no readiness credit';
   return (
     <li className="td-check" data-status={row.status} data-selected={selected || undefined} data-included={included || undefined} data-focus-key={`check-${row.checkId}`}>
       <div className="td-check-row">
@@ -415,10 +396,13 @@ function CheckQueueRow({
           <span className="td-check-name">
             <strong>{row.name}</strong>
             <code>{row.checkId}</code>
-            <CheckClassChips check={checkClassInput(row)} />
+            <span className="td-check-chips">
+              <CheckImpactBadge impact={rowImpact(row)} />
+              <CheckClassChips check={checkClassInput(row)} />
+            </span>
           </span>
           <span className="td-check-tier">{TIER_COPY[row.tier] ? `${TIER_COPY[row.tier]} · ` : ''}{resultType}</span>
-          <Badge tone={liveNote ? 'muted' : row.tone}>{row.label}</Badge>
+          <Badge tone={liveNote ? 'muted' : row.tone}>{liveNote && ['passed', 'failed'].includes(row.status) ? 'Retained · not current' : row.label}</Badge>
           {blocked && prerequisite ? <Badge tone={prerequisiteTone(prerequisite)} title={prerequisite.detail}>{prerequisite.label}</Badge> : null}
           {liveNote ? <Badge tone="warn" title={liveNote}>Not live evidence</Badge> : null}
           <ChevronRight size={16} className="td-chevron" aria-hidden="true" />
@@ -445,11 +429,14 @@ function CheckQueueRow({
                 </dd>
               </div>
             ) : null}
-            <div><dt>How it works</dt><dd>{row.description || row.category.how}</dd></div>
-            {row.verdictLogic ? <div><dt>How it decides</dt><dd>{row.verdictLogic}</dd></div> : null}
-            <div><dt>Result type</dt><dd>{row.readinessCapable ? 'Produces a readiness verdict' : 'Observation only — no readiness credit'}</dd></div>
+            <div><dt>Purpose</dt><dd>{row.description || row.category.how}</dd></div>
+            {row.mechanism ? <div><dt>How it works</dt><dd>{row.mechanism}</dd></div> : null}
+            {row.limitations ? <div><dt>Limits</dt><dd>{row.limitations}</dd></div> : null}
+            {row.nextStep ? <div><dt>Next step</dt><dd>{row.nextStep}</dd></div> : null}
+            <div><dt>Result type</dt><dd>{row.producesVerdict ? row.readinessCapable ? 'Produces a readiness verdict' : 'Produces a scoped policy verdict; no readiness credit' : 'Observation only; no readiness credit'}</dd></div>
+            {row.expectedBehavior ? <div><dt>Expectation</dt><dd>{humanizeReason(row.expectedBehavior)}</dd></div> : null}
             <div><dt>Upper bound</dt><dd>{rowRequestLine(row)}</dd></div>
-            {sent ? <div><dt>Requests sent</dt><dd className="tabular-nums">{sent}</dd></div> : null}
+            {sent ? <div><dt>Logical operations</dt><dd className="tabular-nums">{sent}{row.requestsSimulated ? '' : ' (attested)'}</dd></div> : null}
             {row.response ? <div><dt>Response</dt><dd>{formatStepResponse(row.response)}</dd></div> : null}
             <div>
               <dt>Result</dt>
@@ -458,7 +445,7 @@ function CheckQueueRow({
                   <span className="td-live-result-line">
                     <span className="td-pulse-beacon-inline" aria-hidden="true" />
                     <strong>Awaiting recorded response</strong>
-                    <span className="td-muted">{row.requestsSent != null ? ` · ${row.requestsSent}${row.maxRequests != null ? `/${row.maxRequests}` : ''} requests sent` : ' · Request count not recorded yet'}</span>
+                    <span className="td-muted">{row.requestsSent != null ? ` · ${row.requestsSent} logical operations (attested)` : ' · Logical operation count not recorded yet'}</span>
                   </span>
                 ) : row.status === 'not_tested' && row.missingInput ? (
                   <NotTestedNote info={row.missingInput} targetId={blocked ? '' : targetId} showLabel={false} />
@@ -517,6 +504,8 @@ function CategorySelect({ label, ids, selection, disabled, onChange }: { label: 
 
 export type CheckQueueProps = {
   rows: CheckRow[];
+  /** Execution selection remains independent of the complete browsable inventory. */
+  runnableCheckIds: ReadonlySet<string>;
   runAllCount?: number;
   catalogCount?: number;
   selectedCheckId: string;
@@ -549,9 +538,10 @@ export type CheckQueueProps = {
   targetId?: string;
 };
 
-/** Every compatible check for this target, grouped by category, selectable in place. */
+/** Complete check inventory, grouped by category, with separate execution eligibility. */
 export function CheckQueue({
   rows,
+  runnableCheckIds,
   runAllCount = rows.length,
   catalogCount,
   selectedCheckId,
@@ -580,22 +570,31 @@ export function CheckQueue({
   prerequisites = {},
   targetId = '',
 }: CheckQueueProps) {
-  const isReady = (checkId: string) => !prerequisites[checkId] || prerequisites[checkId].state === 'ready';
-  const waitingCount = rows.filter((row) => !isReady(row.checkId)).length;
+  const isReady = (checkId: string) => runnableCheckIds.has(checkId) && prerequisites[checkId]?.state === 'ready';
+  const readyCount = rows.filter((row) => isReady(row.checkId)).length;
+  const waitingCount = rows.length - readyCount;
   const [filter, setFilter] = useState<QueueFilter>('all');
+  const [impact, setImpact] = useState<ImpactFilter>('all');
   const [openCategories, setOpenCategories] = useState<Record<string, boolean>>({});
   const selection = useMemo(() => new Set(runSelection), [runSelection]);
   const counts = useMemo(() => {
     const result: Record<string, number> = { all: rows.length, verdict: 0 };
     for (const row of rows) {
       result[row.status] = (result[row.status] ?? 0) + 1;
-      if (row.readinessCapable) result.verdict += 1;
+      if (row.producesVerdict) result.verdict += 1;
     }
     return result;
   }, [rows]);
-  const matchesFilter = (row: CheckRow) => filter === 'all' || (filter === 'verdict' ? row.readinessCapable : row.status === filter);
-  const visibleRows = filter === 'all' ? rows : rows.filter((row) => matchesFilter(row) || row.checkId === selectedCheckId);
-  const filteredIds = filter === 'all' ? [] : rows.filter(matchesFilter).map((row) => row.checkId).filter(isReady);
+  const impactCounts = useMemo(() => {
+    const result: Record<ImpactFilter, number> = { all: rows.length, non_invasive: 0, invasive: 0 };
+    for (const row of rows) result[rowImpact(row)] += 1;
+    return result;
+  }, [rows]);
+  const filtering = filter !== 'all' || impact !== 'all';
+  const matchesFilter = (row: CheckRow) => (impact === 'all' || rowImpact(row) === impact)
+    && (filter === 'all' || (filter === 'verdict' ? row.producesVerdict : row.status === filter));
+  const visibleRows = filtering ? rows.filter((row) => matchesFilter(row) || row.checkId === selectedCheckId) : rows;
+  const filteredIds = filtering ? rows.filter(matchesFilter).map((row) => row.checkId).filter(isReady) : [];
   const rankedGroups = useMemo(() => groupRowsByCategory(visibleRows), [visibleRows]);
   // While a run is live, results arrive row by row. Keep the order captured when it started so a
   // row never moves under the pointer or keyboard focus; the status-first order returns after.
@@ -626,10 +625,9 @@ export function CheckQueue({
 
   function changeSelection(ids: string[], include: boolean) {
     if (!onRunSelectionChange) return;
-    const runnable = new Set(rows.map((row) => row.checkId));
-    const next = new Set(runSelection.filter((id) => runnable.has(id)));
+    const next = new Set(runSelection.filter(isReady));
     for (const id of ids) {
-      if (!runnable.has(id)) continue;
+      if (!runnableCheckIds.has(id)) continue;
       if (include && !isReady(id)) continue;
       if (include) next.add(id);
       else next.delete(id);
@@ -647,7 +645,10 @@ export function CheckQueue({
   } else if (scan) {
     liveText = `Last scan ${humanizeReason(scanStatus).toLowerCase()}${typeof scan.completed_at === 'string' ? ` ${formatDate(scan.completed_at)}` : ''}: ${progress.done} of ${progress.total} checks finished.`;
   }
-  const filterLabel = FILTERS.find((entry) => entry.id === filter)?.label ?? '';
+  const filterLabel = [
+    impact !== 'all' ? CHECK_IMPACT_CLASSES[impact].label : '',
+    filter !== 'all' ? FILTERS.find((entry) => entry.id === filter)?.label ?? '' : '',
+  ].filter(Boolean).join(' · ');
 
   return (
     <section className="td-checks" id="td-all-checks" aria-labelledby="td-checks-title">
@@ -656,10 +657,10 @@ export function CheckQueue({
           <h2 id="td-checks-title">Checks for this target</h2>
           <p>
             {catalogCount != null
-              ? `${catalogCount} checks in the catalog. ${rows.length} are runnable on this target, including observation checks.`
-              : `${rows.length} checks are runnable on this target, including observation checks.`}
-            {' '}Tick checks to run them together, or open one to see what it sends, its last result and its evidence.
-            {waitingCount ? ` ${waitingCount} ${waitingCount === 1 ? 'check needs' : 'checks need'} a port or declaration first and ${waitingCount === 1 ? 'is' : 'are'} left out of run-all.` : ''}
+              ? `${catalogCount} checks in the catalog. ${readyCount} are eligible for selection on this target, including observation checks.`
+              : `${rows.length} selection checks loaded. The full catalog is not available yet.`}
+            {' '}Availability is separate from recorded results. Open any definition to inspect it; tick eligible checks to review a run. The server re-checks authorization before starting.
+            {waitingCount ? ` ${waitingCount} ${waitingCount === 1 ? 'definition needs' : 'definitions need'} setup or cannot be run here.` : ''}
           </p>
         </div>
         {canRun ? (
@@ -706,7 +707,7 @@ export function CheckQueue({
           ) : null}
         </div>
       ) : null}
-      {recommendedRow && onStartRecommended && canRun && !scanActive && !runAllBlockedReason ? (
+      {recommendedRow && isReady(recommendedRow.checkId) && onStartRecommended && canRun && !scanActive && !runAllBlockedReason ? (
         <div className="td-recommended" role="group" aria-labelledby="td-recommended-title">
           <div className="td-recommended-copy">
             <span className="td-label" id="td-recommended-title">Recommended first check</span>
@@ -726,6 +727,31 @@ export function CheckQueue({
           </Button>
         </div>
       ) : null}
+      <div className="td-impact" role="group" aria-labelledby="td-impact-title" aria-describedby="td-impact-help">
+        <div className="td-impact-head">
+          <span className="td-label" id="td-impact-title">Traffic impact</span>
+          <div className="td-impact-switch">
+            {IMPACT_FILTERS.map((entry) => (
+              <button
+                key={entry.id}
+                type="button"
+                className="td-impact-option"
+                data-impact={entry.id}
+                aria-pressed={impact === entry.id}
+                onClick={() => setImpact(entry.id)}
+              >
+                {entry.id !== 'all' ? <CheckImpactIcon impact={entry.id} /> : null}
+                {entry.label}<span className="tabular-nums">{impactCounts[entry.id]}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+        <p className="td-muted td-impact-help" id="td-impact-help">
+          {impact === 'all'
+            ? `${impactCounts.non_invasive} non-invasive checks only observe with ordinary requests. ${impactCounts.invasive} invasive checks send bounded, attack-shaped traffic and can trigger WAF, IDS or SOC alerts, so tell your security team first.`
+            : CHECK_IMPACT_CLASSES[impact].summary}
+        </p>
+      </div>
       <div className="td-filters" role="group" aria-label="Filter checks by result">
         {FILTERS.filter((entry) => entry.id === 'all' || (counts[entry.id] ?? 0) > 0).map((entry) => (
           <button
@@ -736,10 +762,10 @@ export function CheckQueue({
             aria-pressed={filter === entry.id}
             onClick={() => setFilter(entry.id)}
           >
-            {entry.label}<span className="tabular-nums">{counts[entry.id] ?? 0}</span>
+            {entry.id === 'all' && catalogCount == null ? 'Loaded' : entry.label}<span className="tabular-nums">{counts[entry.id] ?? 0}</span>
           </button>
         ))}
-        {canInclude && filter !== 'all' && filteredIds.length ? (
+        {canInclude && filtering && filteredIds.length ? (
           <Button size="sm" variant="ghost" className="td-filter-select" onClick={() => changeSelection(filteredIds, true)}>
             Select {filterLabel.toLowerCase()} ({filteredIds.length})
           </Button>
@@ -749,7 +775,7 @@ export function CheckQueue({
       {groups.map((group) => {
         const Icon = CATEGORY_ICONS[group.category.icon] ?? Shield;
         const holdsSelection = group.rows.some((row) => row.checkId === selectedCheckId);
-        const computedDefault = holdsSelection || filter !== 'all' || group.counts.failed > 0 || group.counts.running > 0 || rows.length <= 12;
+        const computedDefault = holdsSelection || filtering || group.counts.failed > 0 || group.counts.running > 0 || rows.length <= 12;
         if (defaultsRef.current[group.category.id] === undefined || holdsSelection) defaultsRef.current[group.category.id] = defaultsRef.current[group.category.id] || computedDefault;
         const defaultOpen = defaultsRef.current[group.category.id];
         const open = openCategories[group.category.id] ?? defaultOpen;
@@ -775,6 +801,7 @@ export function CheckQueue({
               <span className="td-cat-tally">
                 {group.counts.failed ? <Badge tone="danger">{`${group.counts.failed} gap${group.counts.failed === 1 ? '' : 's'}`}</Badge> : null}
                 {group.counts.passed ? <Badge tone="success">{`${group.counts.passed} protected`}</Badge> : null}
+                {group.counts.retained ? <Badge tone="muted">{`${group.counts.retained} retained, not current`}</Badge> : null}
                 {group.counts.inconclusive ? <Badge tone="muted">{`${group.counts.inconclusive} inconclusive`}</Badge> : null}
                 {group.counts.not_tested ? <Badge tone="muted">{`${group.counts.not_tested} not tested`}</Badge> : null}
                 {group.counts.not_run ? <Badge tone="muted">{`${group.counts.not_run} not run`}</Badge> : null}
@@ -790,7 +817,7 @@ export function CheckQueue({
                   selected={row.checkId === selectedCheckId}
                   onSelect={onSelect}
                   included={selection.has(row.checkId)}
-                  canInclude={canInclude}
+                  canInclude={canInclude && isReady(row.checkId)}
                   onToggleInclude={canInclude ? (checkId) => changeSelection([checkId], !selection.has(checkId)) : undefined}
                   onInspect={onInspect}
                   onStopCheck={onStopCheck}
@@ -809,7 +836,7 @@ export function CheckQueue({
       })}
       {!groups.length ? (
         <p className="td-muted">
-          No checks match this filter. <button type="button" className="td-inline-link" onClick={() => setFilter('all')}>Show all checks</button>
+          No checks match this filter. <button type="button" className="td-inline-link" onClick={() => { setFilter('all'); setImpact('all'); }}>Show all checks</button>
         </p>
       ) : null}
       {footer}

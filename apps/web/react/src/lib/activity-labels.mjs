@@ -8,14 +8,14 @@ export function activityValueLabel(value) {
   return { text: plainCodeLabel(raw, ''), code: false };
 }
 
-/** Recorded request count only; a missing count is never shown as zero. */
+/** Legacy requests_sent records attested logical operations, not completed HTTP requests. */
 export function activityRequestsSentLabel(count) {
   return count === null || count === undefined || count === '' || !Number.isFinite(Number(count))
-    ? 'Requests sent: not recorded'
-    : `${Number(count)} requests sent (recorded)`;
+    ? 'Logical operations: not recorded'
+    : `${Number(count)} logical operations (attested)`;
 }
 
 /** The authorized ceiling, kept separate from what was sent. */
 export function activityRequestLimitLabel(max) {
-  return max === null || max === undefined || !Number.isFinite(Number(max)) ? '' : `Limit: up to ${Number(max)} requests`;
+  return max === null || max === undefined || !Number.isFinite(Number(max)) ? '' : `Signed probe allowance: up to ${Number(max)} logical attempts`;
 }

@@ -1,17 +1,24 @@
 import type { DataItem } from './types';
 import type { RequiredInputMissing } from './missing-input.mjs';
+import type { CheckPrerequisite } from './control-declarations.mjs';
 
 export function retainedCoveragePairs(pairs: DataItem[]): DataItem[];
 
 export type CategoryIcon = 'shield' | 'bug' | 'server' | 'globe' | 'workflow' | 'lock' | 'network' | 'dns' | 'radio' | 'waves' | 'activity' | 'bell';
 export type CheckCategory = { id: string; label: string; layer: 'waf' | 'cdn' | 'origin' | 'ops' | 'other'; icon: CategoryIcon; how: string };
-export type RowStatus = 'passed' | 'failed' | 'inconclusive' | 'not_tested' | 'observed' | 'running' | 'queued' | 'waiting' | 'blocked' | 'skipped' | 'cancelled' | 'not_run';
+export type RowStatus = 'passed' | 'failed' | 'inconclusive' | 'not_tested' | 'observed' | 'retained' | 'running' | 'queued' | 'waiting' | 'blocked' | 'skipped' | 'cancelled' | 'not_run';
 export type Tone = 'default' | 'success' | 'warn' | 'danger' | 'info' | 'muted';
 
 export type CheckRow = {
   checkId: string;
   name: string;
   description: string;
+  limitations: string;
+  nextStep: string;
+  mechanism: string;
+  producesVerdict: boolean;
+  recordedStatus?: RowStatus;
+  coverageReason?: string;
   verdictLogic: string;
   tier: string;
   readinessCapable: boolean;
@@ -90,14 +97,15 @@ export function categoryForCheck(check: DataItem | null | undefined): CheckCateg
 export function isDeclarationOnlyCheck(check: DataItem | null | undefined): boolean;
 export function assessmentChecks(checks: DataItem[], target: DataItem | null, context?: PrerequisiteContext): DataItem[];
 export function targetCheckRequirement(check: DataItem, target: DataItem | null, context?: PrerequisiteContext): string;
+export function targetCheckAvailability(check: DataItem, target: DataItem | null, context?: PrerequisiteContext): CheckPrerequisite;
 export function individualChecks(checks: DataItem[], target: DataItem | null, context?: PrerequisiteContext): DataItem[];
 export function runAllChecks(checks: DataItem[], target: DataItem | null, context?: PrerequisiteContext): DataItem[];
 export function declarationOnlyChecks(checks: DataItem[], target: DataItem | null): DataItem[];
 export function latestRunByCheck(runs: DataItem[]): Map<string, DataItem>;
-export function buildCheckRows(input: { checks: DataItem[]; scan?: DataItem | null; runs?: DataItem[] }): CheckRow[];
+export function buildCheckRows(input: { checks: DataItem[]; scan?: DataItem | null; runs?: DataItem[]; coverage?: DataItem | null }): CheckRow[];
 export function countRowStatuses(rows: CheckRow[]): Record<RowStatus, number>;
 export function recommendedStarterRow(rows: CheckRow[]): CheckRow | null;
-export type RowEvidenceState = 'fresh' | 'stale' | 'version_gap' | 'none';
+export type RowEvidenceState = 'fresh' | 'stale' | 'version_gap' | 'unverified' | 'none';
 export function rowEvidenceState(row: CheckRow, options?: { coverage?: DataItem | null; nowMs?: number }): RowEvidenceState;
 export type RuleTally = { enforced: number; notEnforced: number; inconclusive: number; ignored: number; notRun: number; total: number; tested: number };
 export type WafRuleEnforcement = { managed: RuleTally; custom: RuleTally; evasion: RuleTally; lastAt: string };
@@ -195,5 +203,5 @@ export type PresentedObservation = {
 export function presentObservation(item: unknown): PresentedObservation | null;
 export function comparisonReasonLabel(reason: unknown): string;
 export function changeDirectionLabel(direction: unknown): string;
-export type CustomCanaryMember = { checkId: string; runId: string; verdict: string; observedAt: string; evidence: 'fresh' | 'stale' | 'version_gap'; label: string };
+export type CustomCanaryMember = { checkId: string; runId: string; verdict: string; observedAt: string; evidence: 'fresh' | 'stale' | 'version_gap' | 'unverified'; label: string };
 export function customCanaryMembers(coverage: unknown, options?: { checks?: unknown[] }): CustomCanaryMember[];

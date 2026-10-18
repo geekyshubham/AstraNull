@@ -332,7 +332,7 @@ function retryAfterMs(response: Response) {
 
 async function fetchWithRateLimitRetry(path: string, init: RequestInit) {
   let response = await fetch(path, init);
-  if (response.status !== 429) return response;
+  if (response.status !== 429 || !['GET', 'HEAD'].includes((init.method ?? 'GET').toUpperCase())) return response;
   await new Promise((resolve) => setTimeout(resolve, retryAfterMs(response)));
   response = await fetch(path, init);
   return response;

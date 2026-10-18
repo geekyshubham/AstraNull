@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { HTMLAttributes, MouseEvent as ReactMouseEvent, ReactNode } from 'react';
 import { Check, Eye, FileCheck2, TriangleAlert, Wrench } from 'lucide-react';
 import { FindingExplanationPanel } from '../components/findings/finding-explanation-panel';
+import { MissingControlCard } from '../components/findings/missing-control-card';
 import { FindingDetectionHistory } from '../components/findings/finding-detection-history';
 import { populateFindingAffectedTargets, populateFindingEvidence, readFindingRemediationFields } from '../lib/finding-detail';
 import { readFindingLineage } from '../lib/finding-lineage.mjs';
@@ -808,6 +809,7 @@ export function FindingDetailView({
 
       {!loading ? (
         <>
+      <MissingControlCard key={entityId} finding={entity} />
       <Card className="finding-summary-card">
         <CardHeader>
           <div><CardTitle>Finding summary</CardTitle><CardDescription>Key facts and exact relationships for triage and evidence review.</CardDescription></div>

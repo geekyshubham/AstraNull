@@ -13,7 +13,8 @@ describe('catalog rule coverage', () => {
     const coverage = catalogRuleCoverage();
     assert.equal(coverage.version, 'rule-coverage.v1');
     assert.ok(['VERDICT_CAPABLE_PROBE_KINDS', 'observation_only_complement'].includes(coverage.verdict_capable_from));
-    assert.equal(byId(coverage, 'custom_canary').assurance, 'verdict');
+    assert.equal(byId(coverage, 'custom_canary').assurance, 'observation');
+    assert.equal(byId(coverage, 'scanner_detection').assurance, 'verdict');
     assert.equal(byId(coverage, 'sqli').assurance, 'verdict');
     assert.equal(byId(coverage, 'http_method_policy').assurance, 'verdict');
     assert.equal(byId(coverage, 'request_body').assurance, 'soc_only');
@@ -48,6 +49,32 @@ describe('catalog rule coverage', () => {
 });
 
 describe('target rule coverage', () => {
+  it('selects the latest immutable publication independent of store order and respects tenant, run and cutoff scope', () => {
+    freshStore();
+    const store = getStore();
+    const nowMs = Date.parse('2026-10-13T00:00:00.000Z');
+    store.testRuns = [{ id: 'run_latest_coverage', tenant_id: 'ten_demo', target_id: 'tgt_1',
+      check_id: 'waf.sqli_managed_marker.safe', status: 'completed',
+      started_at: '2026-10-12T00:00:00.000Z', completed_at: '2026-10-12T00:01:00.000Z' }];
+    const publication = (extra) => ({ id: 'v_old', tenant_id: 'ten_demo', test_run_id: 'run_latest_coverage',
+      verdict: 'protected', created_at: '2026-10-12T00:01:00.000Z', ...extra });
+    const verdicts = [
+      publication({}),
+      publication({ id: 'v_new_a', verdict: 'protected', created_at: '2026-10-12T00:02:00.000Z' }),
+      publication({ id: 'v_new_z', verdict: 'inconclusive', created_at: '2026-10-12T00:02:00.000Z' }),
+      publication({ id: 'v_foreign_tenant', tenant_id: 'ten_other', created_at: '2026-10-12T00:03:00.000Z' }),
+      publication({ id: 'v_foreign_run', test_run_id: 'run_other', created_at: '2026-10-12T00:03:00.000Z' }),
+      publication({ id: 'v_future', created_at: '2026-10-14T00:00:00.000Z' }),
+      publication({ id: 'v_late_ingestion', created_at: '2026-10-12T00:04:00.000Z', ingested_at: '2026-10-14T00:00:00.000Z' }),
+    ];
+    for (const ordered of [verdicts, [...verdicts].reverse(), [...verdicts.slice(3), ...verdicts.slice(0, 3)]]) {
+      store.verdicts = ordered;
+      const sqli = byId(targetRuleCoverage({ tenantId: 'ten_demo' }, 'tgt_1', { nowMs }), 'sqli');
+      assert.equal(sqli.checks.find((row) => row.check_id === 'waf.sqli_managed_marker.safe').verdict, 'inconclusive');
+      assert.equal(sqli.status, 'inconclusive');
+    }
+  });
+
   it('returns pass, fail and needs_declaration from a fake store', () => {
     freshStore();
     const store = getStore();
@@ -86,7 +113,8 @@ describe('target rule coverage', () => {
     const coverage = targetRuleCoverage({ tenantId: 'ten_demo' }, 'tgt_1', { nowMs: now });
     assert.equal(coverage.target_id, 'tgt_1');
     assert.equal(byId(coverage, 'sqli').status, 'covered_pass');
-    assert.equal(byId(coverage, 'custom_canary').status, 'covered_fail');
+    assert.equal(byId(coverage, 'custom_canary').status, 'inconclusive');
+    assert.equal(byId(coverage, 'custom_canary').checks.find((row) => row.check_id === 'waf.http_method_policy_marker.safe').verdict, 'exposed');
     assert.equal(byId(coverage, 'inbound_tcp_deny').status, 'needs_declaration');
     assert.deepEqual(byId(coverage, 'inbound_tcp_deny').missing_declarations, ['network_policy']);
     assert.equal(byId(coverage, 'egress_filtering').status, 'out_of_scope');

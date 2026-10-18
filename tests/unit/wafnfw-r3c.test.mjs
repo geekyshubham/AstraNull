@@ -6,6 +6,7 @@ import { describe, it } from 'node:test';
 import {
   gradingSignatureVersionGap,
   deriveCheckDefinitionVersion,
+  approvedScenarioVersion,
 } from '../../src/lib/checkDefinitionVersion.mjs';
 import {
   SIGNATURE_CORPUS_VERSION,
@@ -19,6 +20,9 @@ import { SCENARIO_TO_CHECK } from '../../src/contracts/wafOrchestrator.mjs';
 import { getCheckById, CHECK_CATALOG, targetInputRefusal } from '../../src/contracts/checks.mjs';
 import { buildVerdictReplay, rederiveVerdict } from '../../src/lib/verdictReplay.mjs';
 import { sanitizeProbeMetadata } from '../../workers/probe-worker.mjs';
+import { addAssuredObservation, assuranceWorld } from '../helpers/assurance-fixtures.mjs';
+
+const CURRENT_MARKER_PROOF = addAssuredObservation(assuranceWorld()).event.metadata;
 import {
   catalogRuleCoverage,
   CUSTOM_CANARY_ONLY_REASON,
@@ -54,7 +58,7 @@ describe('R3c Backend Tests', () => {
         id: 'run_rolling_2',
         check_id: check.check_id,
         check_version: check.version,
-        scenario_version: 'marker-comparison-v4',
+        scenario_version: approvedScenarioVersion(check),
         status: 'verdicted',
         completed_at: new Date().toISOString(),
         producer_kind: 'live_external',
@@ -71,7 +75,7 @@ describe('R3c Backend Tests', () => {
       };
       const verdict = {
         verdict: 'protected',
-        scenario_version: 'marker-comparison-v4',
+        scenario_version: approvedScenarioVersion(check),
         signature_corpus_version: '2026-10-waf-corpus-v1-old',
         grading_version: WAF_GRADING_VERSION,
         evidence_ids: ['ev_1'],
@@ -261,13 +265,13 @@ describe('R3c Backend Tests', () => {
   });
 
   describe('Item 3 (F15) — Orchestrator marker scenario mapping', () => {
-    it('maps marker scenario to verdict-capable waf.http_method_policy_marker.safe', () => {
+    it('maps marker scenario to an inert custom observation without installed-rule assurance', () => {
       assert.equal(SCENARIO_TO_CHECK.marker, 'waf.http_method_policy_marker.safe');
       const check = getCheckById(SCENARIO_TO_CHECK.marker);
       assert.ok(check);
       assert.equal(check.safety_class, 'safe');
       assert.equal(check.probe_profile.kind, 'waf_class_marker_probe');
-      assert.notEqual(check.observation_only, true);
+      assert.equal(check.observation_only, true);
     });
   });
 
@@ -309,8 +313,9 @@ describe('R3c Backend Tests', () => {
       assert.equal(replay.regraded, false);
       assert.equal(replay.regrade_unavailable_reason, 'insufficient_features');
       assert.equal(replay.stored.verdict, 'protected');
-      assert.equal(replay.rederived.verdict, 'protected');
-      assert.equal(replay.changed, false);
+      assert.equal(replay.rederived.verdict, 'inconclusive');
+      assert.match(replay.rederived.explanation, /no attested probe I\/O/);
+      assert.equal(replay.changed, true);
       assert.equal(replay.retest_required, true);
     });
 
@@ -365,20 +370,25 @@ describe('R3c Backend Tests', () => {
       const storedVerdict = {
         id: 'vrd_f23_block_hdr',
         verdict: 'protected',
-        grading_version: '2026-10-waf-v1',
-        signature_corpus_version: '2026-10-waf-corpus-v1',
+        grading_version: WAF_GRADING_VERSION,
+        signature_corpus_version: SIGNATURE_CORPUS_VERSION,
         created_at: new Date().toISOString(),
       };
       const probeEvent = {
         metadata: {
+          ...CURRENT_MARKER_PROOF,
+          planned_marker_legs: 1, attempted_marker_legs: 1, completed_marker_legs: 1, graded_marker_legs: 1,
+          safety_attestation: { probe_requests_sent: 3 },
           baseline: { status_code: 200, header_names: [] },
           response_features: [
             {
               placement: 'query',
               status_code: 403,
-              header_subset: { 'X-Custom-Block': 'waf-denied-123' },
+              header_subset: { 'x-custom-block': 'waf-denied-123' },
               body_bytes: 42,
+              signature_basis: null,
             },
+            { placement: 'trailing_control', status_code: 200, header_subset: {}, signature_basis: null },
           ],
         },
       };
@@ -444,7 +454,7 @@ describe('R3c Backend Tests', () => {
   });
 
   describe('Item 6 — API gaps', () => {
-    it('6b: protectionCoverage includes last_run_id on each rolled_up_pairs entry', () => {
+    it('6b: excluded unbound custom checks never manufacture scored rollups', () => {
       const target = { id: 'tgt_r3c_canary', tenant_id: 'ten_r3c', kind: 'fqdn', value: 'example.com' };
       const run = {
         id: 'run_canary_pair_1',
@@ -466,17 +476,12 @@ describe('R3c Backend Tests', () => {
         target,
         observations: [{ run, verdict }],
       });
-      const canaryRollups = coverage.coverage.custom_canary_rollups;
-      assert.ok(canaryRollups.length > 0);
-      const rollup = canaryRollups[0];
-      assert.ok(Array.isArray(rollup.rolled_up_pairs));
-      assert.ok(rollup.rolled_up_pairs.length > 0);
-      for (const pair of rollup.rolled_up_pairs) {
-        assert.ok('last_run_id' in pair, `Pair ${pair.check_id} missing last_run_id`);
-        if (pair.check_id === 'waf.http_method_policy_marker.safe') {
-          assert.equal(pair.last_run_id, 'run_canary_pair_1');
-        }
-      }
+      assert.deepEqual(coverage.coverage.custom_canary_rollups, []);
+      const pair = coverage.coverage.pairs.find((entry) => entry.check_id === run.check_id);
+      assert.equal(pair.state, 'excluded');
+      assert.equal(pair.exclusion_reason, 'observation_only');
+      assert.equal(pair.last_run_id, null);
+      assert.equal(verdict.verdict, 'protected', 'retained verdict custody is unchanged');
     });
 
     it('6c: all assurance_reason strings start with a capital letter', () => {
@@ -558,6 +563,8 @@ describe('R3c Backend Tests', () => {
               { id: 'tgt_origin_1', tenant_id: 'ten_cust', kind: 'ip', value: '203.0.113.10' },
             ],
             targetVerifications: [
+              { id: 'v_protected_1', tenant_id: 'ten_cust', target_id: 'tgt_lockdown_1',
+                state: 'dns_verified', transitioned_at: '2026-10-01T00:00:00.000Z' },
               {
                 id: 'v_origin_1',
                 tenant_id: 'ten_cust',

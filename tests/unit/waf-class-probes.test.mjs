@@ -89,7 +89,7 @@ test('a blocking WAF is graded protected', async () => {
     const carriesMarker = String(url).includes('astranull') || Boolean(init?.headers?.['x-astranull-marker']);
     return carriesMarker ? okResponse(403, { 'x-waf-block': '1' }) : okResponse(200);
   };
-  const result = await runWafClassMarkerProbe({ url: 'https://target.example/api', marker_class: 'ssrf', fetchFn });
+  const result = await runWafClassMarkerProbe({ url: 'https://target.example/api', marker_class: 'sqli', fetchFn });
   assert.equal(result.posture, 'protected');
   assert.ok(result.requests_sent <= WAF_CLASS_PROBE_MAX_REQUESTS);
   assert.ok(calls <= WAF_CLASS_PROBE_MAX_REQUESTS);
@@ -98,7 +98,7 @@ test('a blocking WAF is graded protected', async () => {
 
 test('a permissive WAF is graded exposed', async () => {
   const fetchFn = async () => okResponse(200);
-  const result = await runWafClassMarkerProbe({ url: 'https://target.example/api', marker_class: 'xxe', fetchFn });
+  const result = await runWafClassMarkerProbe({ url: 'https://target.example/api', marker_class: 'xss', fetchFn });
   assert.equal(result.posture, 'exposed');
   assert.ok(result.allowed_count >= 1);
 });

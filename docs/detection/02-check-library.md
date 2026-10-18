@@ -20,6 +20,16 @@
 | stop_conditions | Strings describing when a run must halt (`max_events_reached`, `tenant_kill_switch`, `soc_kill_switch`, etc.). |
 | probe_profile | Bounded safe probe metadata (`kind`, `max_requests`, `timeout_ms`, optional `marker`/`method`). Signed on probe jobs. **Absent on SOC-gated entries.** |
 
+## Current presentation and evaluator contract (2026-10-15)
+
+As of 2026-10-16 the final runtime catalog has 275 IDs, including the separately reviewed `origin.identity_pair.head.v1` and `origin.identity_pair.get.v1` scenarios described in [origin exposure](24-origin-exposure.md). Those two E2 definitions run only through the reviewed entry-path comparison lifecycle; they are not ordinary launcher/default assessment additions and grant no readiness credit. The earlier one-HEAD origin profiles are unchanged. `src/lib/checkPresentation.mjs` is a presentation-only, immutable registry: `checkPresentation(checkOrId)` returns `{name, purpose, limitations, next_step, mechanism}` for every ID. Names are deliberately short descriptions of actual bounded observations, not attack/capacity claims. Registry metadata is outside execution definitions, signed profiles and definition digests. Unknown IDs receive a conservative fallback; caller-supplied names are ignored. Exact runtime/registry/audit ID equality is asserted in `tests/unit/check-presentation.test.mjs`.
+
+Class, declared entry-path and scanner comparisons use `marker-comparison-v5` and `waf-grading.v3`. Planned, attempted, completed, graded, ungraded and missing marker legs are distinct. A received unsigned 404 remains completed but ungraded; an aborted required leg remains missing. Conclusions cover only graded placements on the budget-selected paths, not skipped paths. Healthy controls and at least one graded placement remain mandatory. Redirects with missing `Location` are inconclusive; identical nonempty locations may support only the narrow not-blocked-at-edge observation.
+
+Opaque custom tokens are setup-unavailable observations: current typed declarations cannot establish an installed exact-token rule/placement/action binding. They cannot claim installed-rule failure, open a finding or earn readiness. Do not expand declarations by inference from `block_signature`, `expected_action` or `marker_paths`. Actual method policy is distinct: its existing bounded bodyless method comparison may emit a scoped E2 verdict, but never readiness credit. No methods, traffic, execution capabilities or safety ceilings were added by this revision.
+
+The complete per-ID audit and explicit invocation-versus-branch boundaries are in [the current catalog index](../implementation/verified-capability-audit-catalog-index.md).
+
 ## Safe probe profile contract
 
 Customer-runnable checks declare a **probe_profile** object alongside `probe_simulation_profile` (used for dev simulation verdicts only).

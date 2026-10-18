@@ -1,0 +1,92 @@
+{
+  "schema": "astranull.efficacy-lab.v1",
+  "lab_id": "reflector-lab",
+  "networks": [
+    "anl-reflector-lab-net"
+  ],
+  "targets": [
+    {
+      "name": "reflector-exposed-services",
+      "address": "172.31.42.10",
+      "hostname": null,
+      "ports": [
+        {
+          "port": 6379,
+          "protocol": "tcp",
+          "service": "redis"
+        },
+        {
+          "port": 19,
+          "protocol": "udp",
+          "service": "chargen"
+        },
+        {
+          "port": 1900,
+          "protocol": "udp",
+          "service": "ssdp"
+        },
+        {
+          "port": 3478,
+          "protocol": "udp",
+          "service": "stun"
+        }
+      ],
+      "planted_condition": "Deliberately exposed reflection responders on UDP (CHARGEN, SSDP, STUN) and unprotected Redis cache on TCP 6379 without firewall filtering",
+      "declarations": {},
+      "expectations": [
+        {
+          "check": "reflect.redis_direct_exposure.safe",
+          "expected": "gap",
+          "why": "Redis TCP port 6379 accepts TCP handshake from unauthenticated external probe directly"
+        },
+        {
+          "check": "reflect.chargen_qotd_exposure.safe",
+          "expected": "gap",
+          "why": "CHARGEN UDP responder on port 19 replies with bounded ASCII text satisfying validateReflectionResponse"
+        },
+        {
+          "check": "reflect.ssdp_exposure.safe",
+          "expected": "gap",
+          "why": "SSDP UDP responder on port 1900 answers M-SEARCH probe with valid UPnP device banner satisfying validateReflectionResponse"
+        },
+        {
+          "check": "reflect.stun_turn_exposure.safe",
+          "expected": "gap",
+          "why": "STUN UDP responder on port 3478 returns Binding Success response echoing probe transaction ID satisfying validateReflectionResponse"
+        },
+        {
+          "check": "reflect.ipp_callback_exposure.safe",
+          "expected": "not_applicable",
+          "why": "src/lib/probeEvidenceTiers.mjs line 2 marks ipp_get_printer_attributes as unsupported_or_unapproved_protocol_request with no approved execution adapter"
+        },
+        {
+          "check": "amp.memcached_exposure.safe",
+          "expected": "not_applicable",
+          "why": "src/contracts/checks.mjs line 2309 and src/lib/reflectorPayloads.mjs line 117 require memcached stats dump; excluded per CONTRACT.md hard safety rule barring amplification tooling and large stats dumps"
+        }
+      ]
+    },
+    {
+      "name": "reflector-protected-host",
+      "address": "172.31.42.20",
+      "hostname": null,
+      "ports": [],
+      "planted_condition": "Hardened origin host: reflection services (CHARGEN, SSDP, STUN) and Redis cache port are closed/filtered, refusing connection",
+      "declarations": {},
+      "expectations": [
+        {
+          "check": "reflect.redis_direct_exposure.safe",
+          "expected": "inconclusive_expected",
+          "why": "TCP port 6379 is closed (RST/ECONNREFUSED). Per ADR-0029 an outside-in refusal cannot distinguish a firewall from no listener, so tcp_connect withholds protected credit."
+        }
+      ]
+    }
+  ],
+  "verification": [
+    "Throwaway container on anl-reflector-lab-net sends TCP connect to 172.31.42.10:6379, successfully completing handshake and receiving +PONG",
+    "Throwaway container on anl-reflector-lab-net sends bounded UDP probe to 172.31.42.10:19, receiving 62-byte CHARGEN ASCII reply matching validateReflectionResponse",
+    "Throwaway container on anl-reflector-lab-net sends UDP M-SEARCH probe to 172.31.42.10:1900, receiving 105-byte SSDP UPnP 200 OK reply matching validateReflectionResponse",
+    "Throwaway container on anl-reflector-lab-net sends UDP STUN binding request to 172.31.42.10:3478, receiving 20-byte binding success response matching validateReflectionResponse",
+    "Throwaway container on anl-reflector-lab-net attempts TCP connect to 172.31.42.20:6379, receiving ECONNREFUSED (RST) confirming closed/protected port"
+  ]
+}

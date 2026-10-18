@@ -10,7 +10,7 @@ AstraNull reports WAF and network-firewall coverage by **rule category**, not by
 |---|---|
 | `verdict` | A bounded semantic-safe probe can return scoped `protected` or `exposed` on the probed path. |
 | `violation_only` | Outside-in evidence can expose a declared deny that was violated. `protected` is not available from silence or RST. |
-| `partial` | The only self-serve evidence is a custom canary rule: it proves a rule written for AstraNull's inert token, not the managed attack-class rule. `assurance_reason` says so. |
+| `partial` | Reserved legacy assurance value. Current unbound custom-canary checks are classified as `observation`, not partial installed-rule proof. |
 | `observation` | Transport/response facts only. No control verdict. |
 | `declaration` | Metadata-marker / customer declaration only. |
 | `soc_only` | Only a SOC-gated suite can conclude. Nothing self-serve sends a body or an exploit payload. |
@@ -23,7 +23,7 @@ Per-check derivation (`checkCatalogAssurance` in `src/contracts/ruleCoverage.mjs
 1. SOC-gated or no probe profile → `soc_only`; `metadata_marker` → `declaration`.
 2. A probe check the catalog refuses for every target (`mechanism_supported: false`, or `additionalInputRefusal` that cannot be satisfied by any target port or customer declaration) → `not_assessable`, `assurance_reason` "no runnable probe". Target-dependent requirements (such as ports or declarations in `TARGET_DEPENDENT_REQUIREMENTS`) remain declaration-gated: they keep the probe's true assurance level and list `required_declarations`.
 3. Network-firewall observation kinds (`nfw.*`, `l3_l4`, reflection, amplification, origin `host_sni_bypass`) → `violation_only`: an unambiguous handshake plus a declared deny, or a validated reflector reply, is `exposed`; timeout is not `protected`.
-4. Custom-canary class markers (`assurance_scope: custom_canary_rule`) → `partial` with the custom-canary reason.
+4. Custom-canary class markers (`assurance_scope: custom_canary_rule`) → `observation` with the unavailable installed-rule setup reason. The managed scanner user-agent check stays in its scanner category, not the custom-token category.
 5. Kinds on `VERDICT_CAPABLE_PROBE_KINDS` → `verdict` (e.g. `rate_limiting` via `waf.rate_limit_canary.validation` with a declaration).
 6. Anything else, including unknown probe kinds → `observation`. An unknown kind is never `verdict`.
 
@@ -42,7 +42,7 @@ A category takes its `forced_assurance` only when at least one of its checks act
 
 ## WAF categories and new checks
 
-Custom canary rules (`assurance_scope: custom_canary_rule`) prove a customer rule written for an AstraNull inert token. They do not prove attack-class protection. Categories served only by such opaque canaries are `partial`: `request_smuggling`, `ssrf_xxe_jndi`, `deserialization`, `file_upload`, and `ssti` (their SOC suites rank below `partial`).
+Custom tokens (`assurance_scope: custom_canary_rule`) cannot currently prove that an exact-token customer rule is installed. `block_signature`, `expected_action` and `marker_paths` are not that binding. Such checks carry `setup_required: true`, `produces_verdict: false`, `observation_only: true`, `readiness_conclusion: false`; blocked/allowed token responses remain observations, never installed-rule failure findings. Categories served only by opaque canaries (`request_smuggling`, `ssrf_xxe_jndi`, `deserialization`, `file_upload`, `ssti`) have no current self-serve installed-rule assurance. The current catalog returns `observation` for those categories. Historical pass/fail text remains available unchanged, but observation-only checks cannot contribute `covered_pass` or `covered_fail` to the current target projection.
 
 Managed-rule markers (SQLi, XSS, path traversal) send the plain inert class token that managed OWASP rulesets recognise. SSTI's marker is an opaque token, so `waf.ssti_marker.safe` is a custom canary, not a managed marker.
 
@@ -50,7 +50,7 @@ Request-body, inspection-limit, and response-DLP checks are SOC-gated (`canary_s
 
 RFI and CVE virtual-patching are `missing`: "Not tested. Remote-file-inclusion and CVE exploit markers could trigger work on a vulnerable server, so AstraNull does not send them. Ask SOC for a manual assessment." URL-fetch, lookup, and property-assignment marker forms are not catalogued as self-serve.
 
-`waf.http_method_policy_enforced.safe` (`waf_method_policy_probe`) and `waf.rate_limit_canary.validation` (`rate_limit_canary_probe`) are worker-executed (`CAPABILITY_PROBE_DISPATCH`). The method-policy check sends `TRACE` and the nonstandard token `ASTRANULLPROBE` with no body and uses no declaration; it is `verdict`. The rate-limit canary needs `waf.rate_limit_canary` and is `protected` only when `threshold` requests were allowed and the limit came at `threshold+1` or `threshold+2`.
+`waf.http_method_policy_enforced.safe` (`waf_method_policy_probe`) and `waf.rate_limit_canary.validation` (`rate_limit_canary_probe`) are worker-executed (`CAPABILITY_PROBE_DISPATCH`). The method-policy check sends `TRACE` and the nonstandard token `ASTRANULLPROBE` with no body and uses no declaration; it is verdict-capable E2 with `produces_verdict: true`, `observation_only: true`, `readiness_conclusion: false`. It does not earn readiness credit. The rate-limit canary needs `waf.rate_limit_canary` and is `protected` only when `threshold` requests were allowed and the limit came at `threshold+1` or `threshold+2`.
 
 ## NFW categories and new checks
 

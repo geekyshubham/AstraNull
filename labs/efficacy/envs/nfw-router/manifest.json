@@ -1,0 +1,73 @@
+{
+  "schema": "astranull.efficacy-lab.v1",
+  "lab_id": "nfw-router",
+  "networks": [
+    "anl-nfw-router-client"
+  ],
+  "targets": [
+    {
+      "name": "server-behind-nfw-router",
+      "address": "172.31.31.2",
+      "hostname": null,
+      "ports": [
+        { "port": 80, "protocol": "tcp", "service": "http" },
+        { "port": 22, "protocol": "tcp", "service": "ssh" },
+        { "port": 8081, "protocol": "tcp", "service": "custom" },
+        { "port": 8082, "protocol": "tcp", "service": "custom" },
+        { "port": 8083, "protocol": "tcp", "service": "custom" },
+        { "port": 8053, "protocol": "udp", "service": "custom" },
+        { "port": 8054, "protocol": "udp", "service": "custom" }
+      ],
+      "planted_condition": "Alpine NFW router forwarding between client (172.31.31.0/24) and server (172.31.32.0/24). Policy: TCP 80 allowed; management TCP 22 open with SSH banner (exposure leak); TCP 8081 dropped; TCP 8082 rejected with RST; UDP 8053 allowed; UDP 8054 dropped; TCP 8083 connlimit capped at 2 per source.",
+      "declarations": {
+        "network_policy": [
+          { "protocol": "tcp", "port": 80, "action": "allow", "address_family": "any", "note": "Permitted HTTP service" },
+          { "protocol": "tcp", "port": 22, "action": "deny", "address_family": "any", "note": "Declared deny SSH management port (exposed)" },
+          { "protocol": "tcp", "port": 8081, "action": "deny", "address_family": "any", "note": "Declared deny TCP port (dropped by router)" },
+          { "protocol": "tcp", "port": 8082, "action": "deny", "address_family": "any", "note": "Declared deny TCP port (rejected by router)" },
+          { "protocol": "udp", "port": 8053, "action": "allow", "address_family": "any", "note": "Permitted UDP echo responder" },
+          { "protocol": "udp", "port": 8054, "action": "deny", "address_family": "any", "note": "Declared deny UDP port (dropped by router)" }
+        ],
+        "connection_limits": [
+          { "protocol": "tcp", "port": 8083, "max_connections_per_source": 2 }
+        ]
+      },
+      "expectations": [
+        {
+          "check": "nfw.declared_deny_tcp.safe",
+          "expected": "gap",
+          "why": "TCP port 22 is declared deny in network_policy but router allows traffic; handshake succeeds from non-CDN client network peer."
+        },
+        {
+          "check": "l3.basic_deny_rule.safe",
+          "expected": "gap",
+          "why": "Declared deny rule on tcp/22 fails to block probe traffic; handshake succeeds from non-CDN client network peer."
+        },
+        {
+          "check": "nfw.management_port_exposure.safe",
+          "expected": "gap",
+          "why": "Port 22 SSH banner listener is open and reachable from client network despite declared deny rule in network_policy."
+        },
+        {
+          "check": "nfw.connection_limit.safe",
+          "expected": "inconclusive_expected",
+          "why": "Per-source connection limit of 2 is enforced on tcp/8083 (3rd attempt refused with RST); outside-in probe observes refusal at cap and withholds protected verdict per specification."
+        },
+        {
+          "check": "nfw.declared_deny_udp.safe",
+          "expected": "inconclusive_expected",
+          "why": "UDP port 8054 is declared deny in network_policy and dropped silently by router; outside-in evidence cannot prove a deny rule from silence alone per specification."
+        }
+      ]
+    }
+  ],
+  "verification": [
+    "curl http://172.31.31.2/ returns 200 origin-ok completing handshake on allowed TCP 80",
+    "nc -w 3 -z 172.31.31.2 8081 times out after 3s proving DROP behavior on TCP 8081",
+    "nc -w 3 -z 172.31.31.2 8082 immediately refuses connection (RST) in 0s proving REJECT behavior on TCP 8082",
+    "UDP datagram sent to 172.31.31.2:8053 returns single datagram reply proving allowed UDP behavior",
+    "UDP datagram sent to 172.31.31.2:8054 times out silently with no reply proving dropped UDP behavior",
+    "3 sequential TCP connects to 172.31.31.2:8083: attempts 1 and 2 succeed, attempt 3 refused (ECONNREFUSED) proving connlimit of 2",
+    "nc -w 3 172.31.31.2 22 returns SSH banner proving management port exposure"
+  ]
+}

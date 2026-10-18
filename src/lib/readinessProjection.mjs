@@ -15,6 +15,20 @@ function available(row, nowMs, fallback) {
   return times.every((time) => time != null && time <= nowMs);
 }
 
+/** Select immutable publication at the cutoff before validating, never fall back to older valid proof. */
+export function latestAvailableVerdicts({ tenantId, runs, verdicts, nowMs }) {
+  const runIds = new Set(rows(runs).filter((run) => sameTenant(run, tenantId)).map((run) => run.id));
+  const byRun = new Map();
+  for (const verdict of rows(verdicts)) {
+    if (!sameTenant(verdict, tenantId) || !runIds.has(verdict.test_run_id) || !available(verdict, nowMs)) continue;
+    const prior = byRun.get(verdict.test_run_id);
+    if (prior && (ts(prior.created_at) > ts(verdict.created_at)
+      || ts(prior.created_at) === ts(verdict.created_at) && String(prior.id).localeCompare(String(verdict.id)) > 0)) continue;
+    byRun.set(verdict.test_run_id, verdict);
+  }
+  return byRun;
+}
+
 /** Only actual same-run signed results can back a verdict; activity and unlinked vault IDs cannot. */
 export function verifiedVerdicts({ tenantId, runs = [], verdicts = [], events = [], evidenceItems = [], nowMs = Date.now() }) {
   const runById = new Map(rows(runs).filter((run) => sameTenant(run, tenantId)).map((run) => [run.id, run]));
@@ -31,14 +45,11 @@ export function verifiedVerdicts({ tenantId, runs = [], verdicts = [], events = 
     return sameTenant(item, tenantId) && event && item.test_run_id === event.test_run_id && available(item, nowMs, event.timestamp);
   }).map((item) => [item.id, item]));
   const byRun = new Map();
-  for (const verdict of rows(verdicts)) {
-    if (!sameTenant(verdict, tenantId) || !runById.has(verdict.test_run_id) || !available(verdict, nowMs)) continue;
+  for (const verdict of latestAvailableVerdicts({ tenantId, runs, verdicts, nowMs }).values()) {
     const ids = rows(verdict.evidence_ids);
     if (!ids.length) continue;
     const resultEvents = ids.map((id) => eventById.get(id) ?? eventById.get(evidenceById.get(id)?.related_event_id));
     if (resultEvents.some((event) => !event || event.test_run_id !== verdict.test_run_id)) continue;
-    const prior = byRun.get(verdict.test_run_id);
-    if (prior && (ts(prior.verdict.created_at) > ts(verdict.created_at) || ts(prior.verdict.created_at) === ts(verdict.created_at) && String(prior.verdict.id).localeCompare(String(verdict.id)) > 0)) continue;
     const observationTime = Math.min(...resultEvents.map((event) => ts(event.timestamp)));
     const metadata = resultEvents.map((event) => event.metadata ?? event.metadata_json ?? {});
     const observationOnly = metadata.some((entry) => entry.observation_only === true || entry.readiness_conclusion === false);
@@ -117,6 +128,7 @@ export function projectReadiness(input = {}) {
   const targets = rows(input.targets).filter((target) => sameTenant(target, tenantId) && active(target) && (target.created_at == null || available(target, nowMs)) && (!target.target_group_id || groupById.has(target.target_group_id)));
   const runs = rows(input.runs).filter((run) => sameTenant(run, tenantId) && available(run, nowMs, run.started_at ?? run.completed_at));
   const byRun = verifiedVerdicts({ ...input, runs, nowMs });
+  const retainedVerdicts = latestAvailableVerdicts({ tenantId, runs, verdicts: input.verdicts, nowMs });
   const policies = rows(input.policies).filter((policy) => sameTenant(policy, tenantId));
   // Exact grouping avoids constructing one million identical not-run rows. Applicability
   // is catalog + effective target kind; scopes and policies are still evaluated per
@@ -127,7 +139,7 @@ export function projectReadiness(input = {}) {
     const projectedRun = proof ? { ...run, readiness_result_metadata: proof.result_metadata,
       ...(proof.observation_only || proof.incomplete ? { probe_metadata: { ...(run.probe_metadata ?? {}),
         observation_only: proof.observation_only, comparison_complete: !proof.incomplete } } : {}) } : run;
-    const observation = { check_id: run.check_id, run: projectedRun, verdict: proof?.verdict ?? null,
+    const observation = { check_id: run.check_id, run: projectedRun, verdict: retainedVerdicts.get(run.id) ?? null,
       evidence_verified: Boolean(proof), observed_at: proof?.observed_at, require_recorded_scope: true };
     const existing = observationsByTarget.get(run.target_id) ?? [];
     existing.push(observation);

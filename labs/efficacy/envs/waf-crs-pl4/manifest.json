@@ -1,0 +1,83 @@
+{
+  "schema": "astranull.efficacy-lab.v1",
+  "lab_id": "waf-crs-pl4",
+  "verification_note": "Local evidence referenced from /tmp/astranull-efficacy-fix/waf-ground-truth.json (to be consolidated in repository report later; final integration matrix not yet claimed as passed).",
+  "networks": [
+    "anl-waf-crs-pl4-net"
+  ],
+  "targets": [
+    {
+      "name": "origin-behind-crs-paranoia-level-4",
+      "address": "172.31.24.10",
+      "hostname": null,
+      "ports": [
+        {
+          "port": 80,
+          "protocol": "tcp",
+          "service": "http"
+        }
+      ],
+      "planted_condition": "OWASP ModSecurity Core Rule Set (CRS 4) in blocking mode at Paranoia Level 4 (BLOCKING_PARANOIA=4, DETECTION_PARANOIA=4, MODSEC_RULE_ENGINE=on, anomaly inbound score threshold 5) in front of nginx:1.27-alpine returning 200 origin-ok for all unblocked paths.",
+      "declarations": {
+        "version": 1,
+        "waf": {
+          "block_signature": {
+            "header_name": "x-astranull-lab-block",
+            "header_value": "crs",
+            "status_codes": [
+              403
+            ]
+          }
+        }
+      },
+      "verification_note": "Local evidence referenced from /tmp/astranull-efficacy-fix/waf-ground-truth.json (to be consolidated in repository report later; final integration matrix not yet claimed as passed).",
+      "expectations": [
+        {
+          "check": "waf.sqli_managed_marker.safe",
+          "expected": "protected",
+          "why": "ModSecurity CRS 4 at PL4 blocks the plain inert SQLi marker (rules 942100, 942432, 949110) across query, path, and header with HTTP 403 while baseline plain GET / returns HTTP 200."
+        },
+        {
+          "check": "waf.xss_managed_marker.safe",
+          "expected": "gap",
+          "why": "ModSecurity CRS 4 at PL4 blocks XSS query and header markers with 403, but path placement returns 200 origin-ok; expected gap (scoped partial)"
+        },
+        {
+          "check": "waf.path_traversal_managed_marker.safe",
+          "expected": "protected",
+          "why": "ModSecurity CRS 4 at PL4 blocks path traversal query and header markers with 403; encoded path returns 400 Bad Request due to generic nginx parser refusal which is an ungraded parser refusal not attributed to WAF control, but check is expected protected over graded marker placements"
+        },
+        {
+          "check": "waf.scanner_signature_marker.safe",
+          "expected": "protected",
+          "why": "ModSecurity CRS 4 blocks the inert scanner user-agent marker (sqlmap/1.8 (astranull-inert), rule 913100) with HTTP 403 while baseline returns HTTP 200."
+        },
+        {
+          "check": "waf.evasion_case_fold.safe",
+          "expected": "protected",
+          "why": "ModSecurity CRS 4 at PL4 normalizes and blocks the case-folded SQLi marker with HTTP 403, resisting evasion."
+        },
+        {
+          "check": "waf.evasion_mixed_url.safe",
+          "expected": "protected",
+          "why": "ModSecurity CRS 4 at PL4 decodes and blocks the mixed URL encoded SQLi marker with HTTP 403, resisting evasion."
+        },
+        {
+          "check": "waf.evasion_double_url.safe",
+          "expected": "protected",
+          "why": "ModSecurity CRS 4 at PL4 normalizes and blocks the double URL encoded SQLi marker with HTTP 403, resisting evasion."
+        }
+      ]
+    }
+  ],
+  "verification": [
+    "curl from throwaway container on anl-waf-crs-pl4-net shows GET / returns 200 OK with body origin-ok",
+    "curl from throwaway container on anl-waf-crs-pl4-net with SQLi marker (astranull' OR '1'='0') returns 403 Forbidden",
+    "curl from throwaway container on anl-waf-crs-pl4-net with XSS marker (<astranull-xss-probe/>) returns 403 Forbidden",
+    "curl from throwaway container on anl-waf-crs-pl4-net with path traversal marker (../../astranull-probe) returns 403 Forbidden",
+    "curl from throwaway container on anl-waf-crs-pl4-net with case-fold SQLi marker returns 403 Forbidden",
+    "curl from throwaway container on anl-waf-crs-pl4-net with comment SQLi marker returns 403 Forbidden",
+    "curl from throwaway container on anl-waf-crs-pl4-net with double URL encoded SQLi marker returns 403 Forbidden",
+    "curl from throwaway container on anl-waf-crs-pl4-net with scanner user-agent returns 403 Forbidden"
+  ]
+}

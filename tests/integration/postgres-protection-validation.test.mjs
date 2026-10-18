@@ -416,12 +416,12 @@ describe('actual PostgreSQL report scope and performed classification', () => {
       await seed(pool);
       await pool.query('UPDATE target_groups SET created_at = $1 WHERE id = $2', [DECLARED, GROUP]);
       await pool.query(`INSERT INTO test_policies (id, tenant_id, target_group_id, target_id, check_id, created_at)
-        VALUES ('policy_report_live', $1, $2, 'tgt_pg_app', 'waf.http_method_policy_marker.safe', $3)`, [TENANT, GROUP, DECLARED]);
+        VALUES ('policy_report_live', $1, $2, 'tgt_pg_app', 'waf.sqli_managed_marker.safe', $3)`, [TENANT, GROUP, DECLARED]);
       const target = (await pool.query('SELECT * FROM targets WHERE id = $1', ['tgt_pg_app'])).rows[0];
       const group = (await pool.query('SELECT * FROM target_groups WHERE id = $1', [GROUP])).rows[0];
       const policy = (await pool.query(`SELECT * FROM test_policies WHERE id = 'policy_report_live'`)).rows[0];
       policy.schedule_revision = Number(policy.schedule_revision);
-      const check = getCheckById('waf.http_method_policy_marker.safe');
+      const check = getCheckById('waf.sqli_managed_marker.safe');
       const scenario = check.check_id;
       const stamp = deriveRunEvidenceStamp(check, undefined, { probeMode: 'signed-worker', scenarioVersion: approvedScenarioVersion(check) });
       const observed = '2026-10-05T12:00:00.000Z';
@@ -430,9 +430,11 @@ describe('actual PostgreSQL report scope and performed classification', () => {
         VALUES ('run_report_live', $1, $2, $3, $4, $5, 'verdicted', 'signed_probe', $6, $7, $8::jsonb, '{"nonce_hash":"nonce_report_live"}', $9, $9)`,
         [TENANT, GROUP, target.id, policy.id, check.check_id, stamp.check_version, stamp.scenario_version,
           JSON.stringify({ assurance_scope: deriveAssuranceScope({ target, targetGroup: group, policy }) }), observed]);
-      const metadata = { source_perspective: 'public-worker-eu', complete: true, classifier_version: 'marker-comparison-v4',
-        comparison_complete: true, planned_marker_legs: 2, completed_marker_legs: 2, permitted_baseline_health: 'healthy',
-        permitted_baseline: { status_code: 200 }, marker_results: [{ blocked: true, allowed: false }], enforcement: 'enforced',
+      const metadata = { source_perspective: 'public-worker-eu', complete: true, classifier_version: 'marker-comparison-v5',
+        comparison_complete: true, planned_marker_legs: 2, attempted_marker_legs: 2, completed_marker_legs: 2,
+        graded_marker_legs: 2, ungraded_marker_legs: 0, missing_marker_legs: 0,
+        permitted_baseline_health: 'healthy', permitted_baseline: { status_code: 200 }, trailing_control: { outcome: 'allowed' },
+        marker_results: [{ blocked: true, allowed: false }, { blocked: true, allowed: false }], enforcement: 'enforced',
         grading_version: WAF_GRADING_VERSION, signature_corpus_version: SIGNATURE_CORPUS_VERSION };
       await pool.query(`INSERT INTO events (id, tenant_id, test_run_id, signal_type, producer_kind, nonce_hash, timestamp, ingested_at, metadata_json)
         VALUES ('event_report_live', $1, 'run_report_live', 'probe_result', 'signed_probe', 'nonce_report_live', $2, $2, $3::jsonb)`, [TENANT, observed, JSON.stringify(metadata)]);
@@ -484,7 +486,7 @@ describe('actual PostgreSQL report scope and performed classification', () => {
       assert.equal(project(await input()).current_assurance.status, 'tested_path_scenario_only');
       assert.equal(JSON.stringify([(await input()).runs, (await input()).events, evaluation]), custody);
       await pool.query(`UPDATE events SET metadata_json = $1::jsonb WHERE id = 'event_report_live'`,
-        [JSON.stringify({ ...metadata, marker_results: [{ blocked: false, allowed: true }], enforcement: 'not_enforced' })]);
+        [JSON.stringify({ ...metadata, marker_results: [{ blocked: false, allowed: true }, { blocked: false, allowed: true }], enforcement: 'not_enforced' })]);
       assert.ok(project(await input()).current_assurance.reasons.includes('actual_outcome_mismatch'));
       assert.equal(evaluation.items[0].outcome, 'consistent_enforcement');
     }, availability.env ?? process.env);

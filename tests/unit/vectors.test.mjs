@@ -149,7 +149,9 @@ describe('vector catalog', () => {
           target_id: 'tgt_1',
         });
       }
-      if (result.error === 'concurrent_run_blocked') {
+      if (['origin.identity_pair.head.v1', 'origin.identity_pair.get.v1'].includes(check.check_id)) {
+        assert.deepEqual(result, { error: 'origin_identity_review_required', status: 409 }, check.check_id);
+      } else if (result.error === 'concurrent_run_blocked') {
         getStore().testRuns.forEach((r) => {
           r.status = 'verdicted';
         });
@@ -170,6 +172,40 @@ describe('vector catalog', () => {
     }
     assert.ok(getCheckById('dns.authoritative_response.safe'));
   });
+
+  for (const checkId of ['origin.identity_pair.head.v1', 'origin.identity_pair.get.v1']) {
+    it(`requires server-reviewed comparison authority for ${checkId} in simulation and signed-worker modes`, () => {
+      for (const runtime of [
+        { probeMode: 'simulation' },
+        { probeMode: 'signed-worker', probeWorkerSecret: 's'.repeat(32) },
+      ]) {
+        freshStore();
+        const ctx = { tenantId: 'ten_demo', userId: 'u1', role: 'engineer' };
+        const store = getStore();
+        const beforeRuns = store.testRuns.length;
+        const beforeJobs = store.probeJobs.length;
+        for (const extra of [
+          {},
+          { origin_binding_id: 'unreviewed_binding', reviewedComparison: { status: 'running' } },
+        ]) {
+          const result = startTestRun(ctx, {
+            check_id: checkId,
+            target_group_id: 'tg_1',
+            target_id: 'tgt_1',
+            ...extra,
+          }, runtime);
+          assert.deepEqual(result, { error: 'origin_identity_review_required', status: 409 });
+          assert.equal(store.testRuns.length, beforeRuns);
+          assert.equal(store.probeJobs.length, beforeJobs);
+          const denial = store.auditLog.at(-1);
+          assert.equal(denial.action, 'test_run.origin_identity_review_denied');
+          assert.equal(denial.tenant_id, ctx.tenantId);
+          assert.equal(denial.metadata.check_id, checkId);
+          assert.equal(denial.metadata.origin_binding_id, extra.origin_binding_id ?? null);
+        }
+      }
+    });
+  }
 
   it('rejects target kinds outside a check supported target contract', () => {
     freshStore();

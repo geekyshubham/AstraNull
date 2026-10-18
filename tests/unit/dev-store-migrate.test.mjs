@@ -323,6 +323,8 @@ describe('dev store migration', () => {
       wafRuleRecommendations: [],
       discoveryEntities: [],
       discoveryCandidates: [],
+      originClues: [],
+      originClueBatches: [],
       supplyChainRisks: [],
       wafActionItems: [],
       supplyChainTickets: [],

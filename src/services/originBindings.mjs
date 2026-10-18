@@ -7,6 +7,9 @@
  * The relation is not an origin lockdown and it is not a capacity assurance.
  */
 import { randomBytes } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
+import { originBindingAuthority, originTargetDescriptor, exactOriginScope, targetLiteralIpAddress, publicOriginAddress } from '../lib/originLockdownResolution.mjs';
+import { signedOriginIdentityPair, originIdentityProofBinding } from '../lib/originIdentityPair.mjs';
 import { effectiveTargetVerifications } from '../lib/effectiveTargetVerification.mjs';
 import { ownershipProofFromStates } from '../lib/ownershipPolicy.mjs';
 import { getCheckById } from '../contracts/checks.mjs';
@@ -15,6 +18,7 @@ import { requirePermission } from '../rbac.mjs';
 import { audit } from '../audit.mjs';
 import { normalizeObservationTimestamp, compareObservationOrder, projectObservation } from './targetHistory.mjs';
 import { getStore, persistStore } from '../store.mjs';
+import { cancelTestRun } from './testRuns.mjs';
 
 const BANNED_KEYS = new Set(['direct_ip', 'discovered_endpoint', 'discovered_endpoints', 'endpoint', 'destination']);
 const PROTECTED_KINDS = new Set(['fqdn', 'hostname', 'domain']);
@@ -22,7 +26,7 @@ const REACHABLE_OUTCOMES = new Set(['reachable', 'unreachable', 'denied', 'pass'
 
 /** Only a catalog check whose probe profile is host_sni_bypass may prove a bound origin. */
 function isApprovedHostSniCheck(checkId) {
-  return getCheckById(checkId)?.probe_profile?.kind === 'host_sni_bypass';
+  return ['host_sni_bypass', 'origin_identity_pair'].includes(getCheckById(checkId)?.probe_profile?.kind);
 }
 
 function error(code, status, extra = {}) {
@@ -99,7 +103,9 @@ import { currentOriginProof, deriveBindingScope } from '../lib/originLockdownRes
 
 export function bindingRecordsFromStore(store, tenantId) {
   return {
-    targets: (store.targets ?? []).filter((target) => target.tenant_id === tenantId && !target.deleted_at),
+    targets: (store.targets ?? []).filter((target) => target.tenant_id === tenantId && !target.deleted_at && !target.archived_at
+      && !(store.targetGroups ?? []).some((group) => group.tenant_id === tenantId && group.id === target.target_group_id
+        && (group.deleted_at || group.archived_at))),
     targetVerifications: store.targetVerifications ?? [],
     wafConnectors: store.wafConnectors ?? [],
     wafConnectorSnapshots: store.wafConnectorSnapshots ?? [],
@@ -138,9 +144,11 @@ export function validateOriginBindingForRun({
   if (banned) return error('scope_not_declared', 400, { field: banned });
   if (!binding || binding.status !== 'active') return error('unknown_origin_binding', 404);
   if (!runTarget || runTarget.id !== binding.origin_target_id) return error('binding_target_mismatch', 409);
+  if (runTarget.deleted_at || runTarget.archived_at || runTarget.tenant_id !== binding.tenant_id) return error('unknown_target', 404);
   if (targetRole(runTarget) !== 'origin') return error('origin_target_not_verified_address', 400);
-  if (!protectedTarget || protectedTarget.id !== binding.protected_target_id) return error('unknown_target', 404);
-  if (check?.probe_profile?.kind !== 'host_sni_bypass') return error('origin_check_not_approved', 400);
+  if (!protectedTarget || protectedTarget.id !== binding.protected_target_id
+    || protectedTarget.deleted_at || protectedTarget.archived_at || protectedTarget.tenant_id !== binding.tenant_id) return error('unknown_target', 404);
+  if (!['host_sni_bypass', 'origin_identity_pair'].includes(check?.probe_profile?.kind)) return error('origin_check_not_approved', 400);
   // Re-derive with the stored choice so a binding created from a legitimate
   // in-scope choice still starts when the declaration allows several ports or
   // paths. A choice no longer inside the current declaration is scope_mismatch.
@@ -160,7 +168,59 @@ export function validateOriginBindingForRun({
   if (!protectedProof?.verified) {
     return error('ownership_not_verified', 409, { ownership_state: protectedProof?.state ?? null, proof: 'protected' });
   }
-  return { ok: true, scope };
+  return { ok: true, scope, authority: originBindingAuthority(binding, runTarget, protectedTarget) };
+}
+
+/** Immutable run association, never a claim that the binding remains authorized now. */
+export function historicalOriginBindingForRun(run) {
+  const id = run?.origin_binding_id ?? run?.provenance_json?.origin_lockdown?.binding_id;
+  return typeof id === 'string' && id ? { id, status: 'historical', historical_binding_reference: true } : null;
+}
+
+/** Shared memory/PostgreSQL eligibility contract at the durable execution grant. */
+export function validateOriginBindingForExecution({ job, run, binding, records = {} } = {}) {
+  const reference = historicalOriginBindingForRun(run);
+  const signedScope = job?.constraints?.origin_scope;
+  const signedLockdown = job?.constraints?.origin_lockdown;
+  const lockdown = run?.provenance_json?.origin_lockdown;
+  // An ordinary unbound probe stays ordinary. A scope carrier without its run binding is not authority.
+  if (!reference) return signedScope || signedLockdown || job?.constraints?.origin_authority
+    || job?.constraints?.origin_identity_pair ? error('origin_binding_missing', 409) : { ok: true };
+  if (!binding || binding.id !== reference.id || binding.tenant_id !== job?.tenant_id
+    || run?.tenant_id !== job?.tenant_id || binding.status !== 'active') return error('unknown_origin_binding', 409);
+  const originTarget = (records.targets ?? []).find((row) => row.id === binding.origin_target_id && row.tenant_id === job.tenant_id);
+  const protectedTarget = (records.targets ?? []).find((row) => row.id === binding.protected_target_id && row.tenant_id === job.tenant_id);
+  const check = { probe_profile: job.probe_profile };
+  const decision = validateOriginBindingForRun({ binding, runTarget: originTarget, protectedTarget, check,
+    originProof: currentOriginProof(records, job.tenant_id, binding.origin_target_id),
+    protectedProof: currentOriginProof(records, job.tenant_id, binding.protected_target_id) });
+  if (decision.error) return decision;
+  const storedScope = run.origin_binding_id ? run.provenance_json?.origin_scope : lockdown;
+  if (!exactOriginScope(storedScope, decision.scope) || !exactOriginScope(signedScope, storedScope)) return error('scope_mismatch', 409);
+  const storedAuthority = run.provenance_json?.origin_authority ?? lockdown?.authority;
+  if (!isDeepStrictEqual(storedAuthority, decision.authority)
+    || !isDeepStrictEqual(job.constraints?.origin_authority, storedAuthority)) return error('target_binding_changed', 409);
+  const runTarget = run.origin_binding_id ? originTarget : protectedTarget;
+  if (run.target_id !== runTarget?.id || job.target_id !== run.target_id
+    || job.check_id !== run.check_id || !isDeepStrictEqual(originTargetDescriptor(job.target), originTargetDescriptor(runTarget))) {
+    return error('binding_target_mismatch', 409);
+  }
+  if (!run.origin_binding_id) {
+    const address = publicOriginAddress(targetLiteralIpAddress(originTarget));
+    if (run.check_id !== 'nfw.origin_lockdown.safe' || !address || lockdown?.address !== address
+      || job.probe_profile?.direct_ip !== address) return error('scope_mismatch', 409);
+  }
+  if (job.probe_profile?.kind === 'origin_identity_pair') {
+    const pair = signedOriginIdentityPair(job);
+    if (!pair || pair.binding_id !== binding.id || !isDeepStrictEqual(pair, run.provenance_json?.origin_identity_pair)
+      || !isDeepStrictEqual(pair.origin_target, originTargetDescriptor(originTarget))
+      || !isDeepStrictEqual(pair.protected_target, originTargetDescriptor(protectedTarget))
+      || !isDeepStrictEqual(pair.origin_ownership_binding, originIdentityProofBinding(records, job.tenant_id, originTarget.id))
+      || !isDeepStrictEqual(pair.protected_ownership_binding, originIdentityProofBinding(records, job.tenant_id, protectedTarget.id))) {
+      return error('origin_identity_authority_changed', 409);
+    }
+  }
+  return { ok: true, scope: decision.scope, authority: decision.authority };
 }
 
 export function planOriginBinding(ctx, body, records, options = {}) {
@@ -204,6 +264,18 @@ export function planOriginBinding(ctx, body, records, options = {}) {
   };
 }
 
+export function currentOriginBindingAuthorization(binding, records = {}) {
+  if (!binding) return { verified: false, state: null, reason: 'unknown_origin_binding' };
+  const originTarget = (records.targets ?? []).find((row) => row.id === binding.origin_target_id && row.tenant_id === binding.tenant_id);
+  const protectedTarget = (records.targets ?? []).find((row) => row.id === binding.protected_target_id && row.tenant_id === binding.tenant_id);
+  const originProof = currentOriginProof(records, binding.tenant_id, binding.origin_target_id);
+  const protectedProof = currentOriginProof(records, binding.tenant_id, binding.protected_target_id);
+  const decision = validateOriginBindingForRun({ binding, runTarget: originTarget, protectedTarget,
+    check: { probe_profile: { kind: 'host_sni_bypass' } }, originProof, protectedProof });
+  return { verified: decision.ok === true, state: originProof.state, protected_state: protectedProof.state,
+    reason: decision.error ?? null };
+}
+
 export function presentOriginBinding(row, proof = null) {
   if (!row) return null;
   return {
@@ -224,6 +296,8 @@ export function presentOriginBinding(row, proof = null) {
     capacity_assurance: false,
     currently_authorized: Boolean(proof?.verified) && row.status === 'active',
     authorization_state: proof?.state ?? null,
+    authorization_reason: proof?.reason ?? null,
+    protected_authorization_state: proof?.protected_state ?? null,
     created_at: row.created_at,
     archived_at: row.archived_at ?? null,
   };
@@ -270,13 +344,13 @@ export function createOriginBinding(ctx, body = {}, options = {}) {
       || (existing.path ?? null) !== (planned.record.path ?? null)) {
       return error('scope_conflict', 409, { existing_id: existing.id });
     }
-    return { ...presentOriginBinding(existing, planned.proof), replayed: true };
+    return { ...presentOriginBinding(existing, currentOriginBindingAuthorization(existing, records)), replayed: true };
   }
   const record = { ...planned.record, id: `obind_${randomBytes(8).toString('hex')}` };
   rows.push(record);
   auditBinding(ctx, 'origin_binding.created', record);
   persistStore();
-  return { ...presentOriginBinding(record, planned.proof), replayed: false };
+  return { ...presentOriginBinding(record, currentOriginBindingAuthorization(record, records)), replayed: false };
 }
 
 export function archiveOriginBinding(ctx, id, options = {}) {
@@ -289,8 +363,14 @@ export function archiveOriginBinding(ctx, id, options = {}) {
   row.archived_at = normalizeObservationTimestamp(options.now ?? new Date());
   row.archived_by = ctx.userId ?? null;
   auditBinding(ctx, 'origin_binding.archived', row);
+  for (const run of getStore().testRuns ?? []) {
+    if (run.tenant_id === ctx.tenantId && ['planned', 'running', 'collecting'].includes(run.status)
+      && historicalOriginBindingForRun(run)?.id === row.id) {
+      cancelTestRun(ctx, run.id, { reason: 'Origin binding archived', source: 'origin_binding' });
+    }
+  }
   persistStore();
-  const proof = currentOriginProof(bindingRecordsFromStore(getStore(), ctx.tenantId), ctx.tenantId, row.origin_target_id);
+  const proof = currentOriginBindingAuthorization(row, bindingRecordsFromStore(getStore(), ctx.tenantId));
   return presentOriginBinding(row, proof);
 }
 
@@ -300,7 +380,7 @@ export function getOriginBinding(ctx, id) {
   const store = getStore();
   const row = bindingsOf(store).find((binding) => binding.tenant_id === ctx.tenantId && binding.id === id);
   if (!row) return null;
-  const proof = currentOriginProof(bindingRecordsFromStore(store, ctx.tenantId), ctx.tenantId, row.origin_target_id);
+  const proof = currentOriginBindingAuthorization(row, bindingRecordsFromStore(store, ctx.tenantId));
   return presentOriginBinding(row, proof);
 }
 
@@ -313,12 +393,12 @@ export function listOriginBindings(ctx, query = {}) {
     .filter((row) => row.tenant_id === ctx.tenantId)
     .filter((row) => !query.protected_target_id || row.protected_target_id === query.protected_target_id)
     .filter((row) => !query.status || row.status === query.status)
-    .map((row) => presentOriginBinding(row, currentOriginProof(records, ctx.tenantId, row.origin_target_id)));
+    .map((row) => presentOriginBinding(row, currentOriginBindingAuthorization(row, records)));
   return { items, count: items.length };
 }
 
-export function assessOriginReachability(binding, observations = [], proof = null) {
-  if (!binding || binding.status !== 'active') {
+export function assessOriginReachability(binding, observations = [], proof = null, { runs = [] } = {}) {
+  if (!binding) {
     return {
       status: 'not_tested',
       lockdown: 'not_tested',
@@ -328,18 +408,21 @@ export function assessOriginReachability(binding, observations = [], proof = nul
       observation_id: null,
     };
   }
-  if (!proof?.verified) {
-    return {
-      status: 'unknown',
-      lockdown: 'not_tested',
-      assurance: 'none',
-      capacity_assurance: false,
-      reason: 'authorization_lapsed',
-      observation_id: null,
-      scope: { host: binding.host, sni: binding.sni, port: binding.port ?? null, path: binding.path ?? null },
-    };
-  }
-  // Live proof only: the row must name this binding from the same tenant, target
+  const currentlyAuthorized = Boolean(proof?.verified) && binding.status === 'active';
+  const authorization = { currently_authorized: currentlyAuthorized,
+    authorization_reason: currentlyAuthorized ? null : (proof?.reason ?? (binding.status === 'active' ? 'authorization_lapsed' : 'binding_archived')) };
+  const runById = new Map(runs.filter((run) => run?.tenant_id === binding.tenant_id).map((run) => [run.id, run]));
+  const exactRun = (row) => {
+    const run = runById.get(row.test_run_id);
+    if (!run || run.target_id !== row.target_id || run.check_id !== row.check_id
+      || historicalOriginBindingForRun(run)?.id !== binding.id) return false;
+    const lockdown = run.provenance_json?.origin_lockdown;
+    const scope = run.origin_binding_id ? run.provenance_json?.origin_scope : lockdown;
+    return exactOriginScope(scope, binding) && (row.target_id === binding.origin_target_id
+      || (row.target_id === binding.protected_target_id && row.check_id === 'nfw.origin_lockdown.safe'
+        && Boolean(publicOriginAddress(lockdown?.address))));
+  };
+  // Historical proof only: the row must name this binding from the same tenant, target
   // the bound origin, be an approved host/SNI origin check in the origin_hosting
   // family, come from a signed live producer, and have a finalized source
   // completion at or after the binding was created. A simulation, manual entry,
@@ -354,8 +437,9 @@ export function assessOriginReachability(binding, observations = [], proof = nul
     .map((row) => projectObservation(row))
     .filter((row) => row
       && row.tenant_id === binding.tenant_id
-      && row.target_id === binding.origin_target_id
+      && (row.target_id === binding.origin_target_id || row.target_id === binding.protected_target_id)
       && row.origin_binding_id === binding.id
+      && exactRun(row)
       && row.attempt_class === 'successful'
       && row.family === 'origin_hosting'
       && row.producer_kind === 'signed_probe'
@@ -372,19 +456,36 @@ export function assessOriginReachability(binding, observations = [], proof = nul
       lockdown: 'not_tested',
       assurance: 'none',
       capacity_assurance: false,
-      reason: 'no_bound_finalized_evidence',
+      reason: currentlyAuthorized ? 'no_bound_finalized_evidence' : authorization.authorization_reason,
+      ...authorization,
+      historical_evidence_valid: false,
       observation_id: null,
       scope: { host: binding.host, sni: binding.sni, port: binding.port ?? null, path: binding.path ?? null },
     };
   }
+  const run = runById.get(latest.test_run_id);
+  const authority = run.provenance_json?.origin_authority ?? run.provenance_json?.origin_lockdown?.authority;
   return {
+    ...authorization,
+    historical_evidence_valid: true,
     status: latest.outcome,
     lockdown: 'not_established',
     assurance: 'none',
     capacity_assurance: false,
     reason: null,
     observation_id: latest.id,
+    binding_id: binding.id,
+    test_run_id: latest.test_run_id,
+    check_id: latest.check_id,
+    target_id: latest.target_id,
+    declared_target: latest.target_id === binding.protected_target_id ? authority?.protected_target ?? null : authority?.origin_target ?? null,
+    actual_destination: run.provenance_json?.origin_lockdown?.address ?? targetLiteralIpAddress(authority?.origin_target),
+    producer_kind: latest.producer_kind,
+    source_kind: latest.source_kind,
+    observed_at: latest.observed_at,
+    source_completed_at: latest.source_completed_at,
     scope: { host: binding.host, sni: binding.sni, port: binding.port ?? null, path: binding.path ?? null },
+    evidence_scope: { host: binding.host, sni: binding.sni, port: binding.port ?? null, path: binding.path ?? null },
     limitations: [
       'scoped_to_bound_host_sni_port_path',
       'not_capacity_assurance',

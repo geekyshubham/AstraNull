@@ -10,7 +10,7 @@ let server; let baseUrl; let sourceCalls = 0;
 const ctx = { tenantId: 'ten_demo', userId: 'usr_admin', role: 'admin' };
 before(async () => {
   server = createServer({ env: { ...process.env, NODE_ENV: 'test', ASTRANULL_AUTH_MODE: 'dev-headers',
-    ASTRANULL_VIRUSTOTAL_API_KEY: 'fixture-key', ASTRANULL_WAF_POSTURE_ENABLED: '1' },
+    ASTRANULL_VIRUSTOTAL_API_KEY: 'fixture-key', ASTRANULL_SUBDOMAIN_SOURCE: 'virustotal', ASTRANULL_WAF_POSTURE_ENABLED: '1' },
     services: { subdomainFetch: async (url) => {
       sourceCalls += 1;
       const domain = decodeURIComponent(new URL(url).pathname.split('/').at(-2));

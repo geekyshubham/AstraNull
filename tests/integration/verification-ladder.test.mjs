@@ -1,20 +1,30 @@
 import assert from 'node:assert/strict';
 import { after, before, beforeEach, describe, it } from 'node:test';
 import { createServer } from '../../src/server.mjs';
-import { demoHeaders, request } from '../helpers/http.mjs';
+import { closeServer, demoHeaders, request } from '../helpers/http.mjs';
 import { seedPortalBaseline, PORTAL_BASELINE_IDS } from '../fixtures/portal-baseline/seed.mjs';
 
 let baseUrl;
 let server;
 
-before(() => {
+before(async () => {
   seedPortalBaseline();
   server = createServer();
-  server.listen(0);
+  // Match the client's address family: on Darwin an IPv6 wildcard listener can
+  // share a port with an unrelated IPv4 listener that receives the HTTP requests.
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      server.off('error', reject);
+      resolve();
+    });
+  });
   baseUrl = `http://127.0.0.1:${server.address().port}`;
 });
 
-after(() => server.close());
+after(async () => {
+  await closeServer(server);
+});
 
 beforeEach(() => {
   seedPortalBaseline();
@@ -25,6 +35,11 @@ function ownerHeaders() {
 }
 
 describe('verification ladder (FT-VL-01..05)', () => {
+  it('binds the HTTP fixture to the same IPv4 loopback host used by its client', () => {
+    assert.equal(server.address().address, new URL(baseUrl).hostname);
+    assert.equal(server.address().family, 'IPv4');
+  });
+
   it('FT-VL-01 ladder returns server-computed counts (declared 5, dns_verified 3, user_confirmed 0)', async () => {
     const res = await request(
       baseUrl,

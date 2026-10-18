@@ -3,7 +3,7 @@
  * Reads recorded rows only. Does not score readiness, start probes, or copy one
  * provider family onto another.
  */
-import { assessOriginReachability } from './originBindings.mjs';
+import { assessOriginReachability, currentOriginBindingAuthorization } from './originBindings.mjs';
 import { COVERAGE_FRESHNESS_POLICY, coverageFrom } from '../lib/protectionCoverage.mjs';
 export { COVERAGE_FRESHNESS_POLICY } from '../lib/protectionCoverage.mjs';
 import {
@@ -167,6 +167,13 @@ function scanFamily(row, family, nowMs) {
   };
 }
 
+function cloudSources(cloud, layer) {
+  const sources = stringList(cloud?.sources ?? layer?.sources);
+  const recordedType = text(cloud?.type);
+  if (recordedType && !sources.includes(recordedType)) sources.push(recordedType);
+  return sources;
+}
+
 function cloudFamily(row, nowMs) {
   const evidence = evidenceOf(row);
   const cloud = asRecord(evidence.cloud);
@@ -187,7 +194,7 @@ function cloudFamily(row, nowMs) {
     observed_at: observedAt,
     test_run_id: text(cloud?.test_run_id) ?? (observedAt ? text(row.test_run_id) : null),
     evidence_ids: stringList(cloud?.evidence_ids ?? evidence.evidence_ids),
-    sources: stringList(cloud?.sources ?? layer?.sources),
+    sources: cloudSources(cloud, layer),
     freshness: freshnessFor(status, observedAt, nowMs),
     freshness_policy_id: OBSERVATION_FRESHNESS_POLICY.id,
   };
@@ -326,7 +333,8 @@ function successfulRows(rows, family) {
  * Additive history read model. Comparable changes use the two newest successful
  * observations of one family. Omitted history leaves deriveProtectionProfile unchanged.
  */
-export function historyReadModel({ observations = [], bindings = [], proofFor = () => null, targetId } = {}) {
+export function historyReadModel({ observations = [], bindingObservations = observations, bindings = [], proofFor = () => null,
+  records = null, runs = [], targetId } = {}) {
   const rows = observations.map((row) => projectObservation(row) ?? row).filter((row) => row?.family);
   const families = [...new Set(rows.map((row) => row.family))];
   const retained_family_states = families.map((family) => {
@@ -357,12 +365,15 @@ export function historyReadModel({ observations = [], bindings = [], proofFor = 
     if (compared.comparable && compared.change === 'changed') comparable_changes.push(entry);
     else if (!compared.comparable) comparison_gaps.push(entry);
   }
-  const active = bindings.filter((row) => row?.status === 'active'
+  const related = bindings.filter((row) => row
     && (row.origin_target_id === targetId || row.protected_target_id === targetId));
-  const origin_bindings = active.map((binding) => {
-    const onOrigin = binding.origin_target_id === targetId;
-    const proof = proofFor(binding.origin_target_id);
-    const reach = onOrigin ? assessOriginReachability(binding, rows, proof) : null;
+  const active = related.filter((row) => row.status === 'active');
+  const authorizationFor = (binding) => records ? currentOriginBindingAuthorization(binding, records) : {
+    verified: Boolean(proofFor(binding.origin_target_id)?.verified && proofFor(binding.protected_target_id)?.verified),
+  };
+  const origin_bindings = related.map((binding) => {
+    const proof = authorizationFor(binding);
+    const reach = assessOriginReachability(binding, bindingObservations, proof, { runs });
     return {
       id: binding.id,
       protected_target_id: binding.protected_target_id,
@@ -374,21 +385,17 @@ export function historyReadModel({ observations = [], bindings = [], proofFor = 
       status: binding.status,
       assurance: 'none',
       lockdown: reach?.lockdown ?? 'not_tested',
-      currently_authorized: Boolean(proof?.verified) && binding.status === 'active',
-      reachability: onOrigin ? reach : {
-        status: 'not_tested',
-        assurance: 'none',
-        lockdown: 'not_tested',
-        reason: 'bound_origin_evidence_is_on_origin_target',
-        observation_id: null,
-      },
+      currently_authorized: reach.currently_authorized ?? false,
+      authorization_reason: reach.authorization_reason ?? null,
+      reachability: reach,
     };
   });
-  const originBinding = active.find((row) => row.origin_target_id === targetId) ?? null;
+  const originCandidates = active.filter((row) => row.origin_target_id === targetId);
+  const originBinding = originCandidates.length === 1 ? originCandidates[0] : null;
   let origin = null;
   if (originBinding) {
-    const proof = proofFor(originBinding.origin_target_id);
-    const reach = assessOriginReachability(originBinding, rows, proof);
+    const proof = authorizationFor(originBinding);
+    const reach = assessOriginReachability(originBinding, bindingObservations, proof, { runs });
     origin = {
       status: reach.status === 'not_tested' ? 'not_tested' : 'unknown',
       binding_id: originBinding.id,
@@ -397,12 +404,15 @@ export function historyReadModel({ observations = [], bindings = [], proofFor = 
       reachability: {
         status: reach.status,
         source: 'origin_binding',
-        tested_target_id: targetId,
+        tested_target_id: reach.target_id ?? null,
         scenario_id: null,
         limitations: reach.limitations ?? ['authorized_binding_only', 'does_not_prove_host_origin_lockdown'],
       },
     };
   }
+  if (originCandidates.length > 1) origin = { status: 'unknown', binding_id: null,
+    reason: 'origin_binding_ambiguous', assurance: 'none', reachability: { status: 'not_tested',
+      source: 'origin_binding', tested_target_id: null, limitations: ['explicit_binding_selection_required'] } };
   return { retained_family_states, comparable_changes, comparison_gaps, origin_bindings, origin };
 }
 

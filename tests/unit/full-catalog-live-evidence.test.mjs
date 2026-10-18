@@ -109,10 +109,24 @@ function buildArtifact({ matrix = MATRIX, liveResults = makeLiveResults() } = {}
 
 describe('full-catalog live evidence generator', () => {
   it('rejects old assessment semantics instead of rewriting historical artifacts', () => {
-    const legacy = buildArtifact();
-    legacy.schema_version = 2;
-    legacy.generator.schema = 'astranull.full-catalog-live-evidence.v1';
-    assert.throws(() => validateFullCatalogLiveEvidence(legacy), /schema_version/);
+    for (const [schemaVersion, generatorVersion] of [[2, 'v1'], [3, 'v2']]) {
+      const legacy = buildArtifact();
+      legacy.schema_version = schemaVersion;
+      legacy.generator.schema = `astranull.full-catalog-live-evidence.${generatorVersion}`;
+      const original = structuredClone(legacy);
+      assert.throws(() => validateFullCatalogLiveEvidence(legacy), /schema_version/);
+      assert.deepEqual(legacy, original);
+    }
+  });
+
+  it('rejects stale matrix totals rather than relabeling old captured inputs', () => {
+    const matrix = structuredClone(MATRIX);
+    matrix.summary.dispositions.safe_runnable = 373;
+    matrix.summary.dispositions.soc_gated = 245;
+    matrix.summary.runnable_safe_check_count = 167;
+    const original = structuredClone(matrix);
+    assert.throws(() => buildArtifact({ matrix }), /matrix disposition totals/);
+    assert.deepEqual(matrix, original);
   });
 
   it('produces deterministic non-self-referential custody', () => {
@@ -152,37 +166,39 @@ describe('full-catalog live evidence generator', () => {
     const artifact = buildArtifact();
     const nonExecutedRows = artifact.rows.filter((row) => row.target_disposition !== 'safe_runnable');
 
-    assert.equal(nonExecutedRows.length, 348);
+    assert.equal(nonExecutedRows.length, 357);
     assert.ok(nonExecutedRows.every((row) => row.check_result_refs.length === 0));
     assert.ok(artifact.rows
       .filter((row) => row.target_disposition === 'safe_runnable')
       .every((row) => row.check_result_refs.length > 0));
   });
 
-  it('preserves the required 721/373/10/245/49/44/167 totals', () => {
+  it('pins the current 721/364/10/254/49/44/165 totals without upgrading history', () => {
     const artifact = buildArtifact();
 
+    assert.equal(artifact.schema_version, 4);
+    assert.equal(artifact.generator.schema, 'astranull.full-catalog-live-evidence.v3');
     assert.equal(artifact.rows.length, 721);
-    assert.equal(artifact.check_results.length, 167);
-    assert.equal(new Set(artifact.check_results.map((result) => result.check_id)).size, 167);
+    assert.equal(artifact.check_results.length, 165);
+    assert.equal(new Set(artifact.check_results.map((result) => result.check_id)).size, 165);
     assert.deepEqual(MATRIX.summary.dispositions, {
-      safe_runnable: 373,
+      safe_runnable: 364,
       additional_input_required: 10,
       target_incompatible: 0,
-      soc_gated: 245,
+      soc_gated: 254,
       monitor_only: 49,
       not_runnable: 44,
     });
     assert.deepEqual(artifact.summary.evaluation_status, {
       additional_input_required: 10,
-      evaluated_bounded: 373,
+      evaluated_bounded: 364,
       monitor_only_not_executed: 49,
-      soc_gated_not_executed: 245,
+      soc_gated_not_executed: 254,
       not_runnable: 44,
     });
-    assert.equal(artifact.summary.planned_unique_safe_checks, 167);
-    assert.equal(artifact.summary.completed_unique_safe_checks, 167);
-    assert.equal(artifact.summary.check_status.verdicted, 167);
-    assert.equal(artifact.summary.check_confidence.external_only, 167);
+    assert.equal(artifact.summary.planned_unique_safe_checks, 165);
+    assert.equal(artifact.summary.completed_unique_safe_checks, 165);
+    assert.equal(artifact.summary.check_status.verdicted, 165);
+    assert.equal(artifact.summary.check_confidence.external_only, 165);
   });
 });

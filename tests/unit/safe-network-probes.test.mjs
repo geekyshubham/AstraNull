@@ -497,8 +497,8 @@ describe('safe network probes', () => {
           return session;
         },
       });
-      assert.equal(outcome.external_result, terminal === 'timeout' ? 'timeout' : 'error');
-      assert.equal(outcome.metadata.error_class, terminal === 'timeout' ? 'timeout' : terminal === 'close' ? 'ECONNRESET' : 'ABORT_ERR');
+      assert.equal(outcome.external_result, terminal === 'close' ? 'error' : 'timeout');
+      assert.equal(outcome.metadata.error_class, terminal === 'close' ? 'ECONNRESET' : 'timeout');
       assert.equal(outcome.requests_sent, 1);
       assert.equal(outcome.metadata.max_concurrent_streams, undefined);
       assert.equal(outcome.metadata.enable_push, undefined);

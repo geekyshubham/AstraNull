@@ -5,13 +5,15 @@ import { injectPortalDevHeadersSession, gotoPortalRoute, waitForPortalRouteSettl
 import { PORTAL_BASELINE_IDS } from '../../fixtures/portal-baseline/seed.mjs';
 
 let sourceCalls = 0;
+let sourceError = '';
 test.beforeEach(async () => {
+  sourceError = '';
   await startPortalPlaywrightServer({
-    env: { ASTRANULL_VIRUSTOTAL_API_KEY: 'fixture-key' },
-    services: { subdomainFetch: async (url) => {
+    env: { ASTRANULL_VIRUSTOTAL_API_KEY: '', ASTRANULL_SUBDOMAIN_SOURCE: 'virustotal_ui' },
+    services: { subdomainUiRun: async ({ domain }) => {
       sourceCalls += 1;
-      const domain = decodeURIComponent(new URL(url).pathname.split('/').at(-2));
-      return { status: 200, json: async () => ({ data: [{ id: `api.${domain}` }] }) };
+      return sourceError ? { error: sourceError }
+        : { hostnames: [`api.${domain}`], pages: 1, reported_total: 1, truncated: false, stop_reason: null };
     } },
     mutate: (store) => {
       const parent = store.targets.find((target) => target.id === PORTAL_BASELINE_IDS.targetId);
@@ -63,3 +65,18 @@ for (const [theme, width] of [['dark', 1440], ['light', 375]]) {
     await expect(page.getByRole('button', { name: 'Plan validation' })).toBeEnabled();
   });
 }
+
+test('source failures show a neutral message without proxy, quota or credential details', async ({ page }) => {
+  sourceError = 'subdomain_source_rate_limited';
+  await injectPortalDevHeadersSession(page, { mode: 'dev-headers', principal: 'customer',
+    tenant_id: PORTAL_BASELINE_IDS.tenantId, user_id: 'usr_admin', role: 'admin' });
+  await gotoPortalRoute(page, `target-detail?id=${PORTAL_BASELINE_IDS.targetId}&tab=subdomains`, getPortalPlaywrightBaseUrl());
+  await waitForPortalRouteSettled(page);
+  const panel = page.locator('#td-panel-subdomains');
+  await panel.getByRole('button', { name: 'Discover and add subdomains' }).click();
+  await page.getByRole('dialog').getByRole('button', { name: 'Discover and add', exact: true }).click();
+  await expect(panel.getByRole('alert')).toContainText('Subdomain discovery could not be completed');
+  await expect(panel.getByRole('alert')).toContainText('no hosts were added');
+  await expect(panel).not.toContainText(/rate limit|quota|proxy|API key|ASTRANULL_/i);
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+});

@@ -277,6 +277,7 @@ describe('postgres retention service adapters', () => {
     assert.deepEqual(POSTGRES_RETENTION_SERVICE_METHODS, [
       'enforceMetadataRetentionForTenant',
       'previewMetadataRetentionForTenant',
+      'eraseOriginCluesForCurrentTenant',
     ]);
     assert.throws(() => createPostgresRetentionServices({}), /requires repositories\.retention/);
   });
@@ -8626,6 +8627,8 @@ describe('postgres ops-readiness inline probe uses injected repositories', () =>
     assert.equal(verdictWrites.length, 1);
     assert.equal(verdictWrites[0].verdict, 'protected');
     assert.equal(verdictWrites[0].confidence, 'high');
+    const inlineResult = validationCalls.find((call) => call.method === 'appendEvent' && call.args[1]?.signal_type === 'probe_result');
+    assert.deepEqual(verdictWrites[0].evidence_ids, [inlineResult.args[1].id]);
     // No agent jobs and no finding for an ops-readiness control-plane check.
     assert.equal(
       validationCalls.some((c) => c.method === 'agentControl.createAgentJob'),

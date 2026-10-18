@@ -27,6 +27,7 @@ import {
 } from './externalObservationOutcomes.mjs';
 import { computeScopeHashFromTargets } from './scopeHash.mjs';
 import { DEFAULT_SOURCE_PERSPECTIVE } from './probeSourcePerspective.mjs';
+import { ORIGIN_IDENTITY_PAIR_SCENARIOS, originIdentityScenario, planOriginIdentityPair } from './originIdentityPair.mjs';
 
 export const ENTRY_PATH_COMPARISON_STATUSES = Object.freeze(['running', 'completed', 'cancelled']);
 export const ENTRY_PATH_ITEM_EXECUTION_STATES = Object.freeze(['pending', 'deferred', 'started', 'finalized', 'skipped']);
@@ -163,6 +164,13 @@ function entryPathVariantMatches(entryCheck, scenario, scenarioChecks) {
 export function selectEntryPathCheck({ relation, entryTarget, scenario, catalog = [] } = {}) {
   if (!relation || !entryTarget) return { check: null, reason: 'unknown_target' };
   const isOrigin = relation.relation_kind === 'origin';
+  const pairedScenario = Object.entries(ORIGIN_IDENTITY_PAIR_SCENARIOS).find(([id, spec]) => id === scenario || spec.version === scenario);
+  if (pairedScenario) {
+    if (!isOrigin) return { check: null, reason: 'paired_identity_requires_origin_relation' };
+    const check = catalog.find((row) => row.check_id === pairedScenario[0]);
+    if (!check || !isCustomerRunnable(check) || targetKindCompatibilityError(check, entryTarget)) return { check: null, reason: 'no_eligible_check' };
+    return { check, reason: null };
+  }
   const preferredEntryScenario = ENTRY_PATH_SCENARIO_BY_RELATION[relation.relation_kind] ?? null;
   let candidates = catalog.filter((check) => (isOrigin
     ? check?.probe_profile?.kind === ORIGIN_PROBE_KIND
@@ -223,6 +231,7 @@ export function planEntryPathComparison({
   catalog = [],
   authorize = null,
   expectationVersion = 1,
+  verificationRecords = null,
 } = {}) {
   const expectation = normalizePathValidationExpectation(request.expectation, {
     tenantId,
@@ -290,6 +299,20 @@ export function planEntryPathComparison({
       check_version: version.check_version ?? null,
       scenario_version: approvedScenarioVersion(selected.check),
     };
+    if (originIdentityScenario(selected.check)) {
+      if (request.entry_path_ids.length !== 1 || !isPrimary) {
+        items.push(ineligibleItem(withCheck, 'paired_identity_requires_single_origin_item'));
+        continue;
+      }
+      const pairedPlan = planOriginIdentityPair({ check: selected.check, binding: originBinding,
+        originTarget: entryTarget, protectedTarget: anchor,
+        scope: originBinding, records: verificationRecords, tenantId });
+      if (!pairedPlan) {
+        items.push(ineligibleItem(withCheck, 'paired_identity_authority_incomplete'));
+        continue;
+      }
+      withCheck.paired_plan = pairedPlan;
+    }
     const gate = typeof authorize === 'function' ? authorize(relation, entryTarget) : { ok: true };
     if (!gate?.ok) {
       items.push(ineligibleItem(withCheck, gate?.error ?? 'not_authorized'));
@@ -323,11 +346,12 @@ export function reviewedPlanMatches(plan, reviewedPlanDigest) {
 const SCOPE_ITEM_FIELDS = Object.freeze([
   'entry_path_id', 'is_primary', 'relation_kind', 'expected_behavior', 'required_layers', 'target_id',
   'target_group_id', 'target_scope_hash', 'declaration_digest', 'check_id', 'check_version', 'scenario_version',
-  'origin_binding_id', 'eligible', 'ineligible_reason',
+  'origin_binding_id', 'eligible', 'ineligible_reason', 'paired_plan',
 ]);
 
 function scopeItem(item) {
-  return Object.fromEntries(SCOPE_ITEM_FIELDS.map((field) => [field, item[field] ?? (field === 'required_layers' ? [] : null)]));
+  return Object.fromEntries(SCOPE_ITEM_FIELDS.filter((field) => field !== 'paired_plan' || item.paired_plan != null)
+    .map((field) => [field, item[field] ?? (field === 'required_layers' ? [] : null)]));
 }
 
 export function approvedScopeDigest(scope) {
@@ -363,6 +387,17 @@ export function buildApprovedScope(plan, { comparisonId, approvedAt, approvedBy 
   };
   scope.scope_digest = approvedScopeDigest(scope);
   return scope;
+}
+
+/** Server-internal review context; a request body cannot supply this capability. */
+export function reviewedOriginIdentityPair(comparison, check, target, bindingId) {
+  const scope = comparison?.approved_scope;
+  if (!originIdentityScenario(check) || comparison?.status !== 'running' || !verifyApprovedScope(scope)
+    || scope.tenant_id !== target?.tenant_id || scope.items?.length !== 1) return null;
+  const item = scope.items[0];
+  if (!item.eligible || !item.is_primary || item.target_id !== target.id || item.check_id !== check.check_id
+    || item.origin_binding_id !== bindingId || !item.paired_plan) return null;
+  return { comparison_id: comparison.id, scope_digest: scope.scope_digest, plan: item.paired_plan };
 }
 
 export function verifyApprovedScope(scope) {
@@ -513,7 +548,7 @@ export function deriveAttemptObservation(attempt) {
   const kind = metadata.profile_kind ?? metadata.probe_kind ?? attempt.probe_kind ?? null;
   const external = attempt.external_result ?? metadata.external_result ?? null;
   const stacked = stackedEdges(metadata);
-  const originPath = kind === ORIGIN_PROBE_KIND;
+  const originPath = kind === ORIGIN_PROBE_KIND || kind === 'origin_identity_pair';
   const finish = (observation, enforcement, health, extra = [], fields = {}) => ({
     observation,
     enforcement,
@@ -526,7 +561,7 @@ export function deriveAttemptObservation(attempt) {
     ...fields,
   });
 
-  if (kind === ORIGIN_PROBE_KIND) {
+  if (originPath) {
     const observed = originObservationOf(metadata);
     if (!observed) return finish(null, 'unknown', 'not_available', ['observation_semantics_unsupported']);
     let outcome = observed.outcome;

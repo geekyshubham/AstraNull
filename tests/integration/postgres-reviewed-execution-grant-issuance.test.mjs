@@ -11,6 +11,7 @@ import { createAuditRepository } from '../../src/persistence/postgres/auditRepos
 import { withTenantContext, assertNoManagedTenantTransaction } from '../../src/persistence/postgres/tenantContext.mjs';
 import { buildReviewedExecutionGrantEnvelope } from '../../src/contracts/reviewedExecutionGrant.mjs';
 import { canonicalJsonStringify } from '../../src/lib/custody.mjs';
+import { signPreparedReviewedExecutionGrant } from '../../src/lib/preparedReviewedExecutionGrant.mjs';
 import { signProbeJob } from '../../src/lib/probeJobs.mjs';
 import { createPgPool, closePgPool } from '../../src/persistence/postgres/pool.mjs';
 import { databaseUrlWithDatabase, resolvePostgresHarnessAvailability, withEphemeralPostgres } from '../helpers/pg-harness.mjs';
@@ -79,7 +80,22 @@ test('actual PostgreSQL app-role durable at-most-once issuance prerequisite; no 
       } } : audit;
       const backend = options.auditFailure ? createReviewedExecutionGrantRepository(pool, { audit: selectedAudit, authority }) : repository;
       const repo = { ...backend, withTransaction: async (...args) => {
-        try { return await backend.withTransaction(...args); }
+        try {
+          const result = await backend.withTransaction(...args);
+          await options.afterCommit?.(result);
+          if (result.claim) {
+            // PostgreSQL may run in a VM a few milliseconds ahead of this host.
+            // Wait only in the fixture, after COMMIT, so signer-specific scenarios
+            // reach their intended guard without accepting future-issued authority.
+            const claimedAt = Date.parse(result.claim.claimed_at), deadline = performance.now() + 1000;
+            while (Date.now() < claimedAt) {
+              assert.ok(performance.now() < deadline, 'fixture host clock must catch the committed database claim within 1 second');
+              await options.onClockWait?.();
+              await delay(1);
+            }
+          }
+          return result;
+        }
         catch (error) { t.diagnostic(`fixture transaction rejected: ${error.code ?? 'exception'} ${error.message} ${error.constraint ?? ''}`); throw error; }
       } };
       const adapter = { async signEnvelope(input) {
@@ -161,6 +177,38 @@ test('actual PostgreSQL app-role durable at-most-once issuance prerequisite; no 
           'DELETE FROM reviewed_execution_grant_issuances WHERE id = $1']) {
           await assert.rejects(sql(statement, statement.includes('$2') ? [issuedRow.id, 'A'.repeat(86) + '=='] : [issuedRow.id]), /immutable|cannot be deleted/);
         }
+      });
+      await t.test('fixture host clock catches committed database issuance before exercising wrong-key rejection', async (clockTest) => {
+        const realNow = Date.now.bind(Date);
+        let hostNow;
+        clockTest.mock.method(Date, 'now', () => hostNow ?? realNow());
+        const foreign = keyFixture(), f = await seed('host_clock_boundary');
+        let clockWaits = 0;
+        const s = service(f, {
+          afterCommit: async (result) => {
+            if (!result.claim) return;
+            const claimedAt = Date.parse(result.claim.claimed_at);
+            hostNow = claimedAt - 1;
+            assert.equal(Date.now(), claimedAt - 1, 'deterministic future-grant boundary, independent of scheduler or VM skew');
+            let prematureCalls = 0;
+            const premature = await signPreparedReviewedExecutionGrant({ envelope: result.claim.envelope_json,
+              context: result.context, trust: s.keys.trust, now: () => hostNow,
+              signingAdapter: { signEnvelope: async () => { prematureCalls++; throw new Error('future authority must not sign'); } } });
+            assert.equal(premature.error, 'reviewed_grant_clock_invalid');
+            assert.equal(prematureCalls, 0, 'even one millisecond in the future remains forbidden');
+          },
+          onClockWait: async () => {
+            // Only observing the future claim in the catch-up loop advances this
+            // clock. Without that loop it stays future-issued, regardless of load.
+            assert.equal(clockWaits++, 0);
+            hostNow += 1;
+          },
+          sign: async ({ envelope, keys }) => ({ ...keys.receipt(envelope), signature: foreign.receipt(envelope).signature }),
+        });
+        denied(await s.api.issueOnce(f.ctx, f.request), 'reviewed_grant_signature_invalid');
+        assert.equal(clockWaits, 1);
+        assert.equal(s.calls(), 1);
+        assert.equal((await ledger(f)).state, 'closed_unknown');
       });
       await t.test('concurrent requests obtain one durable slot and one independent signer invocation', async () => {
         const f = await seed('concurrent'), gate = deferred(), ready = deferred();

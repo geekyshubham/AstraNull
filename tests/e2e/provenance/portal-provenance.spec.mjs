@@ -60,7 +60,7 @@ test.describe('portal dynamic provenance', () => {
 
     await injectPortalDevHeadersSession(page);
     await gotoPortalRoute(page, 'dashboard', baseUrl);
-    await expect(page.getByText(String(initialApiScore), { exact: true }).first()).toBeVisible();
+    await expect(page.getByTestId('readiness-published-score').locator('strong')).toHaveText(`${initialApiScore}/100`);
 
     await restartPortalPlaywrightWithReadinessPenalty();
     const mutatedBaseUrl = getPortalPlaywrightBaseUrl();
@@ -69,8 +69,9 @@ test.describe('portal dynamic provenance', () => {
     expect(mutatedApiScore).not.toBe(initialApiScore);
 
     await page.goto(`${mutatedBaseUrl}/app#dashboard`, { waitUntil: 'networkidle', timeout: 60_000 });
-    await expect(page.getByText(String(mutatedApiScore), { exact: true }).first()).toBeVisible();
-    await expect(page.getByText(String(initialApiScore), { exact: true })).toHaveCount(0);
+    const publishedScore = page.getByTestId('readiness-published-score').locator('strong');
+    await expect(publishedScore).toHaveText(`${mutatedApiScore}/100`);
+    await expect(publishedScore).not.toHaveText(`${initialApiScore}/100`);
   });
 
   test('FT-PROV-dyn-02 findings tab count and pager update after open-findings mutation', async ({ page }) => {

@@ -241,7 +241,7 @@ describe('catalog semantic contracts across all definitions and vector mappings'
       assert.ok(['safe_runnable', 'additional_input_required', 'target_incompatible', 'soc_gated', 'monitor_only', 'not_runnable'].includes(row.target_disposition), row.vector_id);
       for (const id of row.runnable_safe_check_ids) assert.ok(CHECK_CATALOG.some((check) => check.check_id === id && check.safety_class === 'safe'), id);
     }
-    assert.equal(matrix.summary.runnable_safe_check_count, 167);
+    assert.equal(matrix.summary.runnable_safe_check_count, 165);
     for (const id of matrix.runnable_safe_check_ids) {
       const check = CHECK_CATALOG.find((row) => row.check_id === id);
       assert.notEqual(check.mechanism_supported, false, id);

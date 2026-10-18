@@ -14,6 +14,8 @@ const INPUT_REQUIRING = [
   'origin.direct_reachability.safe',
   'origin.direct_bypass.safe',
   'origin.host_sni_bypass.safe',
+  'origin.identity_pair.head.v1',
+  'origin.identity_pair.get.v1',
   'waf.origin_bypass.safe',
   'l7.login_abuse_flow.safe',
   'l7.api_quota_exhaustion.safe',

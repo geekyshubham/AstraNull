@@ -4,8 +4,6 @@ import {
   Bot,
   CheckCircle2,
   ChevronRight,
-  CircleHelp,
-  CircleMinus,
   ClipboardList,
   FileCheck2,
   FileText,
@@ -26,6 +24,7 @@ import {
 } from 'lucide-react';
 import { ReadinessPostureDonut } from '../components/charts/readiness-posture-donut';
 import { WafSummaryPanel } from '../components/dashboard/waf-summary-panel';
+import { OriginClueErasure } from '../components/targets/origin-clue-erasure';
 import { ProtectionValidationReportPanel } from '../components/targets/entry-paths/protection-matrix';
 import { ScoreTrend } from '../components/charts/score-trend';
 import { VectorHeatmap } from '../components/charts/vector-heatmap';
@@ -49,10 +48,10 @@ import { AnchorButton, Button } from '../components/ui/button';
 import { Tabs } from '../components/ui/tabs';
 import { Toast } from '../components/ui/toast';
 import { AnimatedNumber } from '../components/ui/motion';
-import { reportStatusTone, runStatusTone as runStatusBadgeTone, subscriptionStatusTone, tenantLifecycleTone, type StatusTone } from '../lib/status-tone';
+import { reportStatusTone, runStatusTone as runStatusBadgeTone, tenantLifecycleTone, type StatusTone } from '../lib/status-tone';
 // @ts-ignore Plain ESM keeps executive terminology directly testable with node:test.
 import { EXPECTED_VERDICT_LABELS, dashboardReadinessMessage, plainCheckName, plainCodeLabel, plainFindingTitle, plainInlineText, plainVerdictLabel } from '../lib/plain-language.mjs';
-import { buildApiHeaders, loadSession, requestJson } from '../lib/api';
+import { buildApiHeaders, requestJson } from '../lib/api';
 import { canAccessRoute } from '../lib/route-access';
 // @ts-ignore Shared server role contract; the portal reads it the same way lib/route-access.mjs does.
 import { PERMISSIONS as ROLE_PERMISSIONS, SERVICE_ACCOUNT_ROLES as SERVICE_ACCOUNT_ROLE_IDS } from '../../../../../src/contracts/roles.mjs';
@@ -91,15 +90,6 @@ function getOptionalNumber(item: DataItem | null | undefined, keys: string[]) {
     if (typeof value === 'number' && Number.isFinite(value)) return value;
   }
   return null;
-}
-
-function getNestedNumber(item: DataItem | null | undefined, path: string[], fallback = 0) {
-  let current: unknown = item;
-  for (const key of path) {
-    if (!current || typeof current !== 'object' || Array.isArray(current)) return fallback;
-    current = (current as DataItem)[key];
-  }
-  return typeof current === 'number' && Number.isFinite(current) ? current : fallback;
 }
 
 function getNestedItem(item: DataItem | null | undefined, path: string[]) {
@@ -209,10 +199,6 @@ function recordedText(value: string) {
   return presentValue(value) || 'Not recorded';
 }
 
-function recordedStatusLabel(value: string) {
-  return presentStatus(value) || 'Not recorded';
-}
-
 export function RecordedKvRow({ label, value, missing = 'Not recorded', mono }: { label: string; value: string; missing?: string; mono?: boolean }) {
   return (
     <div>
@@ -296,7 +282,7 @@ function detailRowProps(
 
 /**
  * Token-only styles for current-release customer pages that have no page stylesheet of their own.
- * Injected like the Plan & usage styles so they follow the shared sheet in the cascade.
+ * Injected inline so they follow the shared sheet in the cascade.
  */
 const CUSTOMER_PAGE_STYLES = `
 .field-error { display: block; margin-top: var(--space-1); color: var(--danger); font-size: var(--text-xs); line-height: 1.4; }
@@ -1842,7 +1828,7 @@ export function SettingsPage({
   }
 
   const retentionChanges = pendingRetention ? [
-    { label: 'Metadata (events, evidence vault entries, notification history, connector poll data)', before: recordedMetadataRetentionDays, after: pendingRetention.metadata_retention_days, purges: true },
+    { label: 'Metadata (events, evidence vault entries, notification history, connector poll data, origin clues and saved collection responses)', before: recordedMetadataRetentionDays, after: pendingRetention.metadata_retention_days, purges: true },
     { label: 'Generated reports', before: recordedReportDays, after: pendingRetention.evidence_retention.report_days, purges: true },
     { label: 'Audit log', before: recordedAuditDays, after: pendingRetention.evidence_retention.audit_log_days, purges: false },
     { label: 'High-scale authorization artifacts', before: recordedHighScaleDays, after: pendingRetention.evidence_retention.high_scale_artifact_days, purges: false }
@@ -2273,7 +2259,7 @@ export function SettingsPage({
                 min={1}
                 max={3650}
                 defaultValue={metadataRetentionDays}
-                hint={`${recordedMetadataRetentionDays === null ? 'Not recorded; prefilled with the 90-day recommendation. ' : ''}1 to 3650 days. Deletes events, evidence vault entries, notification history, and connector poll data older than this.`}
+                hint={`${recordedMetadataRetentionDays === null ? 'Not recorded; prefilled with the 90-day recommendation. ' : ''}1 to 3650 days. Deletes events, evidence vault entries, notification history, connector poll data, and origin clues and saved collection responses older than this.`}
               />
               <FormNumberField
                 label="Report archive (days)"
@@ -2312,6 +2298,9 @@ export function SettingsPage({
           </CardContent>
           <CardContent className="settings-list">
             <SettingsNote icon={ShieldCheck}>Only metadata and reports are purged by these settings. Audit logs, findings, test runs, and SOC authorization artifacts are always kept.</SettingsNote>
+          </CardContent>
+          <CardContent>
+            <OriginClueErasure config={config} session={session} tenantId={typeof tenant?.id === 'string' && tenant.id === session.tenant_id ? tenant.id : ''} legalHold={Boolean(evidenceRetention.legal_hold)} />
           </CardContent>
         </Card></div>
       )}
@@ -2785,557 +2774,6 @@ export const ENTITLEMENT_FEATURE_LABELS: Record<(typeof ENTITLEMENT_FEATURES)[nu
   connectors: 'Provider connectors',
   high_scale_program: 'High-scale program (SOC-governed)'
 };
-
-const ENTITLEMENT_FEATURE_NOTES: Record<(typeof ENTITLEMENT_FEATURES)[number], string> = {
-  waf_posture: 'Not that any WAF is detected or protecting a target; that comes from check evidence.',
-  external_discovery: 'Not that inventory is discovered automatically; targets stay customer-declared.',
-  connectors: 'Not that a provider is connected; set one up in Integrations.',
-  high_scale_program: 'Not self-service. Only SOC can approve and run high-scale validation.'
-};
-
-const SUBSCRIPTION_PAGE_STYLES = `
-.subscription-page .subscription-toolbar,
-.subscription-page .subscription-plan-heading,
-.subscription-page .subscription-usage-card-head,
-.subscription-page .subscription-signal-strip,
-.subscription-page .subscription-state-error,
-.subscription-page .subscription-entitlement-indicator {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-}
-.subscription-page .subscription-toolbar,
-.subscription-page .subscription-plan-heading,
-.subscription-page .subscription-usage-card-head,
-.subscription-page .subscription-state-error {
-  justify-content: space-between;
-}
-.subscription-page .subscription-toolbar {
-  flex-wrap: wrap;
-  margin-bottom: var(--space-3);
-  padding: var(--space-3) var(--space-4);
-  border: 1px solid var(--border-soft);
-  border-radius: var(--radius-md);
-  background: var(--proof-surface);
-}
-.subscription-page .subscription-freshness {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  color: var(--fg-2);
-  font-size: var(--text-xs);
-}
-.subscription-page .subscription-plan-heading {
-  align-items: flex-start;
-}
-.subscription-page .subscription-plan-title {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-  gap: var(--space-1);
-}
-.subscription-page .subscription-plan-facts {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 1px;
-  margin: 0;
-  overflow: hidden;
-  border: 1px solid var(--border-soft);
-  border-radius: var(--radius-md);
-  background: var(--border-soft);
-}
-.subscription-page .subscription-plan-fact {
-  min-width: 0;
-  padding: var(--space-3) var(--space-4);
-  background: var(--surface);
-}
-.subscription-page .subscription-plan-fact dt {
-  margin-bottom: var(--space-1);
-  color: var(--muted);
-  font-size: var(--text-xs);
-}
-.subscription-page .subscription-plan-fact dd {
-  min-width: 0;
-  margin: 0;
-  color: var(--fg);
-  font-size: var(--text-sm);
-  font-weight: 600;
-  overflow-wrap: anywhere;
-}
-.subscription-page .subscription-usage-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 1px;
-  overflow: hidden;
-  border: 1px solid var(--border-soft);
-  border-radius: var(--radius-md);
-  background: var(--border-soft);
-}
-.subscription-page .subscription-usage-card {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-  gap: var(--space-3);
-  padding: var(--space-4);
-  border: 0;
-  border-radius: 0;
-  background: var(--surface);
-}
-.subscription-page .subscription-usage-copy,
-.subscription-page .subscription-usage-value {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-  gap: var(--space-1);
-}
-.subscription-page .subscription-usage-copy strong,
-.subscription-page .subscription-usage-value strong {
-  color: var(--fg);
-  font-size: var(--text-sm);
-}
-.subscription-page .subscription-usage-copy span,
-.subscription-page .subscription-usage-value span,
-.subscription-page .subscription-limit-note {
-  color: var(--muted);
-  font-size: var(--text-xs);
-}
-.subscription-page .subscription-usage-value strong {
-  font-family: var(--font-display);
-  font-size: var(--text-xl);
-  font-variant-numeric: tabular-nums;
-}
-.subscription-page .subscription-limit-note {
-  margin: auto 0 0;
-  line-height: 1.45;
-}
-.subscription-page .subscription-signal-strip {
-  flex-wrap: wrap;
-  margin-top: var(--space-4);
-  padding-top: var(--space-4);
-  border-top: 1px solid var(--border-soft);
-}
-.subscription-page .subscription-signal-strip > strong {
-  color: var(--fg-2);
-  font-size: var(--text-xs);
-}
-.subscription-page .subscription-signal-item {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  color: var(--fg-2);
-  font-size: var(--text-xs);
-}
-.subscription-page .subscription-entitlement-indicator {
-  display: inline-flex;
-  width: max-content;
-  max-width: 100%;
-  gap: var(--space-2);
-  color: var(--muted);
-  font-size: var(--text-sm);
-  font-weight: 600;
-}
-.subscription-page .subscription-entitlement-indicator[data-state='enabled'] {
-  color: var(--success);
-}
-.subscription-page .subscription-entitlement-indicator[data-state='disabled'] {
-  color: var(--fg-2);
-}
-.subscription-page .subscription-entitlement-indicator[data-state='unknown'] {
-  color: var(--warn);
-}
-.subscription-page .subscription-state-error {
-  align-items: flex-start;
-  padding: var(--space-4);
-  border: 1px solid var(--danger);
-  border-radius: var(--radius-md);
-  background: color-mix(in oklab, var(--danger), transparent 92%);
-}
-.subscription-page .subscription-state-error > div {
-  display: flex;
-  min-width: 0;
-  gap: var(--space-3);
-}
-.subscription-page .subscription-state-error h2,
-.subscription-page .subscription-state-error p {
-  margin: 0;
-}
-.subscription-page .subscription-state-error h2 {
-  color: var(--fg);
-  font-size: var(--text-base);
-}
-.subscription-page .subscription-state-error p {
-  margin-top: var(--space-1);
-  color: var(--fg-2);
-  font-size: var(--text-sm);
-}
-@media (max-width: 960px) {
-  .subscription-page .subscription-plan-facts,
-  .subscription-page .subscription-usage-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-@media (max-width: 620px) {
-  .subscription-page .subscription-toolbar,
-  .subscription-page .subscription-plan-heading,
-  .subscription-page .subscription-usage-card-head,
-  .subscription-page .subscription-state-error {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-  .subscription-page .subscription-plan-facts,
-  .subscription-page .subscription-usage-grid {
-    grid-template-columns: 1fr;
-  }
-  .subscription-page .subscription-toolbar .btn,
-  .subscription-page .subscription-state-error .btn {
-    width: 100%;
-  }
-}
-`;
-
-function formatEntitlementGrantSource(value: string) {
-  if (!value || value === 'plan only') return 'Plan default';
-  if (value.startsWith('plan:')) return `Plan default (${value.slice(5)})`;
-  return value;
-}
-
-function subscriptionRecordedTimestamp(...values: unknown[]) {
-  for (const value of values) {
-    if (typeof value === 'string' && Number.isFinite(Date.parse(value))) return value;
-  }
-  return '';
-}
-
-function SubscriptionEntitlementIndicator({
-  value,
-  enabledLabel,
-  disabledLabel
-}: {
-  value: unknown;
-  enabledLabel: string;
-  disabledLabel: string;
-}) {
-  const state = value === true ? 'enabled' : value === false ? 'disabled' : 'unknown';
-  const label = value === true ? enabledLabel : value === false ? disabledLabel : 'Not recorded';
-  const Icon = value === true ? CheckCircle2 : value === false ? CircleMinus : CircleHelp;
-  return (
-    <span className="subscription-entitlement-indicator" data-state={state} aria-label={label}>
-      <Icon size={15} aria-hidden="true" />
-      <span>{label}</span>
-    </span>
-  );
-}
-
-export function SubscriptionPage({ data, config, session }: { data: PortalData; config?: PortalConfig; session?: Session }) {
-  const [portalLoadedAt] = useState(() => new Date().toISOString());
-  const summary = data.subscriptionSummary;
-  const subscriptionLoadError = data.loadErrors.subscriptionSummary;
-  const subscription = getNestedItem(summary, ['subscription']);
-  const plan = getNestedItem(summary, ['plan']);
-  const account = getNestedItem(summary, ['account']);
-  const usage = getNestedItem(summary, ['usage']);
-  const support = getNestedItem(summary, ['support']);
-  const planEntitlements = getNestedItem(plan, ['feature_entitlements']) ?? getNestedItem(subscription, ['feature_entitlements']);
-  const effectiveEntitlements = getNestedItem(subscription, ['effective_entitlements']);
-  const entitlementGrants = Array.isArray(subscription?.entitlement_grants) ? subscription.entitlement_grants as DataItem[] : [];
-  const hasSubscription = Boolean(subscription);
-  const planLabel = hasSubscription ? getString(plan ?? {}, ['name'], getString(subscription ?? {}, ['plan_id'], 'Recorded plan')) : 'Not configured';
-  const readUsage = (key: string) => {
-    const value = usage?.[key];
-    return typeof value === 'number' && Number.isFinite(value) ? value : null;
-  };
-  const safeRunsLimit = getNestedNumber(subscription, ['limits', 'safe_runs_per_hour'], -1);
-  const safeRunsUsed = readUsage('safe_runs_started_last_hour');
-  const usersLimit = getNestedNumber(subscription, ['limits', 'users'], -1);
-  const usersUsed = readUsage('users');
-  const openFindings = readUsage('open_findings');
-  const supportContact = config ? configuredSupportUri(config.siteConfig) : null;
-  const ownerView = isWorkspaceOwnerRole((session ?? loadSession())?.role);
-  const subscriptionStatus = getString(subscription ?? {}, ['status'], 'unrecorded');
-  const supportOwner = getString(support ?? account ?? {}, ['owner', 'support_owner'], 'unassigned');
-  const sourceTimestamp = subscriptionRecordedTimestamp(
-    summary?.generated_at,
-    summary?.as_of,
-    usage?.as_of,
-    usage?.observed_at
-  );
-  const subscriptionRecordTimestamp = subscriptionRecordedTimestamp(subscription?.updated_at);
-  const freshnessLabel = sourceTimestamp
-    ? `Source snapshot ${formatDate(sourceTimestamp)}`
-    : subscriptionRecordTimestamp
-      ? `Subscription record updated ${formatDate(subscriptionRecordTimestamp)} · usage snapshot timestamp not provided`
-      : `Portal loaded ${formatDate(portalLoadedAt)} · source timestamp not provided`;
-  const entitlementRows: DataItem[] = ENTITLEMENT_FEATURES.map((feature) => {
-    const grant = entitlementGrants.find((entry) => getString(entry, ['feature'], '') === feature);
-    const planValue = planEntitlements?.[feature];
-    const effectiveValue = effectiveEntitlements?.[feature];
-    const normalizedPlanValue = typeof planValue === 'boolean' ? planValue : null;
-    const normalizedEffectiveValue = typeof effectiveValue === 'boolean' ? effectiveValue : null;
-    return {
-      feature,
-      plan_enabled: normalizedPlanValue,
-      effective_enabled: normalizedEffectiveValue,
-      grant_source: grant
-        ? getString(grant, ['source'], 'staff grant')
-        : normalizedPlanValue === null ? 'not recorded' : 'plan only'
-    };
-  });
-  const recordedEntitlements = entitlementRows.filter((row) => typeof row.effective_enabled === 'boolean');
-  const enabledEntitlements = recordedEntitlements.filter((row) => row.effective_enabled === true).length;
-  const usageRows = [
-    { label: 'Bounded checks started', description: 'Unit: checks · window: last 60 minutes', used: safeRunsUsed, limit: safeRunsLimit },
-    { label: 'Users', description: 'Unit: workspace members · current count', used: usersUsed, limit: usersLimit }
-  ];
-  const recordedUsageCount = usageRows.filter((row) => row.used !== null).length;
-  const entitlementColumns: TableColumn<DataItem>[] = [
-    {
-      key: 'feature',
-      label: 'Feature',
-      render: (item) => {
-        const feature = getString(item, ['feature']);
-        return <strong>{ENTITLEMENT_FEATURE_LABELS[feature as (typeof ENTITLEMENT_FEATURES)[number]] ?? feature}</strong>;
-      }
-    },
-    {
-      key: 'plan',
-      label: 'Access',
-      render: (item) => (
-        <SubscriptionEntitlementIndicator value={item.effective_enabled} enabledLabel="Available" disabledLabel="Unavailable" />
-      )
-    },
-    {
-      key: 'why',
-      label: 'Why',
-      render: (item) => {
-        const source = formatEntitlementGrantSource(getString(item, ['grant_source'], 'not recorded'));
-        const plan = item.plan_enabled === true ? 'Included in plan' : item.plan_enabled === false ? 'Not in plan' : 'Plan inclusion not recorded';
-        return <span className="cp-stack"><span>{plan}</span><span className="muted small">Source: {source}</span></span>;
-      }
-    },
-    {
-      key: 'means',
-      label: 'What access does not mean',
-      render: (item) => <span className="muted small">{ENTITLEMENT_FEATURE_NOTES[getString(item, ['feature']) as (typeof ENTITLEMENT_FEATURES)[number]] ?? 'Access alone does not configure or validate anything.'}</span>
-    }
-  ];
-  const refreshPage = () => window.location.reload();
-
-  if (subscriptionLoadError) {
-    return (
-      <div className="content subscription-page">
-        <style>{SUBSCRIPTION_PAGE_STYLES}</style>
-        <PageHeader route="subscription" title="Plan & usage" />
-        <Card>
-          <CardContent>
-            <div className="subscription-state-error" role="alert">
-              <div>
-                <TriangleAlert size={20} aria-hidden="true" />
-                <div>
-                  <h2>Subscription data could not be loaded</h2>
-                  <p>{subscriptionLoadError} Existing limits and entitlements are not shown as an empty account.</p>
-                </div>
-              </div>
-              <Button type="button" variant="secondary" onClick={refreshPage}><RefreshCw size={15} aria-hidden="true" /> Retry</Button>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-    );
-  }
-
-  if (!data.loaded) {
-    return (
-      <div className="content subscription-page">
-        <style>{SUBSCRIPTION_PAGE_STYLES}</style>
-        <PageHeader route="subscription" title="Plan & usage" />
-        <EmptyState
-          icon={Activity}
-          variant="skeleton"
-          title="Loading subscription…"
-          body="Fetching the authoritative plan, effective entitlements, and current usage snapshot."
-        />
-      </div>
-    );
-  }
-
-  if (!hasSubscription) {
-    return (
-      <div className="content subscription-page">
-        <style>{SUBSCRIPTION_PAGE_STYLES}</style>
-        <PageHeader
-          route="subscription"
-          title="Plan & usage"
-          actions={<Button type="button" variant="secondary" size="sm" onClick={refreshPage}><RefreshCw size={15} aria-hidden="true" /> Refresh</Button>}
-        />
-        {ownerView ? (
-          <EmptyState
-            icon={LifeBuoy}
-            title="No subscription configured for this tenant."
-            body="No subscription record exists for this workspace. Limits and feature access are unknown, not unlimited. Plans are provisioned by the AstraNull operator for this deployment, not from this portal."
-            actionLabel={supportContact ? 'Contact support' : undefined}
-            actionHref={supportContact ? supportContact.href : undefined}
-          />
-        ) : (
-          <EmptyState
-            icon={LifeBuoy}
-            title="No subscription configured for this tenant."
-            body="No subscription record is available. Limits and feature access are unknown, not unlimited. Ask your workspace administrator or support contact to provision one."
-            actionLabel={supportContact ? 'Contact support' : 'Open support'}
-            actionHref={supportContact ? supportContact.href : '#support'}
-          />
-        )}
-      </div>
-    );
-  }
-
-  return (
-    <div className="content subscription-page">
-      <style>{SUBSCRIPTION_PAGE_STYLES}</style>
-      <PageHeader
-        route="subscription"
-        title="Plan & usage"
-        description="Your recorded plan, measured usage against its limits, and which features your plan makes available. This page has no billing or payment actions."
-      />
-      <div className="subscription-toolbar" role="status" aria-live="polite">
-        <span className="subscription-freshness"><Activity size={14} aria-hidden="true" /> {freshnessLabel}</span>
-        <Button type="button" variant="secondary" size="sm" onClick={refreshPage} title="Reload the page to request a fresh subscription snapshot.">
-          <RefreshCw size={15} aria-hidden="true" /> Refresh
-        </Button>
-      </div>
-      <PageContextSummary>
-        {planLabel} · bounded checks{' '}
-        <span className="tabular-nums">
-          {safeRunsUsed === null ? 'not measured' : `${safeRunsUsed}${safeRunsLimit >= 0 ? ` of ${safeRunsLimit}` : ', limit not recorded'}`}
-        </span>{' '}
-        in the last 60 minutes
-      </PageContextSummary>
-
-      <Card className="subscription-plan-surface">
-        <CardHeader>
-          <div className="subscription-plan-heading">
-            <div className="subscription-plan-title">
-              <CardTitle>{planLabel}</CardTitle>
-              <CardDescription>Your current plan: contract posture and account ownership, without duplicating usage or entitlement panels.</CardDescription>
-            </div>
-            <Badge tone={subscriptionStatusTone(subscriptionStatus)}>{recordedStatusLabel(subscriptionStatus)}</Badge>
-          </div>
-        </CardHeader>
-        <CardContent>
-          <dl className="subscription-plan-facts">
-            <div className="subscription-plan-fact">
-              <dt>Effective</dt>
-              <dd>{formatDate(subscription?.effective_at)}</dd>
-            </div>
-            <div className="subscription-plan-fact">
-              <dt>Renewal</dt>
-              <dd>{subscription?.renewal_at ? formatDate(subscription.renewal_at) : 'Not recorded'}</dd>
-            </div>
-            <div className="subscription-plan-fact">
-              <dt>Data region</dt>
-              <dd>{recordedText(getString(account ?? support ?? {}, ['region'], ''))}</dd>
-            </div>
-            <div className="subscription-plan-fact">
-              <dt>Lifecycle</dt>
-              <dd><Badge tone={tenantLifecycleTone(getString(account ?? support ?? {}, ['lifecycle_state'], 'unrecorded'))}>{recordedStatusLabel(getString(account ?? support ?? {}, ['lifecycle_state'], ''))}</Badge></dd>
-            </div>
-            <div className="subscription-plan-fact">
-              <dt>Support owner</dt>
-              <dd>{getString(account ?? {}, ['support_owner'], supportOwner)}</dd>
-            </div>
-            <div className="subscription-plan-fact">
-              <dt>Contract ref</dt>
-              <dd>{recordedText(getString(account ?? {}, ['contract_reference'], ''))}</dd>
-            </div>
-          </dl>
-        </CardContent>
-      </Card>
-
-      <Card className="card--dense">
-        <PanelCardHeader
-          title="Usage against plan limits"
-          description="Each metric joins the recorded count, authoritative limit, and progress state."
-          trailing={<Badge tone="muted">{recordedUsageCount} / {usageRows.length} recorded</Badge>}
-        />
-        <CardContent>
-          {usage ? (
-            <>
-              <div className="subscription-usage-grid" role="list" aria-label="Subscription usage">
-                {usageRows.map((row) => {
-                  const hasUsage = row.used !== null;
-                  const hasLimit = row.limit >= 0;
-                  const percent = hasUsage && hasLimit
-                    ? row.limit > 0 ? Math.min(100, Math.round((row.used! / row.limit) * 100)) : row.used! > 0 ? 100 : 0
-                    : null;
-                  const atLimit = hasUsage && hasLimit && (row.limit === 0 ? row.used! > 0 : row.used! >= row.limit);
-                  return (
-                    <article className="subscription-usage-card" role="listitem" key={row.label}>
-                      <div className="subscription-usage-card-head">
-                        <div className="subscription-usage-copy">
-                          <strong>{row.label}</strong>
-                          <span>{row.description}</span>
-                        </div>
-                        <Badge tone={percent === null ? 'muted' : atLimit ? 'warn' : 'info'}>
-                          {percent === null ? 'No measure' : `${percent}%`}
-                        </Badge>
-                      </div>
-                      <div className="subscription-usage-value" aria-label={`${row.label} count and limit`}>
-                        <strong>{hasUsage ? formatNumber(row.used!) : 'Not measured'}</strong>
-                        <span>{hasUsage ? (hasLimit ? `of ${formatNumber(row.limit)} allowed` : 'used · limit not recorded (not unlimited)') : hasLimit ? `Limit ${formatNumber(row.limit)} · usage not measured (not zero)` : 'Usage and limit not recorded'}</span>
-                      </div>
-                      {percent !== null ? (
-                        <Progress
-                          value={percent}
-                          tone={atLimit ? 'warn' : 'accent'}
-                          label={`${row.label} usage, ${row.used} of ${row.limit}`}
-                        />
-                      ) : (
-                        <p className="subscription-limit-note">Progress is unavailable until both usage and a plan limit are recorded.</p>
-                      )}
-                    </article>
-                  );
-                })}
-              </div>
-              <div className="subscription-signal-strip" aria-label="Workspace signal that is not a plan limit">
-                <strong>Not a plan limit</strong>
-                <span className="subscription-signal-item">Open findings in this snapshot <Badge tone="muted">{openFindings === null ? 'Not recorded' : formatNumber(openFindings)}</Badge></span>
-              </div>
-            </>
-          ) : (
-            <EmptyState icon={Activity} title="No usage snapshot recorded." body="Plan details are available, but workspace usage counts were not recorded." />
-          )}
-        </CardContent>
-      </Card>
-
-      <Card className="card--dense">
-        <PanelCardHeader
-          title="Feature access"
-          description="Whether your plan lets you use a feature. Available does not mean it is configured or working."
-          trailing={
-            <Badge tone={recordedEntitlements.length > 0 && enabledEntitlements > 0 ? 'success' : 'muted'}>
-              {recordedEntitlements.length > 0 ? `${enabledEntitlements} / ${recordedEntitlements.length} enabled` : 'Not recorded'}
-            </Badge>
-          }
-        />
-        <CardContent>
-          <DataTable
-            columns={entitlementColumns}
-            items={entitlementRows}
-            empty={<EmptyState icon={ShieldCheck} title="No feature definitions." body="The plan did not return any recognized features." />}
-          />
-        </CardContent>
-      </Card>
-      <Card className="card--dense">
-        <PanelCardHeader title="Change your plan or limits" description="Plan changes are handled outside the portal." />
-        <CardContent className="row-actions">
-          {supportContact
-            ? <AnchorButton href={supportContact.href} variant="secondary" size="sm">Contact support</AnchorButton>
-            : <span className="muted small">Contact your AstraNull account team{supportOwner && supportOwner !== 'unassigned' ? ` (support owner: ${supportOwner})` : ''}{getString(account ?? {}, ['contract_reference'], '') ? ` and quote contract reference ${getString(account ?? {}, ['contract_reference'], '')}` : ''}.</span>}
-          <AnchorButton href="#support" variant="ghost" size="sm">Prepare a support summary</AnchorButton>
-        </CardContent>
-      </Card>
-    </div>
-  );
-}
 
 function TenantNameCell({ tenantId, name }: { tenantId: string; name: string }) {
   if (!tenantId) return <span className="muted">Not recorded</span>;

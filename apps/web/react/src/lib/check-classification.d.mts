@@ -17,3 +17,11 @@ export declare function checkClassificationFields(check: unknown): {
   protection_controls: CheckProtectionControlId[];
   declaration_only: boolean;
 };
+
+export type CheckImpactId = 'non_invasive' | 'invasive';
+
+export type CheckImpactClass = Readonly<{ id: CheckImpactId; label: string; summary: string }>;
+
+export declare const CHECK_IMPACT_CLASSES: Readonly<Record<CheckImpactId, CheckImpactClass>>;
+
+export declare function classifyCheckImpact(check: unknown): CheckImpactClass;

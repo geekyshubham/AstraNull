@@ -1,0 +1,20 @@
+$TTL 300
+@       IN      SOA     ns1.lab.efficacy.invalid. hostmaster.lab.efficacy.invalid. (
+                        2026101701      ; Serial
+                        7200            ; Refresh
+                        3600            ; Retry
+                        1209600         ; Expire
+                        300 )           ; Negative Cache TTL / Minimum
+
+; Planted condition: Single NS record only (secondary failover gap)
+@       IN      NS      ns1.lab.efficacy.invalid.
+
+; Host records
+ns1     IN      A       172.31.41.10
+@       IN      A       172.31.41.10
+app     IN      A       172.31.41.20
+api     IN      A       172.31.41.30
+mail    IN      A       172.31.41.40
+txt1    IN      TXT     "synthetic=evidence-token-lab-dns"
+parity  IN      A       172.31.33.10
+parity  IN      AAAA    fd00:a57a:33::10

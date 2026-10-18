@@ -46,6 +46,8 @@ Typed declarations and published probe perspectives ([ADR-0028](0028-typed-contr
 - Detection docs 03, 04, 05, 06, and 12 describe this model; they no longer document agent observation.
 - Customers on WAFs with only generic edge headers see suspected blocks as inconclusive until they declare a block signature or the vendor entry is live-verified.
 - Zone-transfer (`dns_axfr_leak`) is `protected` only when every nameserver was queried and refused; a leak on any nameserver is `exposed`; budget-limited coverage is `enforcement: 'partial'` and inconclusive.
+- A TCP connection to port 53 is not a zone transfer: `exposed` needs an explicit `axfr_leak` from a completed transfer with attested probe I/O, and `protected` needs per-nameserver refusal rows covering every distinct nameserver. An `enforcement` label alone earns no credit.
+- NFW probe kinds with no attested probe I/O, or ending in `error`, `not_run` or `timeout`, are `inconclusive` before any port-level grading. IPv4/IPv6 outcomes that differ are a parity finding, not repeat-sample disagreement; disagreement within one address family stays inconclusive.
 - The rate-limit canary is `protected` only when the first `threshold` requests were allowed and the limit came at request `threshold+1` or `threshold+2`.
 
 Implementation: `src/services/correlation.mjs`, `src/lib/probeEvidenceTiers.mjs`, `src/lib/externalObservationOutcomes.mjs`, `src/lib/vectorProbes/*`, `src/lib/networkProbeOutcomes.mjs`, `src/lib/firewallChangeAcceptance.mjs`, `src/lib/protectionCoverage.mjs`, `src/lib/readinessProjection.mjs`, `src/lib/findingLifecycle.mjs`.

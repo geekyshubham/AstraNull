@@ -13,7 +13,7 @@ const DEFAULT_ROLES = ['owner', 'admin', 'engineer', 'soc', 'auditor', 'viewer']
 const EXPECTED_ROUTE_IDS = [
   'dashboard', 'targets', 'target-groups', 'checks',
   'test-policies', 'runs', 'findings', 'reports', 'integrations', 'notifications',
-  'audit', 'settings', 'support', 'subscription', 'admin',
+  'audit', 'settings', 'support', 'admin',
   'internal-soc', 'check-detail', 'policy-detail',
   'target-group-detail', 'target-detail', 'run-detail',
   'scan-detail', 'finding-detail', 'finding-group-detail', 'evidence-detail', 'report-detail',
@@ -290,7 +290,7 @@ function routeCases(fixtures) {
   const basic = [
     'dashboard', 'targets', 'target-groups', 'checks', 'test-policies',
     'runs', 'findings', 'reports', 'integrations', 'notifications', 'audit',
-    'settings', 'support', 'subscription', 'admin', 'internal-soc',
+    'settings', 'support', 'admin', 'internal-soc',
     // Keyless visit renders the grouped-issue empty state; keys are derived client-side.
     'finding-group-detail',
   ].map((route) => ({ route, name: route, hash: route, expectedToken: '' }));

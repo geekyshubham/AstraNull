@@ -427,6 +427,13 @@ export function FindingsRefined(props: FindingsRefinedProps) {
     openInspector({ entry: 'finding', finding_id: id, target_id: getString(finding, ['target_id']) || undefined, check_id: getString(finding, ['check_id']) || undefined }, focusKey);
   }
 
+  const missingControlLabel = (checkId: string) => {
+    if (!checkId) return '';
+    const check = data.checks.find((entry) => getString(entry, ['check_id', 'id']) === checkId);
+    const control = check?.missing_control;
+    return control && typeof control === 'object' && !Array.isArray(control) ? getString(control as DataItem, ['control_label']) : '';
+  };
+
   const groupColumns: TableColumn<FindingGroup>[] = [
     {
       key: 'alert',
@@ -440,9 +447,10 @@ export function FindingsRefined(props: FindingsRefinedProps) {
             href={findingGroupHref(group.key)}
             data-focus-key={`group-${group.key}`}
             onClick={() => save({ selectedRowId: group.key, focusKey: `group-${group.key}` })}
-            aria-label={`Open finding group ${group.title}, ${formatSeverityLabel(group.severity)}, ${group.assets.length}${groupsComplete ? '' : ' or more'} ${pluralize(group.assets.length, 'affected target')}`}
+            aria-label={`Open finding group ${group.title}${missingControlLabel(group.checkId) ? `, missing ${missingControlLabel(group.checkId)}` : ''}, ${formatSeverityLabel(group.severity)}, ${group.assets.length}${groupsComplete ? '' : ' or more'} ${pluralize(group.assets.length, 'affected target')}`}
           >
             <strong className="rf-alert-title">{group.title}</strong>
+            {missingControlLabel(group.checkId) ? <span className="rf-alert-missing"><span className="rf-alert-missing-key">Missing:</span> {missingControlLabel(group.checkId)}</span> : null}
             {group.checkLabel ? <span className="rf-alert-check">{group.checkLabel}</span> : null}
             <span className="rf-asset-chips">
               {shown.map((asset) => (

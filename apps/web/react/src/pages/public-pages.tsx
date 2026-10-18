@@ -486,6 +486,8 @@ async function enterDemoPortal(portalPath: string, config?: PortalConfig) {
         return;
       }
     } catch {}
+    navigateSpa(config.loginUrl || '/login');
+    return;
   }
   saveSession({
     mode: 'dev-headers',
@@ -1034,6 +1036,19 @@ function BoundariesSection() {
 }
 
 export function PublicLandingPage({ config }: PublicPageProps) {
+  const [demoLoading, setDemoLoading] = useState(false);
+  const demoPending = useRef(false);
+  async function openDemo() {
+    if (demoPending.current) return;
+    demoPending.current = true;
+    setDemoLoading(true);
+    try {
+      await enterDemoPortal(config.portalPath, config);
+    } finally {
+      demoPending.current = false;
+      setDemoLoading(false);
+    }
+  }
   const productName = String(config.siteConfig.product_name ?? 'AstraNull');
   const signupEnabled = config.siteConfig.signup_enabled !== false;
   const demoEnabled = config.authMode === 'dev-headers' || (config.passwordLoginEnabled && config.bundledLoginEnabled !== true);
@@ -1116,7 +1131,7 @@ export function PublicLandingPage({ config }: PublicPageProps) {
             {signupEnabled ? <AnchorButton href="/signup">Request access</AnchorButton> : null}
             <AnchorButton href={loginUrl} variant={signupEnabled ? 'secondary' : 'default'}>Log in</AnchorButton>
             {demoEnabled ? (
-              <Button type="button" variant="ghost" onClick={() => enterDemoPortal(config.portalPath, config)}>
+              <Button type="button" variant="ghost" loading={demoLoading} disabled={demoLoading} onClick={() => void openDemo()}>
                 Open demo workspace (sample data)
               </Button>
             ) : null}

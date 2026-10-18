@@ -1,0 +1,22 @@
+services:
+  dns-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: anl-dns-lab/dns-server:latest
+    container_name: anl-dns-lab-server
+    restart: unless-stopped
+    cpus: 1.0
+    mem_limit: 768m
+    networks:
+      anl-dns-lab-net:
+        ipv4_address: 172.31.41.10
+
+networks:
+  anl-dns-lab-net:
+    name: anl-dns-lab-net
+    internal: true
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.31.41.0/24

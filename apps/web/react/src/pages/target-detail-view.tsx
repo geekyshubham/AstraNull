@@ -65,8 +65,6 @@ import {
   countRowStatuses,
   edgeDetectionPhase,
   markerEffectiveness,
-  originExposureDetail,
-  originExposureStatus,
   providerFamilyRows,
   recommendedStarterRow,
   assessEdgeEfficacy,
@@ -75,6 +73,7 @@ import {
   retainedCoveragePairs,
   assessmentChecks,
   targetCheckRequirement,
+  targetCheckAvailability,
   individualChecks,
   withTargetRunnableChecks,
   targetTabFromParam,
@@ -83,16 +82,18 @@ import {
   type ProviderFamilyRow,
   type TargetTab,
 } from '../lib/domain-checks.mjs';
-import { CheckQueue, ProviderObservations } from '../components/targets/domain-protection';
+import { CheckQueue, ProviderObservations, rowImpact } from '../components/targets/domain-protection';
+import { CHECK_IMPACT_CLASSES, classifyCheckImpact } from '../lib/check-classification.mjs';
 import { ControlDeclarations, normalizePerspectives, type OriginRelationSummary, type ProbePerspective } from '../components/targets/control-declarations';
 import { RuleCoveragePanel } from '../components/rule-coverage/rule-coverage';
-import { checkPrerequisite, controlsHref, prerequisiteCta, prerequisiteSection, prerequisiteTone, targetRunnableIndex, type CheckPrerequisite } from '../lib/control-declarations.mjs';
+import { controlsHref, prerequisiteCta, prerequisiteSection, prerequisiteTone, targetRunnableIndex, type CheckPrerequisite } from '../lib/control-declarations.mjs';
 import { VERSION_GAP_COPY } from '../lib/probe-evidence.mjs';
 import { TargetChangesHistory } from '../components/targets/target-history';
 import { TargetSubdomains } from '../components/targets/target-subdomains';
 import { InitialEdgeStatus } from '../components/targets/initial-edge-status';
 import { TargetAuthorization } from '../components/targets/target-authorization';
 import { OriginRelations } from '../components/targets/origin-relations';
+import { OriginExposure } from '../components/targets/origin-exposure';
 import { DeclaredEntryPaths, FirewallChangeComparison } from '../components/targets/entry-paths';
 import { ProbeActivity } from '../components/targets/probe-activity';
 import { OwnershipProof } from '../components/targets/ownership-proof';
@@ -102,6 +103,7 @@ import { useInspectorRef, useOpenInspector } from '../components/evidence/use-in
 import { useInteractionHold, useStableList } from '../components/evidence/use-stable-list';
 import { navScopeKey } from '../lib/nav-state.mjs';
 import { evidenceModePresentation, plainCheckName, plainFindingTitle, plainVerdictLabel, plainVerificationLabel } from '../lib/plain-language.mjs';
+import { checkPresentation } from '../lib/check-presentation.mjs';
 import { PortalUnavailablePage } from './public-pages';
 import { DetailBackLink } from '../components/layout/detail-back-link';
 import { useEntityDocumentTitle } from '../components/layout/app-shell';
@@ -138,6 +140,7 @@ const PAIR_REASON_LABELS: Record<string, string> = {
   manual_declaration: 'Manual declaration',
   customer_declaration: 'Customer declaration',
   no_evidence: 'No evidence cited',
+  invalid_or_unresolved_evidence: 'Cited evidence could not be verified',
   not_finalized: 'Run not finalized',
   ...VERSION_GAP_COPY,
 };
@@ -471,8 +474,10 @@ export function TargetDetailView({
   const [scanActivity, setScanActivity] = useState<DataItem[]>([]);
   const [targetRuns, setTargetRuns] = useState<DataItem[]>([]);
   const [runsError, setRunsError] = useState('');
-  const [fullCatalog, setFullCatalog] = useState<DataItem[] | null>(null);
-  const [catalogError, setCatalogError] = useState('');
+  const [catalogLoad, setCatalogLoad] = useState<{ scope: string; items: DataItem[] | null; error: string }>({ scope: '', items: null, error: '' });
+  const [catalogReload, setCatalogReload] = useState(0);
+  const fullCatalog = catalogLoad.scope === executionScope ? catalogLoad.items : null;
+  const catalogError = catalogLoad.scope === executionScope ? catalogLoad.error : '';
   const [edgeLocal, setEdgeLocal] = useState<EdgeLocalState>('');
   const [edgeError, setEdgeError] = useState('');
   const [edgeReason, setEdgeReason] = useState('');
@@ -574,7 +579,7 @@ export function TargetDetailView({
   const findings = Array.isArray(detail?.findings) ? detail!.findings : [];
   const [expandedFindingHistoryId, setExpandedFindingHistoryId] = useState<string | null>(null);
   const deduplicatedFindings = useMemo(() => dedupeFindingsForTarget(findings, target, checks), [findings, target, checks]);
-  const deduplicatedOpenFindings = useMemo(() => deduplicatedFindings.filter((item) => item.status === 'open'), [deduplicatedFindings]);
+  const deduplicatedOpenFindings = useMemo(() => deduplicatedFindings.filter((item) => isFindingOpen(item.representative)), [deduplicatedFindings]);
   const expandedFindingHistory = useMemo(
     () => deduplicatedFindings.find((item) => item.representativeId === expandedFindingHistoryId) ?? null,
     [deduplicatedFindings, expandedFindingHistoryId]
@@ -596,27 +601,31 @@ export function TargetDetailView({
   const runAll = useMemo(() => (target ? assessmentChecks(targetChecks, target, prerequisiteContext) as DataItem[] : []), [targetChecks, target, prerequisiteContext]);
   const remainingCatalog = useMemo(() => (fullCatalog ?? []).filter((check) => targetCheckRequirement(check, target, prerequisiteContext)), [fullCatalog, target, prerequisiteContext]);
   const selectableChecks = useMemo(() => target ? individualChecks(targetChecks, target, prerequisiteContext) as DataItem[] : [], [targetChecks, target, prerequisiteContext]);
+  const inventoryChecks = useMemo(() => fullCatalog ?? selectableChecks, [fullCatalog, selectableChecks]);
   const scopedAcceptedRun = acceptedRun?.scope === executionScope ? acceptedRun : null;
   const checkRows = useMemo(() => {
-    const rows = buildCheckRows({ checks: selectableChecks, scan, runs: targetRuns }) as CheckRow[];
+    const rows = buildCheckRows({ checks: inventoryChecks, scan, runs: targetRuns, coverage: detail?.coverage }) as CheckRow[];
     if (!scopedAcceptedRun) return rows;
     // Pin the returned execution, not a newest-list guess or a fabricated sorting timestamp.
     const record = targetRuns.find((run) => run.id === scopedAcceptedRun.id) ?? scopedAcceptedRun.record;
-    const exact = buildCheckRows({ checks: selectableChecks.filter((check) => check.check_id === scopedAcceptedRun.checkId), runs: [record] })[0] as CheckRow | undefined;
+    const exact = buildCheckRows({ checks: inventoryChecks.filter((check) => check.check_id === scopedAcceptedRun.checkId), runs: [record], coverage: detail?.coverage })[0] as CheckRow | undefined;
     return exact ? rows.map((row) => row.checkId === exact.checkId ? exact : row) : rows;
-  }, [selectableChecks, scan, targetRuns, scopedAcceptedRun]);
-  const rowCounts = useMemo(() => countRowStatuses(checkRows) as Record<string, number>, [checkRows]);
-  const prerequisites = useMemo(() => Object.fromEntries(selectableChecks.map((check) => [
+  }, [inventoryChecks, scan, targetRuns, scopedAcceptedRun, detail?.coverage]);
+  const selectableIds = useMemo(() => new Set(selectableChecks.map((check) => getString(check, ['check_id'], ''))), [selectableChecks]);
+  const selectableRows = useMemo(() => checkRows.filter((row) => selectableIds.has(row.checkId)), [checkRows, selectableIds]);
+  const rowCounts = useMemo(() => countRowStatuses(selectableRows) as Record<string, number>, [selectableRows]);
+  const prerequisites = useMemo(() => Object.fromEntries(inventoryChecks.map((check) => [
     getString(check, ['check_id'], ''),
-    checkPrerequisite(check, { ...prerequisiteContext, target }),
-  ])) as Record<string, CheckPrerequisite>, [selectableChecks, prerequisiteContext, target]);
-  const recommendedRow = useMemo(() => recommendedStarterRow(checkRows.filter((row) => prerequisites[row.checkId]?.state === 'ready')), [checkRows, prerequisites]);
+    targetCheckAvailability(check, target, prerequisiteContext),
+  ])) as Record<string, CheckPrerequisite>, [inventoryChecks, prerequisiteContext, target]);
+  const runnableIds = useMemo(() => new Set(selectableChecks.map((check) => getString(check, ['check_id'], '')).filter((id) => prerequisites[id]?.state === 'ready')), [selectableChecks, prerequisites]);
+  const recommendedRow = useMemo(() => recommendedStarterRow(checkRows.filter((row) => runnableIds.has(row.checkId))), [checkRows, runnableIds]);
   const effectiveSelectedCheckId = checkRows.some((row) => row.checkId === selectedCheckId) ? selectedCheckId : '';
   const selectedCheckMissing = Boolean(selectedCheckId) && !effectiveSelectedCheckId && checkRows.length > 0;
   const selectedRow = checkRows.find((row) => row.checkId === effectiveSelectedCheckId) ?? null;
   const checkNameById = useMemo(
-    () => new Map(targetChecks.map((check) => [getString(check, ['check_id', 'id'], ''), plainCheckName(getString(check, ['name', 'title'], ''))])),
-    [targetChecks],
+    () => new Map(inventoryChecks.map((check) => [getString(check, ['check_id', 'id'], ''), checkPresentation(check).name])),
+    [inventoryChecks],
   );
   const displayCheckName = (checkId: string) => checkNameById.get(checkId) || checkId || 'Unnamed check';
 
@@ -625,7 +634,6 @@ export function TargetDetailView({
   const profileInput = { protection_profile: detail?.protection_profile ?? null, edge_detection: edgeDetection };
   const providerRows = useMemo(() => providerFamilyRows(profileInput), [detail?.protection_profile, edgeDetection]); // eslint-disable-line react-hooks/exhaustive-deps
   const effectiveness = useMemo(() => markerEffectiveness(profileInput), [detail?.protection_profile, edgeDetection]); // eslint-disable-line react-hooks/exhaustive-deps
-  const originStatus = originExposureStatus(profileInput);
   const scanActive = isScanActive(scan);
   const activeStandalone = targetRuns.find((run) => ['running', 'collecting', 'planned'].includes(getString(run, ['status'], ''))) ?? null;
   const activeCheckRow = checkRows.find((row) => row.status === 'running' && row.runId) ?? null;
@@ -701,13 +709,14 @@ export function TargetDetailView({
   useEffect(() => {
     if (!entityId) return undefined;
     let stopped = false;
-    setCatalogError('');
+    const scope = executionScope;
+    setCatalogLoad({ scope, items: null, error: '' });
     void requestJson(config, session, `/v1/checks?scope=all&target_id=${encodeURIComponent(entityId)}`).then((payload) => {
-      if (!stopped && Array.isArray((payload as DataItem).items)) setFullCatalog((payload as DataItem).items as DataItem[]);
-    }).catch((err) => { if (!stopped) { setFullCatalog(null); setCatalogError(apiErrorMessage(err, 'The full check catalog could not load.')); } });
+      if (!Array.isArray((payload as DataItem)?.items)) throw new Error('The full check catalog returned an invalid response.');
+      if (!stopped && scopeRef.current === scope) setCatalogLoad({ scope, items: (payload as DataItem).items as DataItem[], error: '' });
+    }).catch((err) => { if (!stopped && scopeRef.current === scope) setCatalogLoad({ scope, items: null, error: apiErrorMessage(err, 'The full check catalog could not load.') }); });
     return () => { stopped = true; };
-  }, [config, session, entityId, declarationsRevision]);
-  useEffect(() => { setFullCatalog(null); }, [executionScope]);
+  }, [config, session, entityId, executionScope, declarationsRevision, catalogReload]);
 
   useEffect(() => { void loadTargetActivity(); }, [loadTargetActivity]);
 
@@ -911,15 +920,21 @@ export function TargetDetailView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dnsWatchStartedAt, config, session, canWrite, ownershipDone, challenge?.id, challenge?.state, challenge?.expires_at]);
 
-  const runnableIds = new Set(checkRows.map((row) => row.checkId));
   const selectedRunIds = runSelection.filter((id) => runnableIds.has(id)).slice(0, MAX_SCAN_CHECKS);
   const startCheckId = selectedRunIds.length === 1 ? selectedRunIds[0] : effectiveSelectedCheckId;
   const startRow = checkRows.find((row) => row.checkId === startCheckId) ?? null;
   const activeStandaloneName = activeStandalone ? displayCheckName(getString(activeStandalone, ['check_id'], '')) : '';
   const runAllDisabledReason = canStartBoundedRun && !targetEligible ? 'Prove ownership first.' : '';
+  const assessmentIds = new Set(runAll.map((check) => getString(check, ['check_id'], '')));
+  const assessmentExcludedRows = checkRows.filter((row) => !assessmentIds.has(row.checkId));
+  const assessmentMissingEligible = assessmentExcludedRows.some((row) => prerequisites[row.checkId]?.state === 'ready');
   const runAllBlockedReason = !scanActive && activeStandalone
     ? `${activeStandaloneName} is running on this target. Wait for it to finish or stop it before starting all checks.`
-    : '';
+    : fullCatalog === null
+      ? 'Load the full catalog before reviewing the complete evaluation.'
+      : assessmentMissingEligible
+        ? 'An eligible check is missing from the evaluation plan. The complete evaluation cannot start.'
+        : '';
 
   const reviewSlotReason = scanActive
     ? 'A scan is in progress on this target.'
@@ -933,11 +948,12 @@ export function TargetDetailView({
       ? OWNERSHIP_LOCKED_REASON
       : !startCheckId
         ? 'Select a check in the list first.'
-        : startPrerequisite && startPrerequisite.state !== 'ready'
-          ? startPrerequisite.detail
+        : !runnableIds.has(startCheckId)
+          ? startPrerequisite?.detail || 'This check is visible for reference but cannot be started here.'
           : reviewSlotReason;
 
   async function startScan(checkIds: string[], name: string, submittedScope: string) {
+    if (!canStartBoundedRun || !ownershipDone || !checkIds.length || checkIds.some((id) => !runnableIds.has(id))) return;
     const current = () => scopeRef.current === submittedScope;
     setBusy('run-all');
     setError('');
@@ -1015,10 +1031,11 @@ export function TargetDetailView({
     }
     if (review.mode === 'selected') {
       const checkIds = review.checkIds.filter((id) => runnableIds.has(id)).slice(0, MAX_SCAN_CHECKS);
-      if (checkIds.length < 2) { setReview(null); return; }
+      if (checkIds.length < 2 || checkIds.length !== review.checkIds.length) { setReview(null); setError('Check availability changed. Review your selection again before starting.'); return; }
       await startScan(checkIds, `Selected checks · ${targetDisplayValue(target)}`, submittedScope);
       return;
     }
+    if (runAllBlockedReason) { setReview(null); setError(runAllBlockedReason); return; }
     await startScan(
       runAll.map((check) => getString(check, ['check_id'], '')).filter(Boolean),
       `All compatible checks · ${targetDisplayValue(target)}`,
@@ -1037,6 +1054,7 @@ export function TargetDetailView({
   const selectedUnbounded = reviewSelectedRows.filter((row) => row.maxRequests === null).length;
   const selectedObservationCount = reviewSelectedRows.filter((row) => !row.readinessCapable).length;
   const selectedCategoryCount = new Set(reviewSelectedRows.map((row) => row.category.id)).size;
+  const selectedInvasiveCount = reviewSelectedRows.filter((row) => rowImpact(row) === 'invasive').length;
   const detectMax = (edgeCheck?.probe_profile as DataItem | undefined)?.max_requests;
   const detectBound = detectMax === null || detectMax === undefined || detectMax === '' || !Number.isFinite(Number(detectMax)) ? null : Number(detectMax);
 
@@ -1332,13 +1350,14 @@ export function TargetDetailView({
     );
   }
 
-  const openFindings = findings
-    .filter((finding) => isFindingOpen(finding))
+  const openFindings = deduplicatedOpenFindings
+    .map((item) => item.representative)
     .sort((left, right) => (SEVERITY_RANK[getString(right, ['severity'], '').toLowerCase()] ?? 0) - (SEVERITY_RANK[getString(left, ['severity'], '').toLowerCase()] ?? 0));
+  const openDetectionCount = deduplicatedOpenFindings.reduce((total, item) => total + item.detectionCount, 0);
   const topFinding = openFindings[0] ?? null;
-  const acceptedRiskCount = findings.filter((finding) => ['accepted_risk', 'accepted'].includes(findingStatus(finding))).length;
-  const fixVerifiedCount = findings.filter((finding) => findingStatus(finding) === 'fix_verified').length;
-  const recordedResults = (rowCounts.passed ?? 0) + (rowCounts.failed ?? 0) + (rowCounts.inconclusive ?? 0) + (rowCounts.observed ?? 0);
+  const acceptedRiskCount = deduplicatedFindings.filter((item) => ['accepted_risk', 'accepted'].includes(findingStatus(item.representative))).length;
+  const fixVerifiedCount = deduplicatedFindings.filter((item) => findingStatus(item.representative) === 'fix_verified').length;
+  const recordedResults = (rowCounts.passed ?? 0) + (rowCounts.failed ?? 0) + (rowCounts.inconclusive ?? 0) + (rowCounts.observed ?? 0) + (rowCounts.retained ?? 0);
   const coverage = detail.coverage ?? null;
   const coveragePairs = Array.isArray(coverage?.pairs) ? (coverage!.pairs as DataItem[]).filter((pair) => pair && typeof pair === 'object') : [];
   const retainedPairs = retainedCoveragePairs(coveragePairs);
@@ -1346,8 +1365,8 @@ export function TargetDetailView({
     getString(pair, ['check_id'], ''),
     (PAIR_REASON_LABELS[getString(pair, ['pair_reason'], '')] ?? formatLabel(getString(pair, ['pair_reason'], 'not_recorded'))).toLowerCase(),
   ]));
-  const efficacy = assessEdgeEfficacy({ rows: checkRows, edge: edgeDetection, coverage, nowMs: clock });
-  const wafRules = wafRuleEnforcement(checkRows, { coverage, nowMs: clock });
+  const efficacy = assessEdgeEfficacy({ rows: selectableRows, edge: edgeDetection, coverage, nowMs: clock });
+  const wafRules = wafRuleEnforcement(selectableRows, { coverage, nowMs: clock });
   const canaryMembers = customCanaryMembers(coverage, { checks: checkRows });
   const dimensions = Array.isArray(detail.protection_profile?.dimensions)
     ? (detail.protection_profile!.dimensions as DataItem[]).filter((row) => row && typeof row === 'object')
@@ -1543,7 +1562,7 @@ export function TargetDetailView({
         <header className="td-section-head">
           <div>
             <h2 id="td-coverage-title">Recorded check results</h2>
-            <p>Counts over {checkRows.length} catalog checks compatible with this target kind. The server applicability plan is not reported yet, so no coverage percentage is shown.</p>
+            <p>Counts over {selectableRows.length} catalog checks compatible with this target kind. The server applicability plan is not reported yet, so no coverage percentage is shown.</p>
           </div>
         </header>
         <dl className="td-count-grid">
@@ -1747,6 +1766,14 @@ export function TargetDetailView({
   const probeSourceRanges = Array.isArray(config.siteConfig?.probe_source_ranges)
     ? (config.siteConfig.probe_source_ranges as unknown[]).filter((value): value is string => typeof value === 'string' && value.trim() !== '')
     : [];
+  const impactSentence = (invasive: number, total: number) => (
+    <p className="td-review-impact" data-invasive={invasive > 0 || undefined}>
+      <strong>Traffic impact:</strong>{' '}
+      {invasive === 0
+        ? 'All non-invasive. These checks only observe with ordinary requests.'
+        : `${invasive} invasive and ${total - invasive} non-invasive. Invasive checks send bounded, attack-shaped traffic and can trigger WAF, IDS or SOC alerts.`}
+    </p>
+  );
   const trafficNotice = (bound: string) => (
     <>
       Requests come from AstraNull signed public probe workers. Most carry a User-Agent containing “AstraNull”, but some phases deliberately vary or omit headers, so the request bound ({bound}) is the reliable limit. Traffic starts when you confirm and stops at the timeout or when you choose Stop.
@@ -1830,8 +1857,6 @@ export function TargetDetailView({
             <ProviderObservations
               rows={providerRows}
               effectiveness={effectiveness}
-              originStatus={originStatus}
-              originDetail={originExposureDetail(profileInput)}
               evaluating={edgeEvaluating}
               note={edgeNote()}
               action={detectAction}
@@ -1843,6 +1868,7 @@ export function TargetDetailView({
               onOpenChecks={() => setTab('validate')}
             />
             {renderCoverage()}
+            {target?.kind === 'fqdn' ? <OriginExposure key={`${entityId}:${sessionIdentity(session)}`} config={config} session={session} target={target} canWrite={canWrite} enabled={deploymentFeatures?.origin_clues === true} /> : null}
             {target ? <TargetAuthorization target={target} config={config} session={session} canWrite={canWrite} ownershipDone={ownershipDone} /> : null}
             {target ? (
               <OriginRelations
@@ -1891,7 +1917,7 @@ export function TargetDetailView({
             {!ownershipDone ? renderOwnershipPanel(true) : null}
             {selectedCheckMissing ? (
               <div className="form-banner" role="status">
-                The linked check <span className="mono">{selectedCheckId}</span> is not compatible with this target kind, so it is not listed. No other check was selected.
+                The linked check <span className="mono">{selectedCheckId}</span> is not in the loaded catalog. No other check was selected.
               </div>
             ) : null}
             {showActivity ? (
@@ -1906,6 +1932,7 @@ export function TargetDetailView({
             ) : null}
             <CheckQueue
               rows={checkRows}
+              runnableCheckIds={runnableIds}
               runAllCount={runAll.length}
               catalogCount={fullCatalog?.length}
               selectedCheckId={effectiveSelectedCheckId}
@@ -1930,12 +1957,12 @@ export function TargetDetailView({
               prerequisites={prerequisites}
               targetId={entityId}
               footer={<>
-                {catalogError ? <p role="alert">{catalogError}</p> : null}
+                {catalogError ? <div role="alert"><p>{catalogError} Only the loaded selection subset is shown.</p><Button size="sm" variant="secondary" onClick={() => setCatalogReload((value) => value + 1)}>Retry catalog</Button></div> : fullCatalog === null ? <p role="status">Loading the full check catalog. Only the loaded selection subset is shown.</p> : null}
                 {remainingCatalog.length ? <details className="td-retained td-catalog-requirements">
                   <summary>{remainingCatalog.length} catalog checks not runnable on this target · requirements</summary>
-                  <p>Every catalog check is listed here or in the runnable list above. Required setup never counts as passed protection.</p>
+                  <p>These definitions are included in the full catalog above. Required setup never counts as passed protection.</p>
                   <ul>{remainingCatalog.map((check) => {
-                    const prerequisite = checkPrerequisite(check, { ...prerequisiteContext, target });
+                    const prerequisite = targetCheckAvailability(check, target, prerequisiteContext);
                     const section = prerequisiteSection(prerequisite);
                     return <li key={getString(check, ['check_id'], '')}>
                     <span className="td-requirement-row">
@@ -1968,7 +1995,7 @@ export function TargetDetailView({
                 {!ownershipDone ? <Button size="sm" variant="ghost" onClick={() => focusOwnership('td-validate-ownership')}>Go to ownership step</Button> : null}
                 <Button
                   data-focus-key={multiSelected ? 'check-start-selected' : `check-start-${startCheckId}`}
-                  disabled={!targetEligible || (!multiSelected && !startCheckId) || busy !== '' || scanActive || (!multiSelected && Boolean(startPrerequisite && startPrerequisite.state !== 'ready'))}
+                  disabled={!targetEligible || busy !== '' || scanActive || (!multiSelected && Boolean(singleDisabledReason))}
                   aria-describedby={startReason ? 'td-start-reason' : undefined}
                   onClick={() => setReview(multiSelected ? { mode: 'selected', checkIds: selectedRunIds } : { mode: 'single', checkId: startCheckId })}
                 >
@@ -1986,9 +2013,9 @@ export function TargetDetailView({
               <div>
                 <h2 id="td-findings-title">Findings on this target</h2>
                 <p>
-                  {openFindings.length} open of {findings.length} recorded.
-                  {deduplicatedFindings.length < findings.length
-                    ? ` Deduplicated into ${deduplicatedFindings.length} unique finding${deduplicatedFindings.length === 1 ? '' : 's'}.`
+                  {openFindings.length} open of {deduplicatedFindings.length} unique finding{deduplicatedFindings.length === 1 ? '' : 's'}.
+                  {findings.length > deduplicatedFindings.length
+                    ? ` ${findings.length} detections recorded${openDetectionCount > openFindings.length ? `, ${openDetectionCount} on open findings` : ''}; repeat detections of the same issue count as one finding.`
                     : ''}{' '}
                   Each opens the full detection history and evidence.
                 </p>
@@ -2104,7 +2131,7 @@ export function TargetDetailView({
               session={session}
               targetId={entityId}
               profile={(detail?.protection_profile as DataItem | undefined) ?? null}
-              checkName={(checkId) => plainCheckName(getString(checks.find((check) => getString(check, ['check_id', 'id'], '') === checkId) ?? {}, ['name', 'title'], checkId))}
+              checkName={(checkId) => checkPresentation(checks.find((check) => getString(check, ['check_id', 'id'], '') === checkId) ?? checkId).name}
               onInspectRun={(runId, checkId, focusKey) => openInspector({ entry: 'check_result', target_id: entityId, check_id: checkId, test_run_id: runId }, focusKey)}
             />
             {target && protectionValidationEnabled ? (
@@ -2160,21 +2187,23 @@ export function TargetDetailView({
         ) : null}
       </div>
 
-      <section className="td-facts" aria-labelledby="td-facts-title">
-        <header className="td-section-head"><div><h2 id="td-facts-title">Target facts</h2></div></header>
-        <div className="table-wrap" tabIndex={0} role="region" aria-label="Target facts, scrollable">
-          <table className="data-table">
-            <tbody>
-              <tr><th scope="row">Target ID</th><td><span className="mono">{entityId}</span></td></tr>
-              <tr><th scope="row">Declared value</th><td><span className="mono">{targetDisplayValue(target)}</span></td></tr>
-              <tr><th scope="row">Kind</th><td>{formatLabel(kind)}</td></tr>
-              <tr><th scope="row">Declaration source</th><td>{plainCheckName(targetDeclarationProvenanceLabel(target))}</td></tr>
-              <tr><th scope="row">Ownership method</th><td><span className="mono">{ownershipMethodText(verification)}</span></td></tr>
-              {detail.loa ? <tr><th scope="row">Authorization</th><td>{formatLabel(getString(detail.loa, ['state'], 'Not reported'))}</td></tr> : null}
-            </tbody>
-          </table>
-        </div>
-      </section>
+      {tab === 'overview' ? (
+        <section className="td-facts" aria-labelledby="td-facts-title">
+          <header className="td-section-head"><div><h2 id="td-facts-title">Target facts</h2></div></header>
+          <div className="table-wrap" tabIndex={0} role="region" aria-label="Target facts, scrollable">
+            <table className="data-table">
+              <tbody>
+                <tr><th scope="row">Target ID</th><td><span className="mono">{entityId}</span></td></tr>
+                <tr><th scope="row">Declared value</th><td><span className="mono">{targetDisplayValue(target)}</span></td></tr>
+                <tr><th scope="row">Kind</th><td>{formatLabel(kind)}</td></tr>
+                <tr><th scope="row">Declaration source</th><td>{plainCheckName(targetDeclarationProvenanceLabel(target))}</td></tr>
+                <tr><th scope="row">Ownership method</th><td><span className="mono">{ownershipMethodText(verification)}</span></td></tr>
+                {detail.loa ? <tr><th scope="row">Authorization</th><td>{formatLabel(getString(detail.loa, ['state'], 'Not reported'))}</td></tr> : null}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      ) : null}
 
       <ConfirmModal
         open={review !== null}
@@ -2199,12 +2228,21 @@ export function TargetDetailView({
                 {review.mode === 'all' ? (
                   <>
                     <p><strong>{runAll.length} bounded external checks</strong> across {runAllCategoryCount} categories, at most {runAllRequestBound} probe requests in total.</p>
-                    <p>Includes provider, DNS, transport, and protocol observations. These observations do not score as readiness verdicts.</p>
+                    <p>Runs every eligible check for this target, including provider, DNS, transport, and protocol observations. These observations do not score as readiness verdicts.</p>
+                    {assessmentExcludedRows.length ? (
+                      <details className="td-requirements">
+                        <summary>{assessmentExcludedRows.length} of {inventoryChecks.length} definitions cannot run in this evaluation</summary>
+                        <p>These are not executed and receive no new result or readiness credit. Resolve setup requirements or use the authorized workflow where available.</p>
+                        <ul>{assessmentExcludedRows.map((row) => <li key={row.checkId}><strong>{row.name}</strong>: {prerequisites[row.checkId]?.detail || 'Unavailable in this evaluation.'}</li>)}</ul>
+                      </details>
+                    ) : null}
+                    {impactSentence(runAll.filter((check) => classifyCheckImpact(check).id === 'invasive').length, runAll.length)}
                   </>
                 ) : (
                   <>
                     <p><strong>{reviewSelectedRows.length} bounded external checks</strong> across {selectedCategoryCount} {selectedCategoryCount === 1 ? 'category' : 'categories'}, at most {selectedRequestBound} probe requests in total.{selectedUnbounded ? ` ${selectedUnbounded} of them ${selectedUnbounded === 1 ? 'has' : 'have'} no request bound recorded in the catalog.` : ''}</p>
-                    {selectedObservationCount ? <p>{selectedObservationCount} of these {selectedObservationCount === 1 ? 'is an observation' : 'are observations'} and {selectedObservationCount === 1 ? 'does' : 'do'} not score as a readiness verdict.</p> : null}
+                    {selectedObservationCount ? <p>{selectedObservationCount} of these {selectedObservationCount === 1 ? 'has' : 'have'} no readiness credit. Scoped policy verdicts remain separate from readiness conclusions.</p> : null}
+                    {impactSentence(selectedInvasiveCount, reviewSelectedRows.length)}
                   </>
                 )}
                 <p>They run one at a time inside your safe-run limits; if an hourly limit is reached the scan pauses and shows when it resumes. While it runs it holds this target&apos;s execution slot, so no other check can start on this target until it finishes. You can stop it at any time.</p>
@@ -2218,7 +2256,8 @@ export function TargetDetailView({
                   <div><dt>Target</dt><dd className="mono">{targetDisplayValue(target)}</dd></div>
                   <div><dt>Check</dt><dd>{reviewRow?.name ?? 'Not selected'} <span className="mono">{review?.mode === 'single' ? review.checkId : ''}</span></dd></div>
                   <div><dt>Upper bound</dt><dd>{selectedBound !== null ? `${selectedBound} request${selectedBound === 1 ? '' : 's'}` : 'Not recorded in the catalog'}{reviewRow?.timeoutMs ? `, ${reviewRow.timeoutMs} ms timeout` : ''}</dd></div>
-                  <div><dt>Result type</dt><dd>{reviewRow?.readinessCapable ? 'Produces a readiness verdict' : 'Observation only — no readiness credit'}</dd></div>
+                  {reviewRow ? <div><dt>Traffic impact</dt><dd>{CHECK_IMPACT_CLASSES[rowImpact(reviewRow)].label}. {CHECK_IMPACT_CLASSES[rowImpact(reviewRow)].summary}</dd></div> : null}
+                  <div><dt>Result type</dt><dd>{reviewRow?.producesVerdict ? reviewRow.readinessCapable ? 'Produces a readiness verdict' : 'Scoped verdict; no readiness credit' : 'Observation only; no readiness credit'}</dd></div>
                   <div><dt>Ownership</dt><dd>{ownershipDone ? 'Verified' : 'Not verified'}</dd></div>
                   <div><dt>What your team will see</dt><dd>{trafficNotice(selectedBound !== null ? `at most ${selectedBound} request${selectedBound === 1 ? '' : 's'}` : 'not recorded in the catalog')}</dd></div>
                 </dl>
@@ -2230,7 +2269,7 @@ export function TargetDetailView({
         )}
         confirmLabel={review?.mode === 'detect' ? 'Start detection' : review?.mode === 'all' ? 'Start all checks' : review?.mode === 'selected' ? `Start ${reviewSelectedRows.length} checks` : 'Start check'}
         confirmTone="default"
-        confirmDisabled={review !== null && review.mode !== 'detect' && (!ownershipDone || Boolean(reviewSlotReason))}
+        confirmDisabled={review !== null && review.mode !== 'detect' && (!ownershipDone || Boolean(reviewSlotReason) || (review.mode === 'all' && Boolean(runAllBlockedReason)))}
         busy={busy === 'run' || busy === 'run-all'}
         onCancel={() => setReview(null)}
         onConfirm={() => void startReviewed()}

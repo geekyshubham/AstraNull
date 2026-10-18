@@ -1431,6 +1431,7 @@ export function entryPathComparisonPlanDigest(plan) {
         check_id: item.check_id ?? null,
         check_version: item.check_version ?? null,
         origin_binding_id: item.origin_binding_id ?? null,
+        ...(item.paired_plan ? { paired_plan: item.paired_plan } : {}),
         eligible: item.eligible === true,
       }))
       .sort((a, b) => `${a.entry_path_id}|${a.check_id}`.localeCompare(`${b.entry_path_id}|${b.check_id}`)),

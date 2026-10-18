@@ -92,6 +92,14 @@ function bindingRow(overrides = {}) {
   };
 }
 
+function signedHistoryRun() {
+  const binding = bindingRow();
+  return { id: 'run_signed', tenant_id: TENANT, target_id: binding.origin_target_id, check_id: ORIGIN_CHECK,
+    origin_binding_id: binding.id, provenance_json: { origin_scope: {
+      host: binding.host, sni: binding.sni, port: binding.port, path: binding.path,
+    } } };
+}
+
 function verifiedProof(state = 'dns_verified') {
   return { verified: true, state };
 }
@@ -99,9 +107,9 @@ function verifiedProof(state = 'dns_verified') {
 function runGuard({ binding, scopeOverrides = {}, check = { probe_profile: { kind: 'host_sni_bypass' } } } = {}) {
   return validateOriginBindingForRun({
     binding,
-    runTarget: { id: 'tgt_origin', kind: 'ip', value: '203.0.113.10' },
+    runTarget: { id: 'tgt_origin', tenant_id: TENANT, kind: 'ip', value: '203.0.113.10' },
     protectedTarget: {
-      id: 'tgt_app',
+      id: 'tgt_app', tenant_id: TENANT,
       kind: 'fqdn',
       value: 'app.example.test',
       declaration_json: { allowed_scope: { ports: [443, 8443], paths: ['/health', '/ready'], ...scopeOverrides } },
@@ -164,7 +172,7 @@ describe('stored binding scope at run start', () => {
 
 describe('bound origin reachability source requirements', () => {
   function reach(observations) {
-    return assessOriginReachability(bindingRow(), observations, verifiedProof());
+    return assessOriginReachability(bindingRow(), observations, verifiedProof(), { runs: [signedHistoryRun()] });
   }
 
   it('accepts a signed, approved-check, origin-target bound observation', () => {
@@ -512,9 +520,9 @@ describe('microsecond timestamp ordering and cursor precision', () => {
       { ...exact, observed_at: before },
       { ...exact, source_completed_at: before },
     ]) {
-      assert.equal(assessOriginReachability(binding, [row], verifiedProof()).status, 'not_tested');
+      assert.equal(assessOriginReachability(binding, [row], verifiedProof(), { runs: [signedHistoryRun()] }).status, 'not_tested');
     }
-    assert.equal(assessOriginReachability(binding, [exact], verifiedProof()).status, 'reachable');
+    assert.equal(assessOriginReachability(binding, [exact], verifiedProof(), { runs: [signedHistoryRun()] }).status, 'reachable');
   });
 
   it('normalizes and compares six-digit source precision without losing microseconds', () => {

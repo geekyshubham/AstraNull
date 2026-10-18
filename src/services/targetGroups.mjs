@@ -34,7 +34,8 @@ import {
 } from '../lib/ownershipPolicy.mjs';
 import { getStore, persistStore } from '../store.mjs';
 import { normalizeSafetyPolicy } from './safeTestPolicy.mjs';
-import { listTargetEdgeDetectionsForGroup } from './targetEdgeDetectionStore.mjs';
+import { listTargetEdgeDetectionsForGroup, listTargetEdgeDetectionsForTenant } from './targetEdgeDetectionStore.mjs';
+import { targetDnsObservation } from '../lib/targetDnsObservation.mjs';
 import { presentTargetEdgeDetection } from '../lib/edgeDetectionPresenter.mjs';
 import { presentDeclaredTargetObservation } from './declaredHostAnalytics.mjs';
 import { findingRowStatus } from '../lib/findingList.mjs';
@@ -171,16 +172,16 @@ export function listTargets(ctx) {
       .map((group) => [group.id, group]),
   );
   const verifications = latestTargetVerifications(ctx.tenantId);
+  const edgeDetections = listTargetEdgeDetectionsForTenant(ctx.tenantId);
 
   return store.targets
     .filter((target) => target.tenant_id === ctx.tenantId && !isArchivedTarget(target) && groups.has(target.target_group_id))
     .map((target) => {
       const group = groups.get(target.target_group_id);
-      return targetInventoryItem(
-        target,
-        group,
-        verifications.get(target.id),
-      );
+      return {
+        ...targetInventoryItem(target, group, verifications.get(target.id)),
+        dns_observation: targetDnsObservation(edgeDetections.get(target.id)),
+      };
     })
     .sort((a, b) => String(b.created_at ?? '').localeCompare(String(a.created_at ?? ''))
       || String(a.id).localeCompare(String(b.id)));

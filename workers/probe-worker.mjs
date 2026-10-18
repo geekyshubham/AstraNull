@@ -17,6 +17,7 @@ import {
   minimumProbeRequestsForKind,
 } from '../src/lib/capabilityProbes.mjs';
 import { pinnedFetch, resolvePinnedDestination } from '../src/lib/pinnedHttpRequest.mjs';
+import { signedOriginIdentityPair } from '../src/lib/originIdentityPair.mjs';
 import { createProbePreAttempt, startProbeIoAttempt } from '../src/lib/probeAttempt.mjs';
 import {
   parseNetworkEndpoint,
@@ -334,6 +335,8 @@ const METADATA_ARRAY_STRING_MAX = 253;
 const METADATA_ALLOWED_ARRAY_PATHS = new Set([
   'dns_cname_chain',
   'dns_resolved_ips',
+  'nameservers',
+  'tls_issues',
   'marker_probes',
   'marker_results',
   'variant_results',
@@ -356,6 +359,7 @@ const METADATA_ALLOWED_ARRAY_PATHS = new Set([
   'origin_observation.limitations',
   'origin_observation.supporting_signals',
   'edge_signature.layers',
+  'edge_signature.layers.sources',
   'edge_signature.waf_providers',
   'edge_signature.cdn_providers',
   'edge_signature.cloud_providers',
@@ -466,11 +470,24 @@ const BASELINE_FEATURE_SCHEMA = {
   location_changed: SCALAR,
   redirected: SCALAR,
 };
+const ORIGIN_SCOPE_SCHEMA = { host: SCALAR, path: SCALAR, port: SCALAR, method: SCALAR,
+  scenario_version: SCALAR, source_perspective: SCALAR, worker_id: SCALAR };
+const ORIGIN_TLS_SCHEMA = { verification_enabled: SCALAR, trust_valid: SCALAR, name_valid: SCALAR,
+  authorization_error: SCALAR, certificate_sha256: SCALAR };
 const STRUCTURED_METADATA_SCHEMAS = Object.freeze({
+  observed_addresses: listOf(SCALAR),
+  origin_ips: listOf(SCALAR),
+  ipv6_addrs: listOf(SCALAR),
+  untrusted_header_clues: listOf({ name: SCALAR, value: SCALAR, trusted: SCALAR }),
+  content_support: { suspected_application_association: SCALAR, supporting_signals: listOf(SCALAR),
+    content_complete: SCALAR, nonce_confirmed: SCALAR, limitations: listOf(SCALAR) },
+  direct_tls: ORIGIN_TLS_SCHEMA,
   baseline: BASELINE_FEATURE_SCHEMA,
   permitted_baseline: {
     ...BASELINE_FEATURE_SCHEMA,
     health: SCALAR,
+    application_identity: { confirmed: SCALAR, method: SCALAR },
+    scope: ORIGIN_SCOPE_SCHEMA, observed_at: SCALAR, body_complete: SCALAR, tls: ORIGIN_TLS_SCHEMA,
     denial_signature: { id: SCALAR, kind: SCALAR },
   },
   placements: listOf(PLACEMENT_SCHEMA),
@@ -1423,14 +1440,22 @@ function jobDeadlineOutcome(
   };
 }
 
-function finalizeProbeOutcome(outcome, timing, accounting) {
+export function finalizeProbeOutcome(outcome, timing, accounting) {
   const durationMs = timing.durationMs();
   const probeRequestsSent = accounting.probeLogicalAttempts;
   const metadata = outcome?.metadata ?? {};
   const destinationResolverAttempts = accounting.destinationResolverAttempts;
   const totalOperations = probeRequestsSent + destinationResolverAttempts;
+  const budgetError = metadata.error_class === 'signed_operation_budget_exceeded';
+  const stopped = timing.controller.signal.reason?.code === 'probe_stopped';
+  const deadline = timing.remainingMs() <= 0 || durationMs > timing.timeoutMs;
+  // A probe that already produced a conclusive observation keeps it: finalize-time bookkeeping
+  // crossing the budget must not rewrite a completed connected/blocked result into a timeout.
+  const conclusiveObservation = ['connected', 'blocked'].includes(outcome?.external_result);
+  const expired = deadline && !stopped && !budgetError && !conclusiveObservation;
   return {
     ...outcome,
+    external_result: expired ? (probeRequestsSent > 0 ? 'timeout' : 'error') : outcome.external_result,
     metadata: {
       ...metadata,
       duration_ms: durationMs,
@@ -1442,6 +1467,18 @@ function finalizeProbeOutcome(outcome, timing, accounting) {
         destination_vetting_resolver_attempts: destinationResolverAttempts,
         total_operations: totalOperations,
       },
+      ...(expired ? {
+        // Keep a specific failure cause (e.g. resolver_not_routable); only a missing or generic
+        // class is labelled as the deadline so the real reason is not masked.
+        error_class: (!metadata.error_class || metadata.error_class === 'probe_execution_failed')
+          ? 'probe_job_deadline_exceeded'
+          : metadata.error_class,
+        observation_only: true,
+        readiness_conclusion: false,
+        enforcement: 'unknown',
+        comparison_complete: false,
+        complete: false,
+      } : {}),
     },
     requests_sent: totalOperations,
     probe_requests_sent: probeRequestsSent,
@@ -1455,6 +1492,11 @@ async function executeProbeWithinDeadline(job, deps, accounting, caps) {
   const profileKind = job.probe_profile?.kind;
   const budgetFailure = signedBudgetFailure(job, caps);
   if (budgetFailure) return budgetFailure;
+  const pair = profileKind === 'origin_identity_pair' ? signedOriginIdentityPair(job) : null;
+  if (profileKind === 'origin_identity_pair' && !pair) {
+    return { external_result: 'error', metadata: withProfileKind(job, { probe_kind: profileKind,
+      error_class: 'invalid_signed_origin_identity_pair', observation_only: true, readiness_conclusion: false }), requests_sent: 0, duration_ms: 0 };
+  }
 
   const executor = PROBE_KIND_DISPATCH[profileKind];
   if (!executor) {
@@ -1476,7 +1518,7 @@ async function executeProbeWithinDeadline(job, deps, accounting, caps) {
   // Destination chokepoint. Metadata markers send no packets. DNS wire/DNSSEC helpers
   // classify and pin the authoritative nameserver after their counted NS lookup.
   // Other helpers must clear the classifier here before transport is touched.
-  let destinationPolicy = deps.destinationPolicy;
+  let destinationPolicy = pair ? { allowPrivate: false, allowLoopback: false } : deps.destinationPolicy ?? resolveProbeDestinationPolicy(deps.env ?? process.env);
   let vettedHost = null;
   let vettedAddresses = [];
   if (!['metadata_marker', 'dns_wire_query', 'dnssec_posture'].includes(profileKind)) {
@@ -1493,6 +1535,7 @@ async function executeProbeWithinDeadline(job, deps, accounting, caps) {
         resolve4Fn: deps.rawResolve4Fn,
         resolve6Fn: deps.rawResolve6Fn,
         destinationDnsTimeoutMs,
+        ...(pair ? { destinationPolicy } : {}),
       });
     } catch (error) {
       if (['signed_operation_budget_exceeded', 'probe_job_deadline_exceeded', 'probe_destination_dns_timeout'].includes(error?.code)) {
@@ -1508,6 +1551,19 @@ async function executeProbeWithinDeadline(job, deps, accounting, caps) {
     vettedAddresses = vetted.addresses ?? [];
   }
 
+  let pairedBaselineDestination = null;
+  if (pair) {
+    // Vet both independently owned destinations before the first HTTP request.
+    // The baseline set is handed to the pinned transport and never resolved again.
+    try {
+      const baseline = await vetProbeDestination({ ...job, target: pair.protected_target }, {
+        ...deps, resolve4Fn: deps.rawResolve4Fn, resolve6Fn: deps.rawResolve6Fn,
+        destinationDnsTimeoutMs: deps.remainingJobTimeoutMs(), destinationPolicy,
+      });
+      if (!baseline.ok || baseline.host !== pair.host) return destinationBlockedOutcome(job, baseline);
+      pairedBaselineDestination = baseline;
+    } catch (error) { return destinationResolutionFailureOutcome(job, error); }
+  }
   const remainingMs = deps.remainingJobTimeoutMs();
   if (remainingMs <= 0) return jobDeadlineOutcome(job);
   const executionJob = {
@@ -1521,7 +1577,8 @@ async function executeProbeWithinDeadline(job, deps, accounting, caps) {
 
   // Reuse the policy for newly discovered hosts. For the original host, overwrite any
   // caller-supplied values with the exact nonempty set produced by this preflight.
-  const probeDeps = { ...deps, destinationPolicy };
+  const probeDeps = { ...deps, destinationPolicy,
+    ...(pairedBaselineDestination ? { pairedBaselineDestination } : {}) };
   if (vettedHost != null) {
     probeDeps.vettedHost = vettedHost;
     probeDeps.vettedAddresses = vettedAddresses;
@@ -1694,6 +1751,8 @@ export async function processJob(config, job, deps = {}) {
   emitProbeActivity(deps, { stage: 'job_started', operation: job.probe_profile?.kind ?? 'probe' });
   const outcome = await executeProbeForJob(job, {
     ...deps,
+    workerId: config.workerId ?? deps.workerId ?? job.leased_by ?? null,
+    sourcePerspective: config.perspectiveId ?? deps.sourcePerspective ?? sourcePerspectiveFromEnv().id,
     signedJobVerified: true,
   });
   if ((outcome.probe_requests_sent ?? outcome.requests_sent) === 0) {

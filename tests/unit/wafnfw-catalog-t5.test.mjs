@@ -34,9 +34,9 @@ const NEW_IDS = [
 ];
 
 describe('T5 WAF/NFW catalog', () => {
-  it('keeps unique ids and a 273-definition catalog', () => {
-    assert.equal(CHECK_CATALOG.length, 273);
-    assert.equal(new Set(CHECK_CATALOG.map((row) => row.check_id)).size, 273);
+  it('keeps unique ids and a 275-definition catalog', () => {
+    assert.equal(CHECK_CATALOG.length, 275);
+    assert.equal(new Set(CHECK_CATALOG.map((row) => row.check_id)).size, 275);
   });
 
   it('validates every new check against the catalog schema', () => {

@@ -17,5 +17,6 @@ workers
 
 # Runtime-critical leaves referenced by Compose or shipped attribution data.
 scripts/worker-heartbeat-health.mjs
+scripts/requirements-subdomains.txt
 THIRD_PARTY_NOTICES/cdncheck-MIT.txt
 THIRD_PARTY_NOTICES/wafw00f-BSD-3-Clause.txt

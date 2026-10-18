@@ -1,4 +1,5 @@
 import net from 'node:net';
+import { targetHostFromRecord } from '../contracts/controlDeclarations.mjs';
 import { resolvePinnedDestination } from './pinnedHttpRequest.mjs';
 import { startProbeIoAttempt } from './probeAttempt.mjs';
 import {
@@ -82,7 +83,7 @@ export async function probeConnectionLimit(job, deps = {}) {
     };
   }
 
-  const host = String(job.target?.value ?? '').trim().replace(/^\[|\]$/, '');
+  const host = targetHostFromRecord(job.target);
   const port = validNetworkPort(declared.port);
   if (!host || !port) {
     return {

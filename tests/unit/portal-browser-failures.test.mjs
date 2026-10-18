@@ -4,6 +4,7 @@ import { EventEmitter } from 'node:events';
 import { collectPortalBrowserFailures, assertPortalInitialLoad } from '../helpers/portal-browser-failures.mjs';
 
 class Page extends EventEmitter {
+  async route() {}
   async exposeBinding(name, fn) { this.binding = fn; }
   async addInitScript(fn) { this.init = fn; }
   async goto() { this.emit('pageerror', new Error('first-load failure')); }
@@ -78,6 +79,16 @@ for (const [name, message, response] of [
     assert.throws(() => diagnostics.assertClean(), /unexpected browser failures/);
   });
 }
+
+test('an external font resource failure is still an error, never a collector allowance', async () => {
+  const page = new Page();
+  const diagnostics = await collectPortalBrowserFailures(page, 'http://127.0.0.1:1234', { allowResponse: () => true });
+  page.emit('console', resourceMessage({
+    text: () => 'Failed to load resource: net::ERR_INTERNET_DISCONNECTED',
+    location: () => ({ url: 'https://fonts.googleapis.com/css2?family=Inter', lineNumber: 0, columnNumber: 0 }),
+  }));
+  assert.throws(() => diagnostics.assertClean(), /unexpected browser failures/);
+});
 
 test('unpaired native resource error remains a failure', async () => {
   const page = new Page();

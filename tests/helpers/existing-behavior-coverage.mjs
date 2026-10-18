@@ -8,7 +8,8 @@ export const EXISTING_BEHAVIOR_ROOT = path.resolve(path.dirname(fileURLToPath(im
 export const ASSERTION_SCHEMA = 'existing-behavior-assertion/v1';
 const sha = (value) => createHash('sha256').update(value).digest('hex');
 const observationsValid = (value) => Array.isArray(value) && value.length > 0 && value.every((item) => typeof item === 'string' && item.trim());
-const sourceExtensions = /\.(?:mjs|cjs|js|jsx|ts|tsx|mts|cts|css|json|sql|html|ya?ml)$/;
+const sourceExtensions = /\.(?:mjs|cjs|js|jsx|ts|tsx|mts|cts|css|json|sql|html|ya?ml|sh|bash|py|conf|cfg|nft|rules)$/;
+const sourceBasenames = /^(?:Dockerfile(?:\.[\w-]+)?|Containerfile|Makefile|\.dockerignore)$/;
 const ignored = new Set(['node_modules', '.git', '.vite', 'dist', 'build', 'coverage', 'test-results', 'playwright-report', 'output']);
 
 /** Relevant production, fixture, assertion and startup dependencies; generated portal bundles and logs are not sources. */
@@ -21,9 +22,9 @@ export function existingBehaviorSourceFiles(root = EXISTING_BEHAVIOR_ROOT) {
     if (stat.isSymbolicLink()) throw new Error(`Source symlink is not allowed: ${relative}`);
     if (stat.isDirectory()) {
       for (const entry of fs.readdirSync(absolute).sort()) if (!ignored.has(entry)) walk(path.join(relative, entry));
-    } else if (sourceExtensions.test(relative)) files.push(relative.split(path.sep).join('/'));
+    } else if (sourceExtensions.test(relative) || sourceBasenames.test(path.basename(relative))) files.push(relative.split(path.sep).join('/'));
   };
-  for (const directory of ['src', 'workers', 'apps/web/react/src', 'tests', 'db', 'scripts']) walk(directory);
+  for (const directory of ['src', 'workers', 'apps/web/react/src', 'tests', 'db', 'scripts', 'ops']) walk(directory);
   for (const file of ['package.json', 'package-lock.json', 'apps/web/react/index.html']) walk(file);
   const configName = /^(?:tsconfig(?:\.[^.]+)*\.json|(?:playwright|vite)(?:\.[^.]+)*\.config\.[cm]?[jt]s)$/;
   for (const directory of ['', 'apps/web/react']) {
@@ -61,7 +62,9 @@ export async function recordExistingBehaviorReceipt(testContext, { channel, rece
   const testId = testContext.testId || testContext.fullName;
   if (!testId) throw new Error('Actual test context identity is required.');
   const envelope = { schema: ASSERTION_SCHEMA, invocationId, sourceDigest, testId, retry: testContext.retry ?? 0,
-    channel, receipt, observations, completedAt: new Date().toISOString() };
+    channel, receipt, observations, completedAt: new Date().toISOString(),
+    ...(process.env.EXISTING_BEHAVIOR_RUNTIME_DIGEST ? { runtimeDigest: process.env.EXISTING_BEHAVIOR_RUNTIME_DIGEST,
+      runtimeObserved: { platform: process.platform, arch: process.arch, node: process.version } } : {}) };
   if (typeof testContext.attach === 'function') {
     await testContext.attach(`existing-behavior-receipt-${sha(JSON.stringify(envelope)).slice(0, 16)}`, { body: JSON.stringify(envelope), contentType: 'application/json' });
   } else if (typeof testContext.diagnostic === 'function') testContext.diagnostic(JSON.stringify(envelope));
@@ -76,9 +79,22 @@ export async function assertExistingBehaviorCase(testContext, descriptor, assert
   return recordExistingBehaviorReceipt(testContext, descriptor, observations);
 }
 
+// Native TAP adds one transport-escaping layer around diagnostics and test names.
+// Decode only that layer, never JSON escapes or a permissive parse fallback.
+function decodeNodeTapText(value) {
+  return value.replace(/\\([\s\S])|\\$/g, (match, escaped) => {
+    if (escaped !== '\\' && escaped !== '#') throw new Error('Invalid native TAP escape.');
+    return escaped;
+  });
+}
+
 /** Node diagnostics follow their containing terminal test at the same indentation. Never infer proof from a test title. */
 export function adaptNodeTapResults(tap) {
   const errors = [];
+  const identityText = (value) => {
+    try { return decodeNodeTapText(value); }
+    catch { errors.push('malformed-tap-identity'); return value; }
+  };
   const results = [];
   const headings = new Map();
   const terminals = new Map();
@@ -87,23 +103,23 @@ export function adaptNodeTapResults(tap) {
     if (heading) {
       const indent = heading[1].length;
       for (const key of headings.keys()) if (key >= indent) headings.delete(key);
-      headings.set(indent, heading[2]);
+      headings.set(indent, identityText(heading[2]));
       continue;
     }
     const terminal = line.match(/^(\s*)(not ok|ok) \d+ - (.*)$/);
     if (terminal) {
       const indent = terminal[1].length;
-      const name = terminal[3].replace(/\s+# (?:SKIP|TODO).*$/i, '');
+      const name = identityText(terminal[3].replace(/\s+# (?:SKIP|TODO).*$/i, ''));
       const testId = [...headings].filter(([level]) => level < indent).sort((a, b) => a[0] - b[0]).map(([, title]) => title).concat(name).join(' > ');
       const result = { testId, status: terminal[2] === 'ok' && !/\s+# (?:SKIP|TODO)/i.test(terminal[3]) ? 'passed' : 'not-passed', retry: 0, receipts: [] };
       terminals.set(indent, result);
       results.push(result);
       continue;
     }
-    const diagnostic = line.match(/^(\s*)# (\{.*\})$/);
+    const diagnostic = line.match(/^(\s*)# (\{.*)$/);
     if (diagnostic) {
       try {
-        const receipt = JSON.parse(diagnostic[2]);
+        const receipt = JSON.parse(decodeNodeTapText(diagnostic[2]));
         if (receipt.schema !== ASSERTION_SCHEMA) continue;
         const containing = terminals.get(diagnostic[1].length);
         if (!containing || containing.testId !== receipt.testId) errors.push('tap-receipt-test-mismatch');
@@ -170,8 +186,9 @@ export async function captureExistingBehaviorInvocation({ root = EXISTING_BEHAVI
   if (reportPath) { fs.mkdirSync(path.dirname(reportPath), { recursive: true }); fs.rmSync(reportPath, { force: true }); }
   const log = fs.createWriteStream(logPath);
   let launchError = null;
+  const runtimeProvenance = { schema: 'existing-behavior-runtime/v1', platform: process.platform, arch: process.arch, node: process.version, scope: 'local-process', executable: command[0] };
   const childEnv = { ...process.env, ...env, EXISTING_BEHAVIOR_INVOCATION_ID: invocationId,
-    EXISTING_BEHAVIOR_SOURCE_DIGEST: sourceBinding.digest,
+    EXISTING_BEHAVIOR_SOURCE_DIGEST: sourceBinding.digest, EXISTING_BEHAVIOR_RUNTIME_DIGEST: sha(JSON.stringify(runtimeProvenance)),
     ...(runner === 'playwright' ? { PLAYWRIGHT_JSON_OUTPUT_FILE: reportPath } : {}) };
   // A capture invoked inside node:test must launch a new runner, not inherit its worker protocol.
   delete childEnv.NODE_TEST_CONTEXT;
@@ -182,7 +199,9 @@ export async function captureExistingBehaviorInvocation({ root = EXISTING_BEHAVI
   await new Promise((resolve, reject) => { log.on('error', reject); log.end(resolve); });
   const retained = (file) => ({ path: path.resolve(file), sha256: sha(fs.readFileSync(file)) });
   const invocation = { schema: 'existing-behavior-invocation/v1', invocationId, runner, command, startedAt, finishedAt: new Date().toISOString(),
-    exitCode, signal, launchError, sourceBinding, log: retained(logPath), report: reportPath && fs.existsSync(reportPath) ? retained(reportPath) : null };
+    exitCode, signal, launchError, sourceBinding,
+    runtimeProvenance,
+    log: retained(logPath), report: reportPath && fs.existsSync(reportPath) ? retained(reportPath) : null };
   if (invocationPath) { fs.mkdirSync(path.dirname(invocationPath), { recursive: true }); fs.writeFileSync(invocationPath, JSON.stringify(invocation, null, 2) + '\n'); }
   return invocation;
 }
@@ -191,6 +210,9 @@ export function readExistingBehaviorInvocation(input, { root = EXISTING_BEHAVIOR
   const invocation = typeof input === 'string' ? JSON.parse(fs.readFileSync(input, 'utf8')) : input;
   const errors = [];
   if (invocation.schema !== 'existing-behavior-invocation/v1' || !invocation.invocationId || !validInvocationWindow(invocation)) errors.push('invalid-invocation');
+  const runtime = invocation.runtimeProvenance;
+  if (runtime?.schema !== 'existing-behavior-runtime/v1' || !runtime.platform || !runtime.arch || !/^v\d+\.\d+\.\d+/.test(runtime.node ?? '')
+    || runtime.scope !== 'local-process' || runtime.executable !== invocation.command?.[0]) errors.push('invalid-runtime-provenance');
   try { validateInvocationCommand(invocation.runner, invocation.command, invocation.report?.path); } catch { errors.push('invalid-invocation-command'); }
   if (invocation.exitCode !== 0 || invocation.signal || invocation.launchError) errors.push('invocation-not-passed');
   try {
@@ -211,6 +233,9 @@ export function readExistingBehaviorInvocation(input, { root = EXISTING_BEHAVIOR
   } else errors.push('invalid-runner-or-log');
   for (const result of adapted.results) for (const envelope of result.receipts) {
     if (!assertionInWindow(envelope, invocation)) errors.push('invalid-assertion-timestamp');
+    if (envelope.runtimeDigest !== sha(JSON.stringify(invocation.runtimeProvenance ?? null))
+      || ['platform', 'arch', 'node'].some((key) => envelope.runtimeObserved?.[key] !== invocation.runtimeProvenance?.[key])
+      || (envelope.channel === 'delivery' && envelope.receipt?.runtime_provenance && ['platform', 'node'].some((key) => envelope.receipt.runtime_provenance[key] !== envelope.runtimeObserved?.[key]))) errors.push('assertion-runtime-mismatch');
   }
   return { ...invocation, results: adapted.results, errors: [...errors, ...adapted.errors] };
 }
@@ -231,7 +256,8 @@ function assertionInWindow(envelope, invocation) {
     && time >= canonicalTimestamp(invocation.startedAt) && time <= canonicalTimestamp(invocation.finishedAt);
 }
 
-export function reconcileExistingBehaviorCoverage(manifest, invocations, { reconcilePortal, accountDelivery } = {}) {
+export function reconcileExistingBehaviorCoverage(manifest, invocations, { reconcilePortal, accountDelivery, scope = 'full-product' } = {}) {
+  if (!['full-product', 'delivery-only'].includes(scope)) throw new Error(`Unknown reconciliation scope: ${scope}`);
   const accepted = { portal: [], delivery: [] };
   const portalResults = [];
   const errors = [];
@@ -246,14 +272,18 @@ export function reconcileExistingBehaviorCoverage(manifest, invocations, { recon
       const valid = result.status === 'passed' && result.retry === 0 && envelope.schema === ASSERTION_SCHEMA && envelope.retry === 0
         && envelope.testId === result.testId && envelope.invocationId === invocation.invocationId
         && envelope.sourceDigest === manifest.sourceBinding.digest && observationsValid(envelope.observations)
+        && (!invocation.runtimeProvenance || (envelope.runtimeDigest === sha(JSON.stringify(invocation.runtimeProvenance))
+          && ['platform', 'arch', 'node'].every((key) => envelope.runtimeObserved?.[key] === invocation.runtimeProvenance[key])))
+        && (envelope.channel !== 'delivery' || !envelope.receipt?.runtime_provenance || ['platform', 'node'].every((key) => envelope.receipt.runtime_provenance[key] === envelope.runtimeObserved?.[key]))
         && assertionInWindow(envelope, invocation) && !!envelope.receipt && ['portal', 'delivery'].includes(envelope.channel);
       if (!valid) { errors.push('invalid-assertion-receipt'); continue; }
       accepted[envelope.channel].push(envelope.receipt);
       if (envelope.channel === 'portal') portalResults.push({ testId: result.testId, status: result.status, retry: result.retry, receipts: [envelope.receipt] });
     }
   }
-  const portal = manifest.portal && reconcilePortal ? reconcilePortal(manifest.portal, portalResults) : { complete: false, reason: 'missing-portal-inventory-or-adapter' };
+  const portal = scope === 'delivery-only' ? { required: false, complete: null, reason: 'outside-delivery-only-scope' }
+    : manifest.portal && reconcilePortal ? reconcilePortal(manifest.portal, portalResults) : { complete: false, reason: 'missing-portal-inventory-or-adapter' };
   const delivery = manifest.delivery && accountDelivery ? accountDelivery(accepted.delivery, manifest.delivery) : { complete: false, reason: 'missing-delivery-inventory-or-adapter' };
-  return { schema: 'existing-behavior-report/v1', complete: !errors.length && portal.complete && delivery.complete,
+  return { schema: 'existing-behavior-report/v1', scope, complete: !errors.length && (scope === 'delivery-only' || portal.complete) && delivery.complete,
     sourceDigest: manifest.sourceBinding?.digest, invocationCount: invocations.length, accepted, errors, portal, delivery };
 }

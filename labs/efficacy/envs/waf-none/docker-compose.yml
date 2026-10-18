@@ -1,0 +1,27 @@
+services:
+  target:
+    image: nginx:1.27-alpine
+    container_name: anl-waf-none-target
+    restart: unless-stopped
+    cpus: 1.0
+    mem_limit: 768m
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    networks:
+      anl-waf-none-net:
+        ipv4_address: 172.31.26.10
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1/ | grep -q origin-ok || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 2s
+
+networks:
+  anl-waf-none-net:
+    name: anl-waf-none-net
+    internal: true
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.31.26.0/24

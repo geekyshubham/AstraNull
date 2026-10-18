@@ -1,0 +1,64 @@
+{
+  "schema": "astranull.efficacy-lab.v1",
+  "lab_id": "nfw-ipv6-gap",
+  "networks": [
+    "anl-nfw-ipv6-gap-net"
+  ],
+  "targets": [
+    {
+      "name": "nfw-ipv6-gap-target",
+      "address": "172.31.33.10",
+      "addresses": [
+        "172.31.33.10",
+        "fd00:a57a:33::10"
+      ],
+      "hostname": "parity.lab.efficacy.invalid",
+      "ports": [
+        {
+          "port": 80,
+          "protocol": "tcp",
+          "service": "http"
+        },
+        {
+          "port": 8080,
+          "protocol": "tcp",
+          "service": "http"
+        }
+      ],
+      "planted_condition": "Dual-stack listener on TCP 8080 with IPv4 policy dropping TCP 8080, while IPv6 has no drop rule and accepts connections",
+      "declarations": {
+        "network_policy": [
+          {
+            "protocol": "tcp",
+            "port": 8080,
+            "action": "deny",
+            "address_family": "ipv4"
+          },
+          {
+            "protocol": "tcp",
+            "port": 8080,
+            "action": "deny",
+            "address_family": "ipv6"
+          }
+        ]
+      },
+      "expectations": [
+        {
+          "check": "nfw.ipv6_parity.safe",
+          "expected": "gap",
+          "why": "Dual-family probe samples both IPv4 and IPv6 on port 8080 against declared deny; IPv4 is dropped, but IPv6 accepts handshake, producing a family parity mismatch and violating the declared deny on IPv6"
+        },
+        {
+          "check": "l3.ipv6_reachability.safe",
+          "expected": "gap",
+          "why": "Declared IPv6 target on port 8080 accepts a TCP connect from the probe worker, violating the declared deny policy that restricts the IPv4 path"
+        }
+      ]
+    }
+  ],
+  "verification": [
+    "curl from a container on anl-nfw-ipv6-gap-net to 172.31.33.10:8080 times out due to IPv4 iptables DROP rule",
+    "curl from a container on anl-nfw-ipv6-gap-net to [fd00:a57a:33::10]:8080 connects and returns HTTP 200 app-ok",
+    "curl from a container on anl-nfw-ipv6-gap-net to 172.31.33.10:80 and [fd00:a57a:33::10]:80 returns HTTP 200 healthy"
+  ]
+}

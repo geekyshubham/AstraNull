@@ -119,7 +119,7 @@ function remediationOwnerForFinding(findingId, tenantId) {
 function runProvenance(run, tenantId) {
   const store = getStore();
   const event = (store.events ?? [])
-    .filter((row) => ownedByTenant(row, tenantId) && row.test_run_id === run.id)
+    .filter((row) => ownedByTenant(row, tenantId) && row.test_run_id === run.id && row.signal_type === 'probe_result')
     .sort((a, b) => String(b.timestamp ?? '').localeCompare(String(a.timestamp ?? '')))[0];
   const evidence = (store.evidenceVault ?? [])
     .filter((row) => ownedByTenant(row, tenantId) && row.test_run_id === run.id)
@@ -308,13 +308,10 @@ export function getTargetDetail(ctx, targetId, query = {}) {
   const edgeRow = getTargetEdgeDetection(ctx.tenantId, target.id);
   const policies = (getStore().testPolicies ?? []).filter((policy) => policy.tenant_id === ctx.tenantId);
   const assessmentAt = new Date();
-  const runById = new Map(runs.map((run) => [run.id, run]));
+  // One strict resolver owns citation validity; retain the publication separately
+  // so unresolved citations remain distinguishable from absent evidence below.
   const proofs = verifiedVerdicts({ tenantId: ctx.tenantId, runs,
-    verdicts: (getStore().verdicts ?? []),
-    events: (getStore().events ?? []).filter((event) => {
-      const nonce = runById.get(event.test_run_id)?.correlation?.nonce_hash;
-      return Boolean(nonce) && event.nonce_hash === nonce && Number.isFinite(Date.parse(event.ingested_at ?? ''));
-    }),
+    verdicts: getStore().verdicts ?? [], events: getStore().events ?? [],
     evidenceItems: getStore().evidenceVault ?? [], nowMs: assessmentAt.getTime() });
   const derived = deriveProtectionProfile({
     now: assessmentAt,
@@ -336,8 +333,12 @@ export function getTargetDetail(ctx, targetId, query = {}) {
   const attached = attachHistoryReadModel(derived, historyReadModel({
     observations: (getStore().targetObservations ?? []).filter((row) => row.tenant_id === ctx.tenantId && row.target_id === target.id),
     bindings: (getStore().originBindings ?? []).filter((row) => row.tenant_id === ctx.tenantId
-      && row.status === 'active'
       && (row.origin_target_id === target.id || row.protected_target_id === target.id)),
+    bindingObservations: (getStore().targetObservations ?? []).filter((row) => row.tenant_id === ctx.tenantId
+      && (getStore().originBindings ?? []).some((binding) => binding.tenant_id === ctx.tenantId
+        && binding.id === row.origin_binding_id && (binding.origin_target_id === target.id || binding.protected_target_id === target.id))),
+    runs: (getStore().testRuns ?? []).filter((row) => row.tenant_id === ctx.tenantId),
+    records: historyRecords,
     proofFor: (id) => currentOriginProof(historyRecords, ctx.tenantId, id),
     targetId: target.id,
   }));

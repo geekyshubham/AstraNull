@@ -5,6 +5,7 @@ import { mkdtemp, readFile, writeFile, mkdir, rm } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
+import { spawnSync } from 'node:child_process';
 import {
   bindExistingBehaviorSources, existingBehaviorSourceFiles, recordExistingBehaviorReceipt, captureExistingBehaviorInvocation,
   readExistingBehaviorInvocation, adaptNodeTapResults, adaptPlaywrightJsonResults,
@@ -106,6 +107,38 @@ test('actual Node TAP invocation pairs assertion events with terminal pass and r
   assert.equal(aggregate.complete, false, 'missing inventories cannot be accepted as full coverage');
   await writeFile(path.join(root, 'src/production.mjs'), 'export const bound = 2;\n');
   assert.ok(readExistingBehaviorInvocation(captured, { root, files }).errors.includes('stale-source'));
+});
+
+test('actual native TAP quoting preserves exact receipt bytes, hash fragments and escaped test identities', async (t) => {
+  const root = await fixture(t);
+  const parent = 'owned # parent \\ trace';
+  const child = 'quoted # child \\ trace \\n literal';
+  const metadata = { alt_svc: 'h3=":443"; ma=60', request: 'GET /owned#fragment HTTP/1.1\r\n',
+    windows_path: 'C:\\owned\\probe\\file', literal_escapes: '\\n\\r\\t\\b\\f\\v\\#', quoted: 'a"b\\c', unicode: '\u2603' };
+  const observations = ['actual response header h3=":443" and # fragment were checked', 'actual CRLF\r\n and literal \\n remain distinct'];
+  await writeFile(path.join(root, 'case.test.mjs'), `import {describe,it} from 'node:test';\nimport {recordExistingBehaviorReceipt} from './adapter.mjs';\ndescribe(${JSON.stringify(parent)},()=>it(${JSON.stringify(child)},async(t)=>{await recordExistingBehaviorReceipt(t,{channel:'delivery',receipt:{check_id:'check_escaped',metadata:${JSON.stringify(metadata)}}},${JSON.stringify(observations)});}));\n`);
+  const files = ['adapter.mjs', 'case.test.mjs', 'src/production.mjs'];
+  const captured = await captureExistingBehaviorInvocation({ root, runner: 'node', command: [process.execPath, '--test', '--test-reporter=tap', 'case.test.mjs'], files, logPath: path.join(root, 'native-quoted.tap') });
+  assert.equal(captured.exitCode, 0);
+  const adapted = readExistingBehaviorInvocation(captured, { root, files });
+  assert.deepEqual(adapted.errors, []);
+  assert.equal(adapted.results.length, 1);
+  assert.equal(adapted.results[0].testId, `${parent} > ${child}`);
+  assert.deepEqual(adapted.results[0].receipts[0].receipt.metadata, metadata);
+  assert.deepEqual(adapted.results[0].receipts[0].observations, observations);
+  const retained = await readFile(captured.log.path, 'utf8');
+  assert.ok(retained.includes('\\#'), 'native TAP escapes hash characters independently of JSON');
+  assert.ok(retained.includes('\\\\'), 'native TAP escapes JSON backslashes independently of JSON');
+  for (const mutate of [
+    (line) => line.replace('\\\\', '\\q'),
+    (line) => line.slice(0, -1),
+    (line) => line.replace('"metadata":', '"metadata" '),
+  ]) {
+    const malformed = retained.split('\n').map((line) => line.includes('existing-behavior-assertion/v1') ? mutate(line) : line).join('\n');
+    assert.ok(adaptNodeTapResults(malformed).errors.includes('malformed-tap-receipt'), 'malformed escape/truncated/invalid JSON is rejected, never skipped or repaired');
+  }
+  const wrongIdentity = retained.replace(/^(\s*ok \d+ - .*?)quoted/m, '$1different');
+  assert.ok(adaptNodeTapResults(wrongIdentity).errors.includes('tap-receipt-test-mismatch'), 'escaped identities do not permit an unrelated terminal name');
 });
 
 test('failed, skipped and TODO Node tests do not establish pass receipts; incomplete TAP is not accepted', async (t) => {
@@ -230,7 +263,73 @@ test('focused CLI reporting rejects nested public-auth invalid proofs without tr
 
 test('CLI rejects duplicate singleton options rather than replacing their values', async () => {
   const { main } = await import('../../scripts/validate-existing-behavior-coverage.mjs');
-  for (const args of [['--capture', 'node', '--capture', 'playwright'], ['--out', '/tmp/one', '--out', '/tmp/two'], ['--report', '/tmp/one', '--report', '/tmp/two'], ['--focused', '--focused']]) {
+  for (const args of [['--capture', 'node', '--capture', 'playwright'], ['--out', '/tmp/one', '--out', '/tmp/two'], ['--report', '/tmp/one', '--report', '/tmp/two'], ['--focused', '--focused'], ['--delivery-only', '--delivery-only']]) {
     await assert.rejects(main(args), /Duplicate option/);
   }
+  await assert.rejects(main(['--focused', '--delivery-only']), /mutually exclusive/);
+});
+
+test('source hashing includes fault-lab executable, firewall and container configuration changes', async (t) => {
+  const root = await fixture(t);
+  const names = ['tests/fixtures/fault-lab.json', 'tests/fixtures/fault-peer.py', 'scripts/lab.sh', 'ops/fault-lab/Dockerfile',
+    'ops/fault-lab/Containerfile', 'ops/fault-lab/rules.nft', 'ops/fault-lab/iptables.rules', 'ops/fault-lab/lab.conf'];
+  for (const file of names) { await mkdir(path.dirname(path.join(root, file)), { recursive: true }); await writeFile(path.join(root, file), '# actual source dependency\n'); }
+  const files = existingBehaviorSourceFiles(root);
+  for (const file of names) {
+    assert.ok(files.includes(file), file);
+    const before = bindExistingBehaviorSources({ root }).digest;
+    await writeFile(path.join(root, file), '# changed source dependency\n');
+    assert.notEqual(before, bindExistingBehaviorSources({ root }).digest, file);
+  }
+});
+
+test('runtime provenance is retained from a real process and missing or altered executable provenance fails closed', async (t) => {
+  const root = await fixture(t);
+  await writeFile(path.join(root, 'case.test.mjs'), `import {it} from 'node:test';import {assertExistingBehaviorCase} from './adapter.mjs';it('actual case',async(t)=>{await assertExistingBehaviorCase(t,{channel:'delivery',receipt:{check_id:'check_1'}},async()=>['completed actual assertion']);});\n`);
+  const files = ['src/production.mjs', 'adapter.mjs', 'case.test.mjs'];
+  const invocation = await captureExistingBehaviorInvocation({ root, runner: 'node', command: [process.execPath, '--test', '--test-reporter=tap', 'case.test.mjs'], files, logPath: path.join(root, 'actual.tap') });
+  assert.equal(readExistingBehaviorInvocation(invocation, { root, files }).errors.length, 0);
+  assert.equal(invocation.runtimeProvenance.platform, process.platform);
+  assert.equal(invocation.runtimeProvenance.node, process.version);
+  for (const runtimeProvenance of [null, {}, { ...invocation.runtimeProvenance, executable: 'invented' }, { ...invocation.runtimeProvenance, scope: 'public' }]) {
+    assert.ok(readExistingBehaviorInvocation({ ...invocation, runtimeProvenance }, { root, files }).errors.includes('invalid-runtime-provenance'));
+  }
+  const changedRuntime = readExistingBehaviorInvocation({ ...invocation, runtimeProvenance: { ...invocation.runtimeProvenance, arch: 'invented' } }, { root, files });
+  assert.ok(changedRuntime.errors.includes('assertion-runtime-mismatch'), 'runtime provenance is bound to the emitted actual assertion, not an editable report annotation');
+});
+
+test('delivery-only reconciliation can complete its own scope without accepting full-product coverage or invalid invocations', () => {
+  const manifest = { sourceBinding: { digest: 'current' }, delivery: { rows: [] } };
+  const accountDelivery = () => ({ complete: true, gaps: [], branch_gaps: [], errors: [] });
+  const scoped = reconcileExistingBehaviorCoverage(manifest, [], { accountDelivery, scope: 'delivery-only' });
+  assert.equal(scoped.complete, true);
+  assert.equal(scoped.scope, 'delivery-only');
+  assert.equal(scoped.portal.required, false);
+  assert.equal(scoped.portal.complete, null, 'portal is not falsely certified');
+  assert.equal(reconcileExistingBehaviorCoverage(manifest, [], { accountDelivery }).complete, false, 'full-product still requires portal inventory and execution');
+  assert.equal(reconcileExistingBehaviorCoverage(manifest, [{ invocationId: 'bad', exitCode: 1, errors: ['invalid-custody'] }], { accountDelivery, scope: 'delivery-only' }).complete, false);
+  assert.throws(() => reconcileExistingBehaviorCoverage(manifest, [], { accountDelivery, scope: 'definitions-only' }), /Unknown reconciliation scope/);
+});
+
+test('delivery-only CLI is complete-scope accounting, not focused success on empty evidence', async (t) => {
+  const root = await fixture(t);
+  const script = fileURLToPath(new URL('../../scripts/validate-existing-behavior-coverage.mjs', import.meta.url));
+  const target = path.join(root, 'delivery-report.json');
+  const childEnv = { ...process.env }; delete childEnv.NODE_TEST_CONTEXT;
+  const result = spawnSync(process.execPath, [script, '--delivery-only', '--report', target], { encoding: 'utf8', env: childEnv });
+  assert.equal(result.status, 1, result.stderr);
+  const scoped = JSON.parse(await readFile(target, 'utf8'));
+  assert.equal(scoped.mode, 'delivery-only-reconciliation');
+  assert.equal(scoped.scope, 'delivery-only');
+  assert.equal(scoped.acceptance, 'incomplete');
+  assert.equal(scoped.delivery.gaps.length, 275);
+  assert.equal(scoped.delivery.branch_gaps.length, 524);
+  assert.equal(scoped.portal.required, false);
+  assert.deepEqual(scoped.errors, []);
+  const focused = spawnSync(process.execPath, [script, '--focused'], { encoding: 'utf8', env: childEnv });
+  assert.equal(focused.status, 0, focused.stderr);
+  const partial = JSON.parse(focused.stdout);
+  assert.equal(partial.mode, 'focused-partial');
+  assert.equal(partial.complete, false);
+  assert.equal(partial.acceptance, 'not-a-full-acceptance-report');
 });

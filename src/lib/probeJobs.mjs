@@ -9,6 +9,7 @@ import {
   WAF_SAFE_PROBE_METADATA_KEYS,
 } from '../contracts/checks.mjs';
 import { isExplicitDemoTenant } from './demoAutoVerify.mjs';
+import { signedOriginIdentityPair } from './originIdentityPair.mjs';
 import {
   API_DOC_PATHS,
   RISKY_ADMIN_PORTS,
@@ -276,6 +277,7 @@ function targetLogicalHost(target) {
  */
 export function initialDestinationResolverAttemptsForJob(probeProfile, target) {
   if (probeProfile?.kind === 'metadata_marker') return 0;
+  if (probeProfile?.kind === 'origin_identity_pair') return RESOLVER_ATTEMPTS_PER_HOSTNAME;
   const host = targetLogicalHost(target);
   if (!host || isIP(host) !== 0) return 0;
   // DNS wire and DNSSEC posture discover the authoritative nameserver first, then classify
@@ -336,6 +338,7 @@ export function originLockdownProvenance(resolved) {
     sni: resolved.sni,
     port: resolved.port,
     path: resolved.path,
+    ...(resolved.authority ? { authority: structuredClone(resolved.authority) } : {}),
   };
 }
 
@@ -377,7 +380,7 @@ export function validateHostSniTargetBinding(check, target, { originLockdown = n
     if (isDemo) return null;
     return extra;
   }
-  if (check?.probe_profile?.kind !== 'host_sni_bypass' || targetLiteralIpAddress(target)) {
+  if (!['host_sni_bypass', 'origin_identity_pair'].includes(check?.probe_profile?.kind) || targetLiteralIpAddress(target)) {
     return null;
   }
   if (isDemo) return null;
@@ -407,7 +410,7 @@ function isExactTargetHost(value, targetHost) {
  * @returns {{ host: string, sni: string, port: number | null, path: string | null } | null}
  */
 export function runBoundOriginScope(run, check) {
-  if (check?.probe_profile?.kind !== 'host_sni_bypass') return null;
+  if (!['host_sni_bypass', 'origin_identity_pair'].includes(check?.probe_profile?.kind)) return null;
   const bindingId = typeof run?.origin_binding_id === 'string' ? run.origin_binding_id.trim() : '';
   if (!bindingId) return null;
   return validatedOriginScopeSnapshot(run?.provenance_json?.origin_scope);
@@ -779,7 +782,7 @@ export function buildSignedProbeJobRecord({
   );
   const issuedAt = run.created_at == null ? now.getTime() : Date.parse(run.created_at);
   if (!Number.isFinite(issuedAt)) throw new Error('probe_authority_invalid');
-  const deadlines = [issuedAt + MAX_PROBE_AUTHORITY_MS, Date.parse(run.collection_deadline_at),
+  const deadlines = [issuedAt + (check.probe_profile?.kind === 'origin_identity_pair' ? 60_000 : MAX_PROBE_AUTHORITY_MS), Date.parse(run.collection_deadline_at),
     Date.parse(run.safety_constraints?.safe_window_not_after)].filter(Number.isFinite);
   const constraints = {
     ...baseConstraints,
@@ -791,6 +794,10 @@ export function buildSignedProbeJobRecord({
       ? { ownership_binding: structuredClone(ownershipBinding) }
       : {}),
     ...(signedOriginScope ? { origin_scope: { ...signedOriginScope } } : {}),
+    ...((run.provenance_json?.origin_authority ?? run.provenance_json?.origin_lockdown?.authority)
+      ? { origin_authority: structuredClone(run.provenance_json.origin_authority ?? run.provenance_json.origin_lockdown.authority) } : {}),
+    ...(check.probe_profile?.kind === 'origin_identity_pair'
+      ? { origin_identity_pair: structuredClone(run.provenance_json?.origin_identity_pair ?? null) } : {}),
     ...(requiredPerspectiveId ? { required_perspective_id: requiredPerspectiveId } : {}),
   };
   const job = {
@@ -815,6 +822,9 @@ export function buildSignedProbeJobRecord({
     leased_by: null,
     completed_at: null,
   };
+  if (check.probe_profile?.kind === 'origin_identity_pair' && !signedOriginIdentityPair(job)) {
+    throw Object.assign(new Error('origin_identity_review_required'), { code: 'origin_identity_review_required' });
+  }
   job.job_signature = signProbeJob(job, probeWorkerSecret);
   return job;
 }

@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { computeReadiness, evidenceBackedVerdictForRun, RECENT_EVIDENCE_WINDOW_DAYS } from '../../src/services/readiness.mjs';
 import { coverageFrom, summarizePairs } from '../../src/lib/protectionCoverage.mjs';
-import { projectReadiness } from '../../src/lib/readinessProjection.mjs';
+import { projectReadiness, verifiedVerdicts } from '../../src/lib/readinessProjection.mjs';
+import { getTargetDetail } from '../../src/services/targetDetail.mjs';
+import { maybeFinalizeRunAfterProbeIngest } from '../../src/services/testRuns.mjs';
 import { CHECK_CATALOG, getCheckById } from '../../src/contracts/checks.mjs';
 import { getStore, resetStoreForTests } from '../../src/store.mjs';
 import { assuranceWorld, addAssuredObservation, ASSURANCE_NOW } from '../helpers/assurance-fixtures.mjs';
@@ -127,6 +129,128 @@ describe('versioned conservative readiness', () => {
       assert.equal(projectReadiness(world).score, 0, mutation);
     }
   });
+  it('retains missing versus invalid citation reasons identically in readiness and target detail without custody edits', () => {
+    for (const mutation of ['absent', 'empty', 'malformed', 'blank_id', 'unresolved', 'mixed_activity', 'wrong_nonce', 'foreign', 'other_run', 'untrusted', 'missing_ingestion', 'future_ingestion', 'unlinked_vault']) {
+      const world = assuranceWorld();
+      world.asOf = new Date().toISOString();
+      const { run, event, verdict } = addAssuredObservation(world, { observedAt: world.asOf });
+      if (mutation === 'absent') delete verdict.evidence_ids;
+      if (mutation === 'empty') verdict.evidence_ids = [];
+      if (mutation === 'malformed') verdict.evidence_ids = event.id;
+      if (mutation === 'blank_id') verdict.evidence_ids = [''];
+      if (mutation === 'unresolved') verdict.evidence_ids = ['missing'];
+      if (mutation === 'mixed_activity') {
+        world.events.push({ ...structuredClone(event), id: 'activity', signal_type: 'probe_activity' });
+        verdict.evidence_ids.push('activity');
+      }
+      if (mutation === 'wrong_nonce') event.nonce_hash = 'wrong';
+      if (mutation === 'foreign') event.tenant_id = 'foreign';
+      if (mutation === 'other_run') event.test_run_id = 'other_run';
+      if (mutation === 'untrusted') event.producer_kind = 'public_api';
+      if (mutation === 'missing_ingestion') delete event.ingested_at;
+      if (mutation === 'future_ingestion') event.ingested_at = new Date(Date.now() + 86400000).toISOString();
+      if (mutation === 'unlinked_vault') {
+        world.evidenceItems.push({ id: 'vault', tenant_id: world.tenantId, test_run_id: run.id, created_at: world.asOf });
+        verdict.evidence_ids = ['vault'];
+      }
+      const before = JSON.stringify([world.runs, world.events, world.verdicts]);
+      assert.equal(verifiedVerdicts({ ...world, nowMs: Date.parse(world.asOf) }).size, 0, mutation);
+      const readiness = dev(world);
+      const pair = getTargetDetail({ tenantId: world.tenantId, role: 'engineer' }, run.target_id).coverage.pairs.find((row) => row.check_id === run.check_id);
+      assert.equal(readiness.score, 0, mutation);
+      assert.equal(readiness.coverage.unknown_count, 1, mutation);
+      assert.equal(pair.pair_reason, ['absent', 'empty'].includes(mutation) ? 'no_evidence' : 'invalid_or_unresolved_evidence', mutation);
+      assert.equal(pair.retained.verdict, verdict.verdict, mutation);
+      assert.equal(pair.live_external, false, mutation);
+      assert.equal(JSON.stringify([world.runs, world.events, world.verdicts]), before, mutation);
+    }
+  });
+  it('does not fall back to an older valid publication when a newer publication has invalid citations', () => {
+    const world = assuranceWorld(); const { verdict } = addAssuredObservation(world);
+    world.verdicts.push({ ...verdict, id: 'newer', created_at: world.asOf, evidence_ids: ['missing'] });
+    const before = structuredClone(world);
+    assert.equal(verifiedVerdicts({ ...world, nowMs: Date.parse(world.asOf) }).size, 0);
+    assert.equal(projectReadiness(world).coverage.unknown_count, 1);
+    assert.equal(projectReadiness(world).score, 0);
+    assert.deepEqual(world, before);
+  });
+  it('publishes only the signed result actually evaluated, excluding activity and contradictory run cache', () => {
+    const world = assuranceWorld(); world.asOf = new Date().toISOString();
+    const { run, event } = addAssuredObservation(world, { observedAt: world.asOf, outcome: 'inconclusive' });
+    world.verdicts = [];
+    run.status = 'collecting'; run.completed_at = null;
+    run.collection_deadline_at = '2000-01-01T00:00:00.000Z';
+    run.probe_external_result = 'blocked';
+    event.metadata.external_result = 'timeout';
+    world.events.unshift({ ...structuredClone(event), id: 'activity_before', signal_type: 'probe_activity' });
+    world.events.push({ ...structuredClone(event), id: 'activity_after', signal_type: 'probe_activity' });
+    dev(world);
+    const beforeEvents = structuredClone(getStore().events);
+    const published = maybeFinalizeRunAfterProbeIngest({ tenantId: world.tenantId, role: 'system' }, run.id);
+    assert.equal(published.verdict, 'inconclusive');
+    assert.deepEqual(published.evidence_ids, [event.id]);
+    assert.equal(verifiedVerdicts({ tenantId: world.tenantId, runs: getStore().testRuns,
+      verdicts: getStore().verdicts, events: getStore().events }).size, 1);
+    assert.equal(computeReadiness(world.tenantId).score, 0);
+    assert.deepEqual(getStore().events, beforeEvents);
+    const custody = structuredClone(getStore().verdicts);
+    maybeFinalizeRunAfterProbeIngest({ tenantId: world.tenantId, role: 'system' }, run.id);
+    assert.deepEqual(getStore().verdicts, custody);
+  });
+  it('keeps a complete signed positive publish eligible alongside uncited activity, but never upgrades a result-free cache', () => {
+    for (const hasResult of [true, false]) {
+      const world = assuranceWorld(); world.asOf = new Date().toISOString();
+      const { run, event } = addAssuredObservation(world, { observedAt: world.asOf });
+      world.verdicts = []; run.status = 'collecting'; run.completed_at = null;
+      run.collection_deadline_at = '2000-01-01T00:00:00.000Z'; run.probe_external_result = 'blocked';
+      event.metadata.external_result = 'blocked';
+      event.metadata.safety_attestation = { probe_requests_sent: 4, destination_resolver_attempts: 2, total_operations: 6, requests_sent: 6, duration_ms: 10 };
+      world.events = [{ ...structuredClone(event), id: 'activity', signal_type: 'probe_activity' }, ...(hasResult ? [event] : [])];
+      dev(world);
+      const verdict = maybeFinalizeRunAfterProbeIngest({ tenantId: world.tenantId, role: 'system' }, run.id);
+      assert.deepEqual(verdict.evidence_ids, hasResult ? [event.id] : []);
+      assert.equal(hasResult ? ['protected', 'edge_protected'].includes(verdict.verdict) : verdict.verdict === 'inconclusive', true);
+      const pair = getTargetDetail({ tenantId: world.tenantId, role: 'engineer' }, run.target_id).coverage.pairs.find((row) => row.check_id === run.check_id);
+      assert.equal(pair.live_external, hasResult);
+      assert.equal(pair.retained.verdict, verdict.verdict);
+      if (!hasResult) assert.equal(pair.pair_reason, 'no_evidence');
+    }
+  });
+  it('never publishes a protected result from missing, empty, mismatched nonce or foreign-tenant evidence', () => {
+    for (const mismatch of ['missing_nonce', 'empty_nonce', 'wrong_nonce', 'foreign_tenant']) {
+      const world = assuranceWorld(); world.asOf = new Date().toISOString();
+      const { run, event } = addAssuredObservation(world, { observedAt: world.asOf });
+      world.verdicts = []; run.status = 'collecting'; run.completed_at = null;
+      run.collection_deadline_at = '2000-01-01T00:00:00.000Z'; run.probe_external_result = 'blocked';
+      event.metadata.external_result = 'blocked';
+      event.metadata.safety_attestation = { probe_requests_sent: 4 };
+      if (mismatch === 'missing_nonce') { delete run.correlation; delete event.nonce_hash; }
+      if (mismatch === 'empty_nonce') { run.correlation.nonce_hash = ''; event.nonce_hash = ''; }
+      if (mismatch === 'wrong_nonce') event.nonce_hash = 'different_run';
+      if (mismatch === 'foreign_tenant') event.tenant_id = 'ten_foreign';
+      dev(world);
+      const beforeEvents = structuredClone(getStore().events);
+      const verdict = maybeFinalizeRunAfterProbeIngest({ tenantId: world.tenantId, role: 'system' }, run.id);
+      assert.equal(verdict.verdict, 'inconclusive', mismatch);
+      assert.deepEqual(verdict.evidence_ids, [], mismatch);
+      assert.equal(computeReadiness(world.tenantId).score, 0, mismatch);
+      assert.deepEqual(getStore().events, beforeEvents, mismatch);
+    }
+  });
+  it('simulation and manual provenance remain retained without live readiness credit', () => {
+    for (const producer of ['internal_simulation', 'manual_declaration', 'customer_declaration']) {
+      const world = assuranceWorld(); world.asOf = new Date().toISOString();
+      const { run, event } = addAssuredObservation(world, { observedAt: world.asOf });
+      run.producer_kind = producer;
+      event.producer_kind = producer;
+      dev(world);
+      const pair = getTargetDetail({ tenantId: world.tenantId, role: 'engineer' }, run.target_id).coverage.pairs.find((row) => row.check_id === run.check_id);
+      assert.equal(pair.retained.verdict, 'protected');
+      assert.equal(pair.pair_reason, producer === 'internal_simulation' ? producer : 'manual_declaration');
+      assert.equal(pair.live_external, false);
+      assert.equal(computeReadiness(world.tenantId).score, 0);
+    }
+  });
   it('accepts an actual linked same-run vault record without changing observation age', () => {
     const world = assuranceWorld(); const { run, event, verdict } = addAssuredObservation(world);
     world.evidenceItems.push({ id: 'vault', related_event_id: event.id, test_run_id: run.id, tenant_id: world.tenantId, created_at: world.asOf }); verdict.evidence_ids = ['vault'];
@@ -157,9 +281,31 @@ describe('versioned conservative readiness', () => {
     assert.equal(projectReadiness(world).score, 0); assert.equal(projectReadiness(world).coverage.unknown_count, 1);
   });
   it('quarantines incomplete, observation-only, unhealthy and missing planned marker evidence', () => {
-    const mutations = [{ observation_only: true }, { readiness_conclusion: false }, { comparison_complete: false }, { completed_marker_legs: 1 }, { planned_marker_legs: 0 }, { permitted_baseline_health: 'unhealthy' }, { classifier_version: 'old' }];
+    const mutations = [{ observation_only: true }, { readiness_conclusion: false }, { comparison_complete: false },
+      { completed_marker_legs: 1 }, { attempted_marker_legs: 1 }, { planned_marker_legs: 0 }, { graded_marker_legs: 0 },
+      { ungraded_marker_legs: 1 }, { missing_marker_legs: 1 }, { permitted_baseline_health: 'unhealthy' },
+      { trailing_control: { outcome: 'blocked' } }, { source_penalized: true }, { classifier_version: 'marker-comparison-v4' }];
     for (const mutation of mutations) { const world = assuranceWorld(); const { event } = addAssuredObservation(world); Object.assign(event.metadata, mutation); assert.equal(projectReadiness(world).score, 0, JSON.stringify(mutation)); }
     const world = assuranceWorld(); const { event } = addAssuredObservation(world); event.metadata = {}; assert.equal(projectReadiness(world).score, 0);
+  });
+  it('requires complete performed v5 proof on every cited result, never mutable summaries or aborted required legs', () => {
+    const world = assuranceWorld(); const { run, event, verdict } = addAssuredObservation(world);
+    run.probe_metadata = structuredClone(event.metadata);
+    run.summary_json = { ...structuredClone(event.metadata) };
+    const original = structuredClone(event.metadata);
+    event.metadata = { enforcement: 'enforced' };
+    assert.equal(projectReadiness(world).score, 0);
+    event.metadata = original;
+    const incomplete = { ...structuredClone(event), id: 'uncompleted_leg', metadata: { enforcement: 'enforced' } };
+    world.events.push(incomplete); verdict.evidence_ids.push(incomplete.id);
+    assert.equal(projectReadiness(world).score, 0);
+    world.events.pop(); verdict.evidence_ids.pop();
+    // A delivered but ungraded leg remains part of the complete selected plan,
+    // not an invented blocked leg or transport failure.
+    event.metadata.graded_marker_legs = 1; event.metadata.ungraded_marker_legs = 1;
+    assert.equal(projectReadiness(world).score, 100);
+    event.metadata.completed_marker_legs = 1;
+    assert.equal(projectReadiness(world).score, 0);
   });
   it('excludes catalog E1/E2 and reports setup-required independently', () => {
     const world = assuranceWorld(); world.targets[0].kind = 'fqdn'; world.targets[0].value = 'app.example.test'; world.catalog.push(getCheckById('dns.authoritative_response.safe'), getCheckById('ops.runbook_contact_validation.safe'), getCheckById('origin.host_sni_bypass.safe'), { ...structuredClone(world.catalog[0]), check_id: 'waf.fixture_setup.safe', required_customer_setup: ['declared_fixture_probe_path'] });

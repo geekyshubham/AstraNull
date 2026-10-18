@@ -115,6 +115,10 @@ describe('current-release backend history HTTP API', () => {
       },
     );
     store.targetVerifications = [{
+      id: 'tv_hist_api_protected', tenant_id: TENANT, target_id: PROTECTED,
+      state: 'dns_verified', source_kind: 'dns_txt', source_ref: {},
+      transitioned_at: DECLARED, transitioned_by: 'usr_admin',
+    }, {
       id: 'tv_hist_api_origin',
       tenant_id: TENANT,
       target_id: ORIGIN,
@@ -536,8 +540,9 @@ describe('current-release backend history HTTP API', () => {
         await client.query(
           `INSERT INTO target_verifications (
              id, tenant_id, target_id, state, source_kind, source_ref, transitioned_at, transitioned_by, audit_entry_id
-           ) VALUES ('tv_hist_api_origin', $1, $2, 'dns_verified', 'dns_txt', '{}'::jsonb, $3::timestamptz, 'usr_admin', 'aud_seed')`,
-          [TENANT, ORIGIN, DECLARED],
+           ) VALUES ('tv_hist_api_origin', $1, $2, 'dns_verified', 'dns_txt', '{}'::jsonb, $3::timestamptz, 'usr_admin', 'aud_seed'),
+                    ('tv_hist_api_protected', $1, $4, 'dns_verified', 'dns_txt', '{}'::jsonb, $3::timestamptz, 'usr_admin', 'aud_seed')`,
+          [TENANT, ORIGIN, DECLARED, PROTECTED],
         );
       });
       await withTenantContext(ownerPool, OTHER, async (client) => {

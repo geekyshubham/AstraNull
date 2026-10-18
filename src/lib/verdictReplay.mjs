@@ -349,6 +349,7 @@ export function rederiveVerdict(evidenceRecord = {}) {
   delete metadata.declarations;
   delete metadata.expected_behavior;
   delete metadata.declared_limit;
+  const recordedMetadata = { ...metadata };
   const features = evidenceRecord.response_features ?? metadata.response_features ?? null;
   let regraded = false;
   let regradeUnavailableReason = null;
@@ -382,18 +383,19 @@ export function rederiveVerdict(evidenceRecord = {}) {
     regradeUnavailableReason = 'missing_response_features';
   }
   const probeKind = evidenceRecord.probe_kind ?? metadata.probe_kind ?? metadata.profile_kind ?? null;
-  const derived = correlateExternalOnlyVerdict({
+  const correlate = (probeMetadata) => correlateExternalOnlyVerdict({
     externalResult: evidenceRecord.external_result ?? metadata.external_result ?? null,
     expectedBehavior: evidenceRecord.expected_behavior ?? null,
     probeKind,
     probeIoObserved: evidenceRecord.probe_io_observed
       ?? (Number.isSafeInteger(metadata.safety_attestation?.probe_requests_sent)
         && metadata.safety_attestation.probe_requests_sent > 0),
-    probeMetadata: metadata,
+    probeMetadata,
     declarations: evidenceRecord.declarations ?? null,
     originBinding: evidenceRecord.origin_binding ?? null,
     checkId: evidenceRecord.check_id ?? metadata.check_id ?? null,
   });
+  let derived = correlate(metadata);
   const recorded = evidenceRecord.verdict ?? evidenceRecord.recorded_verdict ?? null;
   const recordedValue = typeof recorded === 'string' ? recorded : recorded?.verdict ?? null;
   if (regraded && recordedValue && recordedValue !== derived.verdict) {
@@ -401,11 +403,12 @@ export function rederiveVerdict(evidenceRecord = {}) {
     if (hasOldFeatures) {
       regraded = false;
       regradeUnavailableReason = 'insufficient_features';
+      derived = correlate(recordedMetadata);
     }
   }
-  const derivedVerdict = regradeUnavailableReason === 'insufficient_features'
-    ? (recordedValue ?? derived.verdict)
-    : derived.verdict;
+  // Insufficient response features do not authorize copying the published verdict.
+  // Reapply current correlation to recorded outcomes, including all evidence gates.
+  const derivedVerdict = derived.verdict;
   const versionGap = gradingVersionGap(storedVerdictView(evidenceRecord), metadata);
   const retestRequired = regradeUnavailableReason === 'insufficient_features' && Boolean(versionGap);
   return {
@@ -462,6 +465,7 @@ export function buildVerdictReplay({ run, storedVerdict = null, probeEvent = nul
   delete replayMetadata.declarations;
   delete replayMetadata.expected_behavior;
   delete replayMetadata.declared_limit;
+  const recordedMetadata = { ...replayMetadata };
   let regradeResult = null;
   if (features) {
     regradeResult = regradePlacementsFromFeatures(features, metadata, declarations, check);
@@ -491,30 +495,30 @@ export function buildVerdictReplay({ run, storedVerdict = null, probeEvent = nul
     regradeUnavailableReason = 'missing_response_features';
   }
 
-  const derived = correlateExternalOnlyVerdict({
+  const correlate = (probeMetadata) => correlateExternalOnlyVerdict({
     externalResult: run.probe_external_result ?? metadata.external_result ?? null,
     expectedBehavior: verdictExpectedBehaviorForRun(run),
     probeKind: check?.probe_profile?.kind ?? null,
     probeIoObserved: probeEventHasProbeIo(probeEvent),
-    probeMetadata: replayMetadata,
+    probeMetadata,
     declarations: declarations ?? null,
     originBinding,
     checkId: run.check_id,
   });
+  let derived = correlate(replayMetadata);
   const stored = storedVerdictView(storedVerdict);
   if (regraded && stored && stored.verdict !== derived.verdict) {
     const hasOldFeatures = (features ?? []).some((f) => f && (!Object.hasOwn(f, 'signature_basis') || f.signature_basis === undefined));
     if (hasOldFeatures) {
       regraded = false;
       regradeUnavailableReason = 'insufficient_features';
+      derived = correlate(recordedMetadata);
     }
   }
-  const rederivedVerdict = regradeUnavailableReason === 'insufficient_features'
-    ? (stored?.verdict ?? derived.verdict)
-    : derived.verdict;
-  const changed = regradeUnavailableReason === 'insufficient_features'
-    ? false
-    : (stored ? stored.verdict !== rederivedVerdict : null);
+  // Keep the current verdict, explanation and finding decision from one correlation.
+  // The immutable stored verdict remains available separately for comparison.
+  const rederivedVerdict = derived.verdict;
+  const changed = stored ? stored.verdict !== rederivedVerdict : null;
   const versionGap = gradingVersionGap(stored, metadata);
   const retestRequired = regradeUnavailableReason === 'insufficient_features' && Boolean(versionGap);
   return {
@@ -538,7 +542,7 @@ export function buildVerdictReplay({ run, storedVerdict = null, probeEvent = nul
     changed,
     grading_version_gap: versionGap,
     regraded,
-    placements: regradeResult?.placements ?? replayMetadata.placements ?? null,
+    placements: regraded ? regradeResult.placements : recordedMetadata.placements ?? null,
     ...(regradeUnavailableReason ? { regrade_unavailable_reason: regradeUnavailableReason } : {}),
     ...(retestRequired ? { retest_required: true } : {}),
   };

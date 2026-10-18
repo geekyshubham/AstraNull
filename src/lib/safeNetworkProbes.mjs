@@ -567,6 +567,9 @@ function tcpExternalResult(outcome) {
 async function sendOneUdp(job, deps, address, port, timeoutMs, onAttempt) {
   const createSocket = deps.createSocket ?? dgram.createSocket.bind(dgram);
   const payload = safeUdpPayload(job);
+  // The first address classification can initialize a large local index. Keep
+  // that work inside the pre-I/O budget, not after a deadline has closed the socket.
+  const peerCdn = peerIsCdn(address);
   const socket = startProbeIoAttempt(
     deps,
     'udp_datagram',
@@ -590,7 +593,7 @@ async function sendOneUdp(job, deps, address, port, timeoutMs, onAttempt) {
       datagram_bytes: payload.length,
       address,
       address_family: addressFamilyNumber(address),
-      peer_is_cdn: peerIsCdn(address),
+      peer_is_cdn: peerCdn,
       duration_ms: durationMs,
       elapsed_ms: durationMs,
     };
@@ -606,7 +609,7 @@ async function sendOneUdp(job, deps, address, port, timeoutMs, onAttempt) {
       datagram_bytes: payload.length,
       address,
       address_family: addressFamilyNumber(address),
-      peer_is_cdn: peerIsCdn(address),
+      peer_is_cdn: peerCdn,
       duration_ms: durationMs,
       elapsed_ms: durationMs,
       error_class: err?.code || 'udp_send_failed',
@@ -619,6 +622,8 @@ async function probeDeclaredDenyPorts(job, deps, { protocol, ports, selected, fa
   const onReserved = () => { requestsSent += 1; onRequest?.(); };
   const outcomeKey = protocol === 'udp' ? 'udp_outcome' : 'tcp_outcome';
   const portResults = [];
+  const plannedTotalAttempts = Math.max(1, Math.min(budget, ports.length * familyKeys.length * MAX_TCP_UDP_SAMPLES));
+  const perAttemptTimeout = Math.max(1, Math.floor(timeoutMs / plannedTotalAttempts));
   for (let index = 0; index < ports.length; index += 1) {
     if (requestsSent >= budget || deps.jobDeadlineSignal?.aborted) break;
     const timeLeft = timeoutMs - (Date.now() - started);
@@ -638,8 +643,13 @@ async function probeDeclaredDenyPorts(job, deps, { protocol, ports, selected, fa
           const gap = deps.sampleGapMs ?? SAMPLE_GAP_MS;
           if (gap > 0) await sleepMs(gap, deps.jobDeadlineSignal);
         }
+        const overallTimeLeft = timeoutMs - (Date.now() - started);
+        const portTimeLeft = portDeadline - Date.now();
+        if (overallTimeLeft <= 0 || portTimeLeft <= 0) break;
         const samplesLeft = Math.max(1, plannedSamples - portRequests);
-        const remaining = Math.max(1, Math.floor((portDeadline - Date.now()) / samplesLeft));
+        const portSlice = Math.max(1, Math.floor(portTimeLeft / samplesLeft));
+        const remaining = Math.min(perAttemptTimeout, portSlice, overallTimeLeft);
+        if (remaining <= 0) break;
         const before = requestsSent;
         const sample = await sampleOnce(selected[key], port, remaining, onReserved);
         portRequests += requestsSent - before;
@@ -649,7 +659,8 @@ async function probeDeclaredDenyPorts(job, deps, { protocol, ports, selected, fa
       if (samples.length) families[key] = { ...samples[0], samples, sample_agreement: sampleAgreement(samples) };
     }
     if (!portSamples.length) break;
-    const first = portSamples[0];
+    const violating = protocol === 'udp' ? 'validated_reply' : 'handshake';
+    const first = portSamples.find((sample) => sample[outcomeKey] === violating) ?? portSamples[0];
     portResults.push({
       protocol,
       port,
@@ -757,6 +768,8 @@ export async function probeUdpDatagram(job, deps = {}) {
     const samplesPerFamily = familyKeys.length === 1 && budget >= MAX_TCP_UDP_SAMPLES
       ? MAX_TCP_UDP_SAMPLES
       : 1;
+    const plannedAttempts = Math.max(1, Math.min(budget, familyKeys.length * samplesPerFamily));
+    const perAttemptTimeout = Math.max(1, Math.floor(timeoutMs / plannedAttempts));
     const families = {};
     const allSamples = [];
     for (const key of familyKeys) {
@@ -768,18 +781,23 @@ export async function probeUdpDatagram(job, deps = {}) {
           const gap = deps.sampleGapMs ?? SAMPLE_GAP_MS;
           if (gap > 0) await sleepMs(gap, deps.jobDeadlineSignal);
         }
-        const remaining = Math.max(1, timeoutMs - (Date.now() - started));
+        const timeLeft = timeoutMs - (Date.now() - started);
+        if (timeLeft <= 0) break;
+        const remaining = Math.min(perAttemptTimeout, timeLeft);
+        if (remaining <= 0) break;
         const sample = await sendOneUdp(job, deps, address, port, remaining, () => { requestsSent += 1; });
         samples.push(sample);
         allSamples.push(sample);
       }
-      families[key] = {
-        ...samples[0],
-        samples,
-        sample_agreement: sampleAgreement(samples),
-      };
+      if (samples.length) {
+        families[key] = {
+          ...samples[0],
+          samples,
+          sample_agreement: sampleAgreement(samples),
+        };
+      }
     }
-    const primary = allSamples[0] ?? {};
+    const primary = allSamples.find((sample) => sample.udp_outcome === 'validated_reply') ?? allSamples[0] ?? {};
     const durationMs = Date.now() - started;
     const udp_outcome = primary.udp_outcome ?? 'error';
     return {
@@ -945,6 +963,8 @@ export async function probeTcpConnect(job, deps = {}) {
     const samplesPerFamily = familyKeys.length === 1 && budget >= MAX_TCP_UDP_SAMPLES
       ? MAX_TCP_UDP_SAMPLES
       : 1;
+    const plannedAttempts = Math.max(1, Math.min(budget, familyKeys.length * samplesPerFamily));
+    const perAttemptTimeout = Math.max(1, Math.floor(timeoutMs / plannedAttempts));
     const families = {};
     const allSamples = [];
     for (const key of familyKeys) {
@@ -956,7 +976,10 @@ export async function probeTcpConnect(job, deps = {}) {
           const gap = deps.sampleGapMs ?? SAMPLE_GAP_MS;
           if (gap > 0) await sleepMs(gap, deps.jobDeadlineSignal);
         }
-        const remaining = Math.max(1, timeoutMs - (Date.now() - started));
+        const timeLeft = timeoutMs - (Date.now() - started);
+        if (timeLeft <= 0) break;
+        const remaining = Math.min(perAttemptTimeout, timeLeft);
+        if (remaining <= 0) break;
         const sample = await openTcpOnce(
           connectFn,
           address,
@@ -977,13 +1000,15 @@ export async function probeTcpConnect(job, deps = {}) {
         samples.push(row);
         allSamples.push(row);
       }
-      families[key] = {
-        ...samples[0],
-        samples,
-        sample_agreement: sampleAgreement(samples),
-      };
+      if (samples.length) {
+        families[key] = {
+          ...samples[0],
+          samples,
+          sample_agreement: sampleAgreement(samples),
+        };
+      }
     }
-    const primary = allSamples[0] ?? {};
+    const primary = allSamples.find((sample) => sample.tcp_outcome === 'handshake') ?? allSamples[0] ?? {};
     const durationMs = Date.now() - started;
     return {
       external_result: tcpExternalResult(primary.tcp_outcome),
@@ -1110,7 +1135,7 @@ function classifyNetworkProbeError(err, durationMs, job, probeKind, requestsSent
  * @param {{ host: string, port: number }} endpoint
  * @param {number} timeoutMs
  */
-function openTlsSession(connectFn, endpoint, timeoutMs, deps, onReserved) {
+function openTlsSession(connectFn, endpoint, timeoutMs, deps, onReserved, { attemptRenegotiation = false } = {}) {
   return new Promise((resolve, reject) => {
     const signal = deps.jobDeadlineSignal;
     const stopped = () => Object.assign(new Error('Probe stopped.'), { code: 'ETIMEOUT', name: 'AbortError' });
@@ -1147,15 +1172,42 @@ function openTlsSession(connectFn, endpoint, timeoutMs, deps, onReserved) {
       resolve(result);
     };
 
+    let renegotiation = null;
     const onSecureConnect = () => {
-      settle(null, {
+      const session = {
         tls_protocol: socket.getProtocol(),
         cipher: socket.getCipher()?.name ?? null,
         authorized: socket.authorized,
-      });
+      };
+      if (!attemptRenegotiation) {
+        settle(null, session);
+        return;
+      }
+      if (session.tls_protocol !== 'TLSv1.2' || typeof socket.renegotiate !== 'function') {
+        settle(null, { ...session, client_renegotiation_attempted: false, client_renegotiation_accepted: false });
+        return;
+      }
+      renegotiation = (accepted) => {
+        renegotiation = null;
+        socket.removeListener('close', onRenegotiationClose);
+        settle(null, { ...session, client_renegotiation_attempted: true, client_renegotiation_accepted: accepted });
+      };
+      socket.once('close', onRenegotiationClose);
+      try {
+        const started = socket.renegotiate({ rejectUnauthorized: false }, (err) => renegotiation?.(!err));
+        if (started === false) renegotiation?.(false);
+      } catch {
+        renegotiation?.(false);
+      }
     };
+    const onRenegotiationClose = () => renegotiation?.(false);
     socket.once('secureConnect', onSecureConnect);
-    socket.once('error', (err) => settle(err));
+    const onError = (err) => {
+      if (renegotiation) renegotiation(false);
+      else settle(err);
+    };
+    if (attemptRenegotiation && typeof socket.on === 'function') socket.on('error', onError);
+    else socket.once('error', onError);
     if (signal?.aborted) onAbort();
     else signal?.addEventListener('abort', onAbort, { once: true });
   });
@@ -1168,6 +1220,9 @@ function openTlsSession(connectFn, endpoint, timeoutMs, deps, onReserved) {
  */
 function readHttp2RemoteSettings(connectFn, tlsConnectFn, url, timeoutMs, connectHost, deps, onReserved) {
   return new Promise((resolve, reject) => {
+    const signal = deps.jobDeadlineSignal ?? deps.signal;
+    const stopped = () => Object.assign(new Error('Probe stopped.'), { code: 'ETIMEOUT', name: 'AbortError' });
+    if (signal?.aborted) { reject(stopped()); return; }
     let settled = false;
     const parsed = new URL(url);
     const logicalHost = parsed.hostname.replace(/^\[/, '').replace(/\]$/, '');
@@ -1179,15 +1234,15 @@ function readHttp2RemoteSettings(connectFn, tlsConnectFn, url, timeoutMs, connec
           host: connectHost,
           port: parsed.port ? Number(parsed.port) : 443,
           ...(net.isIP(logicalHost) === 0 ? { servername: logicalHost } : {}),
+          ALPNProtocols: ['h2'],
           rejectUnauthorized: false,
         }),
       }),
       onReserved,
     );
 
-    const signal = deps.jobDeadlineSignal ?? deps.signal;
     const timer = setTimeout(() => settle(Object.assign(new Error('timeout'), { code: 'ETIMEOUT' })), timeoutMs);
-    const onAbort = () => settle(Object.assign(new Error('Probe stopped.'), { code: 'ABORT_ERR', name: 'AbortError' }));
+    const onAbort = () => settle(stopped());
     const onClose = () => settle(Object.assign(new Error('HTTP/2 closed before peer SETTINGS.'), { code: 'ECONNRESET' }));
     const settle = (err, settings) => {
       if (settled) return;
@@ -1251,7 +1306,7 @@ export async function probeTlsSession(job, deps = {}) {
       host: pinned.address,
       ...(net.isIP(host) === 0 ? { servername: host } : {}),
       port,
-    }, timeoutMs, deps, () => { requestsSent = 1; });
+    }, timeoutMs, deps, () => { requestsSent = 1; }, { attemptRenegotiation: job.check_id === 'tls.renegotiation.readiness' });
     const durationMs = Date.now() - started;
     return {
       external_result: 'connected',
@@ -1260,6 +1315,10 @@ export async function probeTlsSession(job, deps = {}) {
         tls_protocol: sessionInfo.tls_protocol,
         cipher: sessionInfo.cipher,
         authorized: sessionInfo.authorized,
+        ...('client_renegotiation_accepted' in sessionInfo ? {
+          client_renegotiation_attempted: sessionInfo.client_renegotiation_attempted,
+          client_renegotiation_accepted: sessionInfo.client_renegotiation_accepted,
+        } : {}),
         duration_ms: durationMs,
       }),
       requests_sent: requestsSent,
@@ -1375,7 +1434,14 @@ export async function probeQuicReachability(job, deps = {}) {
   const started = Date.now();
   let requestsSent = 0;
   let altSvc = parseHttp3AltSvc(null);
+  const controller = new AbortController();
+  const upstreamSignal = deps.jobDeadlineSignal;
+  const onAbort = () => controller.abort();
+  if (upstreamSignal?.aborted) onAbort();
+  else upstreamSignal?.addEventListener('abort', onAbort, { once: true });
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
+    controller.signal.throwIfAborted();
     const pinned = await resolvePinnedDestination(host, deps);
     const pinnedDeps = {
       ...deps,
@@ -1383,37 +1449,32 @@ export async function probeQuicReachability(job, deps = {}) {
       vettedAddresses: pinned.addresses,
     };
     const fetchFn = deps.fetchFn ?? ((input, init) => pinnedFetch(input, init, pinnedDeps));
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-    try {
-      const res = await startProbeIoAttempt(
-        deps,
-        'http',
-        () => fetchFn(httpUrl, {
-          method: 'HEAD',
-          redirect: 'manual',
-          signal: controller.signal,
-        }),
-        () => { requestsSent = 1; },
-      );
-      altSvc = parseHttp3AltSvc(res.headers.get('alt-svc'));
-      const durationMs = Date.now() - started;
-      return {
-        external_result: 'connected',
-        metadata: withProfileKind(job, {
-          probe_kind: 'quic_reachability',
-          capability_scope: 'http3_alt_svc_observation_only',
-          http_method: 'HEAD',
-          status_code: res.status,
-          ...altSvc,
-          duration_ms: durationMs,
-        }),
-        requests_sent: requestsSent,
+    controller.signal.throwIfAborted();
+    const res = await startProbeIoAttempt(
+      deps,
+      'http',
+      () => fetchFn(httpUrl, {
+        method: 'HEAD',
+        redirect: 'manual',
+        signal: controller.signal,
+      }),
+      () => { requestsSent = 1; },
+    );
+    altSvc = parseHttp3AltSvc(res.headers.get('alt-svc'));
+    const durationMs = Date.now() - started;
+    return {
+      external_result: 'connected',
+      metadata: withProfileKind(job, {
+        probe_kind: 'quic_reachability',
+        capability_scope: 'http3_alt_svc_observation_only',
+        http_method: 'HEAD',
+        status_code: res.status,
+        ...altSvc,
         duration_ms: durationMs,
-      };
-    } finally {
-      clearTimeout(timer);
-    }
+      }),
+      requests_sent: requestsSent,
+      duration_ms: durationMs,
+    };
   } catch (err) {
     const durationMs = Date.now() - started;
     const normalized = err?.name === 'AbortError'
@@ -1435,6 +1496,9 @@ export async function probeQuicReachability(job, deps = {}) {
         ...altSvc,
       },
     };
+  } finally {
+    clearTimeout(timer);
+    upstreamSignal?.removeEventListener('abort', onAbort);
   }
 }
 

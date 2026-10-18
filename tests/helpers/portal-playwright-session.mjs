@@ -2,6 +2,7 @@ import './dev-data-dir.mjs';
 
 import { PORTAL_BASELINE_IDS } from '../fixtures/portal-baseline/seed.mjs';
 import { PORTAL_DETAIL_ENTITY_IDS } from './portal-routes.mjs';
+import { installPortalBrowserResources } from './portal-browser-resources.mjs';
 
 export const PORTAL_SESSION = Object.freeze({
   mode: 'dev-headers',
@@ -44,6 +45,7 @@ const STAFF_SOC_ROUTE_IDS = new Set(['internal-soc', 'queue-detail']);
  * @param {Record<string, unknown>} [session]
  */
 export async function injectPortalDevHeadersSession(page, session = PORTAL_SESSION) {
+  await installPortalBrowserResources(page);
   await page.addInitScript((value) => {
     sessionStorage.setItem('astranull.portal.session.v1', JSON.stringify(value));
   }, session);
@@ -54,6 +56,7 @@ export async function injectPortalDevHeadersSession(page, session = PORTAL_SESSI
  * @param {import('@playwright/test').Page} page
  */
 export async function clearPortalSession(page) {
+  await installPortalBrowserResources(page);
   await page.addInitScript(() => {
     sessionStorage.removeItem('astranull.portal.session.v1');
   });
@@ -103,6 +106,7 @@ export function resolvePortalRouteUrl(routeId, baseUrl, options = {}) {
  * @param {{ entityIds?: Record<string, string> }} [options]
  */
 export async function gotoPortalRoute(page, routeId, baseUrl, options = {}) {
+  await installPortalBrowserResources(page);
   const url = resolvePortalRouteUrl(routeId, baseUrl, options);
   await page.goto(url, { waitUntil: 'networkidle', timeout: 60_000 });
   await waitForPortalRouteSettled(page);
@@ -127,6 +131,7 @@ export async function waitForPortalRouteSettled(page) {
  * @param {string} baseUrl
  */
 export async function gotoPublicPortalRoute(page, pathname, baseUrl) {
+  await installPortalBrowserResources(page);
   await page.goto(`${baseUrl}${pathname}`, { waitUntil: 'networkidle', timeout: 60_000 });
 }
 

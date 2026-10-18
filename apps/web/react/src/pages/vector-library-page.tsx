@@ -17,6 +17,7 @@ import { buildDetailHref, getRouteParam, replaceRouteParams } from '../lib/route
 // @ts-ignore Plain ESM keeps executive labels directly testable with node:test.
 import { plainCheckName, plainCodeLabel, plainVerdictLabel } from '../lib/plain-language.mjs';
 import { apiErrorMessage } from '../lib/error-messages';
+import { checkPresentation } from '../lib/check-presentation.mjs';
 import { hasEvidenceBackedVerdict, publishedRunVerdict } from '../lib/run-verdict';
 import type { DataItem, PortalConfig, PortalData, Session } from '../lib/types';
 import { formatDate, formatNumber, formatTargetKind } from '../lib/utils';
@@ -381,7 +382,7 @@ export function VectorLibraryPage({
         body: { target_id: targetId, check_id: checkId },
       });
       setMessage({
-        text: `Bounded check ${plainCheckName(getString(pendingRun.check, ['name', 'check_id']))} started on ${getString(selectedTarget, ['value'], targetId)}. Its result and evidence are recorded on the target.`,
+        text: `Bounded check ${checkPresentation(pendingRun.check).name} started on ${getString(selectedTarget, ['value'], targetId)}. Its result and evidence are recorded on the target.`,
         targetId,
       });
       setPendingRun(null);
@@ -453,7 +454,7 @@ export function VectorLibraryPage({
     { value: '', label: 'Select a mapped bounded check' },
     ...(detailAvailability?.runnableChecks ?? []).map((check) => ({
       value: getString(check, ['check_id']),
-      label: `${plainCheckName(getString(check, ['name', 'title', 'check_id']))}${recommended === check ? ' (semantic match)' : ''}`,
+      label: `${checkPresentation(check).name}${recommended === check ? ' (semantic match)' : ''}`,
     })),
   ];
   const checkHref = (checkId: string) => `${buildDetailHref('check-detail', checkId)}${selectedTarget ? `&target=${encodeURIComponent(targetId)}` : ''}`;
@@ -696,7 +697,7 @@ export function VectorLibraryPage({
                       const latestRun = selectedTarget ? latestRunForCheckOnTarget(data.runs, checkId, targetId) : null;
                       return (
                         <li key={checkId}>
-                          {check ? <a href={checkHref(checkId)}>{plainCheckName(getString(check, ['name'], checkId))}</a> : <span>{checkId}</span>}
+                          {check ? <a href={checkHref(checkId)}>{checkPresentation(check).name}</a> : <span>{checkId}</span>}
                           <code className="traffic-path-label">{checkId}</code>
                           {check ? <CheckClassChips check={check} /> : null}
                           {!check ? <span className="muted small"> not in the current catalog</span> : null}
@@ -716,13 +717,13 @@ export function VectorLibraryPage({
       <ConfirmModal
         open={Boolean(pendingRun)}
         title={pendingRun && selectedTarget
-          ? `Start ${plainCheckName(getString(pendingRun.check, ['name', 'title', 'check_id']))} on ${getString(selectedTarget, ['value', 'hostname'], targetId)}?`
+          ? `Start ${checkPresentation(pendingRun.check).name} on ${getString(selectedTarget, ['value', 'hostname'], targetId)}?`
           : 'Start this check?'}
         description={pendingRun && selectedTarget ? (
           <div className="stack-tight scan-review">
             <dl className="td-review-list">
               <div><dt>Target</dt><dd>{targetLabel(selectedTarget)} <code>{targetId}</code></dd></div>
-              <div><dt>Check</dt><dd>{plainCheckName(getString(pendingRun.check, ['name', 'title', 'check_id']))} <code>{getString(pendingRun.check, ['check_id'])}</code></dd></div>
+              <div><dt>Check</dt><dd>{checkPresentation(pendingRun.check).name} <code>{getString(pendingRun.check, ['check_id'])}</code></dd></div>
               <div><dt>Upper bound</dt><dd>{checkUpperBound(pendingRun.check)}</dd></div>
               {targetOwnershipLabel(selectedTarget) ? <div><dt>Ownership</dt><dd>{targetOwnershipLabel(selectedTarget)}</dd></div> : null}
               <div><dt>Evidence limit</dt><dd>{evidenceCapabilityCopy(pendingRun.vector.evidence_capability).detail}</dd></div>

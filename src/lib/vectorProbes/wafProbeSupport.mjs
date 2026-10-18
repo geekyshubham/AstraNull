@@ -256,6 +256,40 @@ export function isGradedLeg(row) {
   return row.blocked === true || row.allowed === true || row.challenged === true;
 }
 
+/** Delivery completeness is independent of grading: a received unsigned 404 is complete but ungraded. */
+export function markerLegAccounting(rows, planned) {
+  const attempted = rows.length;
+  const completed = rows.filter((row) => !row.transport_error && !row.error_class && row.outcome !== 'error').length;
+  const graded = rows.filter(isGradedLeg).length;
+  return {
+    planned_marker_legs: planned,
+    attempted_marker_legs: attempted,
+    completed_marker_legs: completed,
+    graded_marker_legs: graded,
+    ungraded_marker_legs: completed - graded,
+    missing_marker_legs: Math.max(0, planned - completed),
+  };
+}
+
+/** v5 proves the budget-selected plan completed, not that excluded placements were enforced. */
+export function markerComparisonComplete(metadata) {
+  const m = metadata ?? {};
+  return m.classifier_version === 'marker-comparison-v5'
+    && m.comparison_complete === true
+    && (m.baseline_health ?? m.permitted_baseline?.health ?? m.permitted_baseline_health) === 'healthy'
+    && m.source_penalized !== true
+    && (m.assurance_scope === 'completed_supported_inert_marker_rules_only'
+      ? m.coverage_complete === true
+      : m.trailing_control?.outcome === 'allowed')
+    && Number.isSafeInteger(m.planned_marker_legs) && m.planned_marker_legs > 0
+    && m.attempted_marker_legs === m.planned_marker_legs
+    && m.completed_marker_legs === m.planned_marker_legs
+    && Number.isSafeInteger(m.graded_marker_legs) && m.graded_marker_legs > 0
+    && m.graded_marker_legs <= m.completed_marker_legs
+    && m.ungraded_marker_legs === m.completed_marker_legs - m.graded_marker_legs
+    && m.missing_marker_legs === 0;
+}
+
 export function sameHostPath(baseUrl, path) {
   const raw = String(path ?? '').trim();
   if (!raw) return null;

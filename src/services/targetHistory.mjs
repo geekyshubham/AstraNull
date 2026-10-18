@@ -385,7 +385,10 @@ export function prepareObservation(input, context) {
     if (!binding || binding.tenant_id !== tenantId || binding.id !== input.origin_binding_id) {
       return error('unknown_origin_binding', 404);
     }
-    if (binding.origin_target_id !== target.id) return error('binding_target_mismatch', 409);
+    if (binding.origin_target_id !== target.id
+      && !(serverDerived && input.check_id === 'nfw.origin_lockdown.safe' && binding.protected_target_id === target.id)) {
+      return error('binding_target_mismatch', 409);
+    }
     if (Date.parse(times.observed_at) < Date.parse(binding.created_at)) {
       return error('observation_predates_binding', 409);
     }

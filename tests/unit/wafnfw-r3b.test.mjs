@@ -304,6 +304,7 @@ describe('R3b Item 4 (N4): Target dependent requirements and refusal codes', () 
             ],
             targetVerifications: [
               { id: 'v_origin', tenant_id: 'ten_cust', target_id: 'tgt_origin', state: 'dns_verified', transitioned_at: '2026-10-01T00:00:00.000Z' },
+              { id: 'v_protected', tenant_id: 'ten_cust', target_id: 'tgt_sample', state: 'dns_verified', transitioned_at: '2026-10-01T00:00:00.000Z' },
             ],
           },
         },

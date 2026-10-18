@@ -211,7 +211,9 @@ export async function resolvePostgresHarnessAvailability(env = process.env, opti
         env: {
           ...harnessEnv,
           ASTRANULL_DATABASE_URL: databaseUrl,
-          ASTRANULL_ADMIN_DATABASE_URL: databaseUrl,
+          // The application role can be reachable without CREATEDB. Keep an
+          // explicitly supplied administrator connection for provisioning.
+          ASTRANULL_ADMIN_DATABASE_URL: env.ASTRANULL_ADMIN_DATABASE_URL || databaseUrl,
         },
       };
     }

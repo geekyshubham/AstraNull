@@ -136,7 +136,7 @@ export function ConfirmModal({
     <dialog ref={dialogRef} className="modal-confirm" aria-labelledby={titleId} onCancel={(event) => {
       event.preventDefault();
       event.stopPropagation();
-      onCancel();
+      if (!busy) onCancel();
     }}>
       <form
         method="dialog"

@@ -42,6 +42,8 @@ describe('Ticket R5 — Verification defects', () => {
       const s1 = sanitizeProbeMetadata(raw);
       const s2 = sanitizeWorkerProbeMetadata(s1);
       const md = s2?.metadata ?? s2;
+      // Ingestion adds the transport-measured attestation after worker metadata sanitization.
+      md.safety_attestation = { probe_requests_sent: raw.requests_sent };
       const live = correlateExternalOnlyVerdict({
         externalResult: null,
         expectedBehavior: null,
@@ -128,6 +130,8 @@ describe('Ticket R5 — Verification defects', () => {
       const s1 = sanitizeProbeMetadata(raw);
       const s2 = sanitizeWorkerProbeMetadata(s1);
       const md = s2?.metadata ?? s2;
+      // Ingestion adds the transport-measured attestation after worker metadata sanitization.
+      md.safety_attestation = { probe_requests_sent: raw.requests_sent };
       const live = correlateExternalOnlyVerdict({
         externalResult: null,
         expectedBehavior: null,
@@ -168,7 +172,10 @@ describe('Ticket R5 — Verification defects', () => {
       });
       assert.equal(rep.regraded, false);
       assert.equal(rep.regrade_unavailable_reason, 'insufficient_features');
-      assert.equal(rep.changed, false);
+      assert.equal(rep.stored.verdict, 'protected');
+      assert.equal(rep.rederived.verdict, 'inconclusive');
+      assert.match(rep.rederived.explanation, /no attested probe I\/O/);
+      assert.equal(rep.changed, true);
     });
   });
 

@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { CHECK_CATALOG, customerSelectableChecks, checkRequiresAdditionalInput } from '../../src/contracts/checks.mjs';
 import { coverageFrom } from '../../src/lib/protectionCoverage.mjs';
-import { MAX_SCAN_CHECKS, MAX_SCAN_STEPS, planScanSteps } from '../../src/contracts/validationScanManagement.mjs';
+import { targetRunnableIndex } from '../../apps/web/react/src/lib/control-declarations.mjs';
+import { MAX_SCAN_CHECKS, MAX_SCAN_STEPS, planScanSteps, projectScanStep } from '../../src/contracts/validationScanManagement.mjs';
 import {
   CHECK_CATEGORIES,
   EDGE_DETECTION_CHECK_ID,
@@ -25,6 +26,8 @@ import {
   originRelationCheckEligible,
   assessmentChecks,
   targetCheckRequirement,
+  targetCheckAvailability,
+  countRowStatuses,
   shouldAutoDetectEdge,
 } from '../../apps/web/react/src/lib/domain-checks.mjs';
 
@@ -112,7 +115,7 @@ describe('per-check status rows', () => {
     const rows = buildCheckRows({ checks, scan, runs });
     assert.equal(row(rows, EDGE_DETECTION_CHECK_ID).status, 'observed', 'provider observations do not become graded gaps');
     assert.equal(row(rows, EDGE_DETECTION_CHECK_ID).runId, 'run_new');
-    assert.equal(row(rows, 'waf.marker_rule.safe').status, 'observed');
+    assert.equal(row(rows, 'waf.marker_rule.safe').status, 'observed', 'legacy request-only enforcement remains an observation, not an installed custom-canary check');
     assert.equal(row(rows, 'origin.leak_scan.safe').status, 'not_run');
   });
 
@@ -120,13 +123,15 @@ describe('per-check status rows', () => {
     const jwt = byId('waf.jwt_tamper_marker.safe');
     assert.match(jwt.name, /Custom Canary Rule/);
     const [rendered] = buildCheckRows({ checks: [jwt] });
-    assert.match(rendered.name, /Custom Canary Rule/);
+    assert.match(rendered.name, /JWT.*token observation/i);
+    assert.equal(rendered.producesVerdict, false);
+    assert.equal(rendered.readinessCapable, false);
     assert.doesNotMatch(rendered.name, /waf_class_marker/i);
   });
 
   it('groups rows by category with current graded failures first and observations separate', () => {
-    const protectedCheck = byId('waf.http_method_policy_marker.safe');
-    const exposedCheck = byId('waf.crlf_injection_marker.safe');
+    const protectedCheck = byId('waf.sqli_managed_marker.safe');
+    const exposedCheck = byId('waf.xss_managed_marker.safe');
     const scan = { steps: [
       { check_id: protectedCheck.check_id, status: 'verdicted', verdict: { verdict: 'edge_protected', evidence_ids: ['evt_protected'] } },
       { check_id: exposedCheck.check_id, status: 'verdicted', verdict: { verdict: 'edge_exposed', evidence_ids: ['evt_exposed'] } },
@@ -136,6 +141,96 @@ describe('per-check status rows', () => {
     assert.equal(groups[0].rows[0].status, 'failed');
     assert.equal(groups[0].counts.passed, 1);
     assert.equal(groups[1].category.id, 'origin');
+  });
+});
+
+describe('evaluated expectation, scoped verdict and current evidence', () => {
+  const check = byId('waf.http_method_policy_enforced.safe');
+  const run = { id: 'run_method', check_id: check.check_id, status: 'completed', started_at: '2030-01-02T00:00:00.000Z', expected_behavior: 'allow_as_expected', verdict: { verdict: 'protected', evidence_ids: ['evt_method'] } };
+
+  it('keeps the expectation evaluated by the run or step, not the catalog default', () => {
+    const [fromRun] = buildCheckRows({ checks: [check], runs: [run] });
+    const [fromStep] = buildCheckRows({ checks: [check], scan: { steps: [{ ...run, status: 'verdicted', test_run_id: run.id }] } });
+    assert.equal(fromRun.expectedBehavior, 'allow_as_expected');
+    assert.equal(fromStep.expectedBehavior, 'allow_as_expected');
+    assert.equal(fromRun.producesVerdict, true);
+    assert.equal(fromRun.readinessCapable, false);
+    assert.equal(fromRun.status, 'passed');
+    const [failed] = buildCheckRows({ checks: [check], runs: [{ ...run, verdict: { verdict: 'edge_exposed', evidence_ids: ['evt_fail'] } }] });
+    assert.equal(failed.status, 'failed');
+  });
+
+  it('preserves actual verdict citations through the real assessment API projection', () => {
+    for (const [verdictValue, expected] of [['protected', 'passed'], ['edge_exposed', 'failed']]) {
+      for (const evidenceIds of [['evt_method'], []]) {
+        const verdict = { ...run.verdict, verdict: verdictValue, evidence_ids: evidenceIds };
+        const step = projectScanStep({ step: { id: 'step_method', position: 0, status: 'verdicted', target_id: DOMAIN.id, check_id: check.check_id, test_run_id: run.id }, check, target: DOMAIN, run, verdict });
+        const coverage = { pairs: [{ check_id: check.check_id, last_run_id: run.id, state: 'conclusive', live_external: true, fresh: true }] };
+        const [projected] = buildCheckRows({ checks: [check], scan: { created_at: run.started_at, steps: [step] }, runs: [run], coverage });
+        assert.equal(projected.status, evidenceIds.length ? expected : 'retained');
+        assert.equal(projected.runId, run.id);
+        assert.equal(projected.coverageReason, evidenceIds.length ? '' : 'no_evidence');
+        assert.deepEqual(step.verdict.evidence_ids, evidenceIds);
+        assert.deepEqual(verdict.evidence_ids, evidenceIds, 'projection must not rewrite original verdicts');
+      }
+    }
+  });
+
+  for (const [state, reason] of [['unknown', 'no_evidence'], ['unknown', 'invalid_or_unresolved_evidence'], ['unknown', 'future_reason'], ['partial', 'check_version_mismatch'], ['stale', 'stale_result']]) {
+    it(`keeps ${state}/${reason} out of current pass and gap counts`, () => {
+      const coverage = { pairs: [{ check_id: check.check_id, last_run_id: run.id, state, pair_reason: reason, live_external: false }] };
+      const rows = buildCheckRows({ checks: [check], runs: [run], coverage });
+      assert.equal(rows[0].status, 'retained');
+      assert.equal(rows[0].coverageReason, reason);
+      assert.doesNotMatch(rows[0].label, /Gap found|Protected/);
+      const group = groupRowsByCategory(rows)[0];
+      assert.equal(group.counts.passed, 0);
+      assert.equal(group.counts.failed, 0);
+      assert.equal(group.counts.retained, 1);
+      assert.equal(rowEvidenceState(rows[0], { coverage }), state === 'partial' ? 'version_gap' : state === 'stale' ? 'stale' : 'unverified');
+    });
+  }
+
+  it('retains historical custom-canary publications under current setup-only definitions without re-grading', () => {
+    const current = byId('waf.jwt_tamper_marker.safe');
+    assert.equal(current.produces_verdict, false);
+    for (const [state, reason] of [['partial', 'check_version_mismatch'], ['unknown', 'invalid_or_unresolved_evidence']]) {
+      const historical = { ...run, check_id: current.check_id, verdict: { verdict: 'edge_exposed', explanation: 'Historical rule failed', evidence_ids: ['evt_historical'] } };
+      const coverage = { pairs: [{ check_id: current.check_id, last_run_id: historical.id, state, pair_reason: reason, live_external: false }] };
+      for (const input of [{ runs: [historical] }, { scan: { steps: [{ ...historical, status: 'verdicted', test_run_id: historical.id }] } }]) {
+        const rows = buildCheckRows({ checks: [current], coverage, ...input });
+        assert.equal(rows[0].status, 'retained');
+        assert.equal(rows[0].verdict, 'edge_exposed');
+        assert.equal(rows[0].explanation, 'Historical rule failed');
+        assert.equal(rows[0].coverageReason, reason);
+        assert.equal(groupRowsByCategory(rows)[0].counts.failed, 0);
+        assert.notEqual(rows[0].status, 'observed');
+      }
+    }
+    const [setup] = buildCheckRows({ checks: [current], runs: [{ ...run, check_id: current.check_id, verdict: { verdict: 'inconclusive', evidence_ids: ['evt_setup'], explanation: 'Custom canary setup unavailable' } }] });
+    assert.equal(setup.status, 'observed');
+  });
+
+  it('uses rolled-up member eligibility for current counts without changing unknown reasons', () => {
+    for (const [state, reason, expected] of [['unknown', 'invalid_or_unresolved_evidence', 'unverified'], ['partial', 'check_version_mismatch', 'version_gap'], ['stale', 'stale', 'stale']]) {
+      const coverage = { custom_canary_rollups: [{ rolled_up_pairs: [{ check_id: check.check_id, last_run_id: run.id, state, pair_reason: reason, fresh: false }] }] };
+      const rows = buildCheckRows({ checks: [check], runs: [run], coverage });
+      assert.equal(rows[0].status, 'retained');
+      assert.equal(rows[0].coverageReason, reason);
+      assert.equal(groupRowsByCategory(rows)[0].counts.passed, 0);
+      assert.equal(rowEvidenceState(rows[0], { coverage }), expected);
+    }
+  });
+
+  it('does not apply an old coverage pair to a newer exact run', () => {
+    const [row] = buildCheckRows({ checks: [check], runs: [run], coverage: { pairs: [{ check_id: check.check_id, last_run_id: 'other_run', state: 'unknown', live_external: false }] } });
+    assert.equal(row.status, 'passed');
+  });
+
+  it('a stored fail without any cited evidence is retained, never a current gap', () => {
+    const rows = buildCheckRows({ checks: [check], runs: [{ ...run, verdict: { verdict: 'edge_exposed' } }] });
+    assert.equal(rows[0].status, 'retained');
+    assert.equal(rowEvidenceState(rows[0]), 'unverified');
   });
 });
 
@@ -189,7 +284,7 @@ describe('WAF and CDN efficacy', () => {
     const stale = assess([mk('waf', 'passed', { finishedAt: OLD }), mk('waf', 'passed', { finishedAt: OLD }), mk('waf', 'passed', { finishedAt: OLD })]);
     assert.equal(stale.waf.status, 'insufficient');
     assert.equal(stale.waf.ignored, 3);
-    assert.match(efficacySentence(stale.waf), /3 not counted \(stale or older check version\)/);
+    assert.match(efficacySentence(stale.waf), /3 not counted \(stale, version-mismatched or unverified\)/);
     const rows = [mk('waf', 'passed', { checkId: 'waf.a.safe', runId: 'r1' }), mk('waf', 'passed'), mk('waf', 'passed')];
     const coverage = { pairs: [{ check_id: 'waf.a.safe', last_run_id: 'r1', state: 'partial', pair_reason: 'check_version_mismatch' }] };
     const gapped = assess(rows, { coverage });
@@ -318,6 +413,70 @@ it('full assessments include every compatible automatic network check, while rea
   assert.match(targetCheckRequirement({ ...byId('origin.leak_scan.safe'), requires_additional_input: true }, DOMAIN), /Declare/);
   assert.match(targetCheckRequirement({ ...byId(EDGE_DETECTION_CHECK_ID), risk_class: 'soc_gated' }, DOMAIN), /SOC approval/);
   assert.match(targetCheckRequirement({ ...byId(EDGE_DETECTION_CHECK_ID), supported_targets: ['ip'] }, DOMAIN), /compatible endpoint/);
+});
+
+
+describe('complete target catalog inventory is separate from execution', () => {
+  const full = CHECK_CATALOG.map((check) => ({ ...check, requires_additional_input: checkRequiresAdditionalInput(check) }));
+
+  it('keeps every definition and reconciles categories and results with empty, short and bounded history', () => {
+    const expectedIds = CHECK_CATALOG.map((check) => check.check_id).sort();
+    assert.equal(expectedIds.length, 275);
+    for (const runs of [[], [{ id: 'one', check_id: EDGE_DETECTION_CHECK_ID, status: 'completed' }], Array.from({ length: 100 }, (_, index) => ({ id: `history_${index}`, check_id: EDGE_DETECTION_CHECK_ID, status: 'completed', created_at: `2030-01-01T00:00:${String(index % 60).padStart(2, '0')}.000Z` }))]) {
+      const rows = buildCheckRows({ checks: full, runs });
+      assert.deepEqual(rows.map((row) => row.checkId).sort(), expectedIds);
+      assert.equal(Object.values(countRowStatuses(rows)).reduce((sum, count) => sum + count, 0), full.length);
+      assert.equal(groupRowsByCategory(rows).reduce((sum, group) => sum + group.rows.length, 0), full.length);
+      assert.equal(new Set(rows.map((row) => row.checkId)).size, full.length);
+      for (const row of rows.filter((row) => row.checkId !== EDGE_DETECTION_CHECK_ID)) {
+        assert.equal(row.status, 'not_run');
+        assert.equal(row.source, 'none');
+        assert.equal(row.runId, '');
+        assert.equal(row.verdict, '');
+      }
+    }
+  });
+
+  it('does not let a server input-complete answer waive support, target or declaration restrictions', () => {
+    const base = { ...byId(EDGE_DETECTION_CHECK_ID), requires_additional_input: false };
+    const context = { serverRunnableIndex: targetRunnableIndex([base]), declarations: { version: 1 } };
+    assert.equal(targetCheckAvailability(base, DOMAIN, context).state, 'ready');
+    const cases = [
+      [{ mechanism_supported: false }, 'Execution unavailable'],
+      [{ probe_profile: { ...base.probe_profile, delivery_supported: false } }, 'Execution unavailable'],
+      [{ probe_profile: { ...base.probe_profile, execution_supported: false } }, 'Execution unavailable'],
+      [{ supported_targets: ['ip'] }, 'Different target type'],
+      [{ evidence_tier: 'E1' }, 'Declaration only'],
+      [{ probe_profile: { kind: 'metadata_marker' } }, 'Declaration only'],
+      [{ probe_profile: { kind: 'ops_readiness' } }, 'Declaration only'],
+      [{ evidence_tier: 'E5' }, 'Monitor only'],
+      [{ risk_class: 'soc_gated' }, 'SOC only'],
+      [{ safety_constraints: { customer_runnable: false } }, 'SOC only'],
+    ];
+    for (const [override, label] of cases) {
+      const check = { ...base, ...override };
+      const availability = targetCheckAvailability(check, DOMAIN, context);
+      assert.notEqual(availability.state, 'ready', label);
+      assert.equal(availability.label, label);
+      assert.ok(availability.detail, label);
+      assert.deepEqual(individualChecks([check], DOMAIN, context), []);
+      assert.deepEqual(assessmentChecks([check], DOMAIN, context), []);
+    }
+  });
+
+  it('keeps unmet target inputs and dedicated callbacks non-runnable without fabricating results', () => {
+    const pending = { ...byId(EDGE_DETECTION_CHECK_ID), requires_additional_input: true, additional_input_reason: 'two_perspectives_required' };
+    const context = { serverRunnableIndex: targetRunnableIndex([pending]) };
+    const prerequisite = targetCheckAvailability(pending, DOMAIN, context);
+    assert.equal(prerequisite.state, 'needs_perspectives');
+    assert.ok(prerequisite.detail);
+    assert.equal(buildCheckRows({ checks: [pending] })[0].status, 'not_run');
+    const alert = CHECK_CATALOG.find((check) => check.check_id === 'ops.alert_workflow_marker.safe');
+    const availability = targetCheckAvailability({ ...alert, requires_additional_input: false }, DOMAIN);
+    assert.notEqual(availability.state, 'ready');
+    assert.match(availability.detail, /approved signed alert-webhook scope/);
+    assert.deepEqual(assessmentChecks(full, DOMAIN).map((check) => check.check_id), assessmentChecks(CATALOG, DOMAIN).map((check) => check.check_id));
+  });
 });
 
 

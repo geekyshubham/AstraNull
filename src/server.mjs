@@ -7,6 +7,10 @@ import {
   wafPostureEnabledFor,
 } from './lib/tenantFeatureAccess.mjs';
 import { getBundledStagingJwksDocument, isBundledStagingOidcEnabled } from './lib/bundledStagingOidc.mjs';
+import { projectMissingControl } from './lib/missingControlProjection.mjs';
+import { CONTROL_FAMILIES, getMissingControl } from './contracts/missingControls/index.mjs';
+import { presentTargetEdgeDetection } from './lib/edgeDetectionPresenter.mjs';
+import { getTargetEdgeDetection } from './services/targetEdgeDetectionStore.mjs';
 import { resolveHumanApiAuth } from './context.mjs';
 import {
   isInternalAdminApiRoute,
@@ -145,6 +149,10 @@ import { formatNotificationRuleForRead } from './lib/notifications.mjs';
 import * as cvePipeline from './services/cvePipeline.mjs';
 import * as externalDiscovery from './services/externalDiscovery.mjs';
 import * as subdomains from './services/subdomains.mjs';
+import { createOriginClueService } from './services/originClues.mjs';
+import * as privacyRetention from './services/privacyRetention.mjs';
+import { createDevOriginClueRepository } from './services/originClueRepository.mjs';
+import { originCluesEnabledFor, ORIGIN_CLUE_MAX_BYTES } from './lib/originClues.mjs';
 import { devInitialEdgeDetections } from './services/initialEdgeDetections.mjs';
 import { audit as appendDevAudit } from './audit.mjs';
 import * as supplyChainRisk from './services/supplyChainRisk.mjs';
@@ -173,6 +181,7 @@ import {
 function defaultServiceDeps() {
   return {
     tenants,
+    retention: privacyRetention,
     targetGroups,
     ownershipVerification,
     dnsOwnership,
@@ -219,6 +228,7 @@ function defaultServiceDeps() {
     cvePipeline,
     cveApplicabilityReviews: devCveApplicabilityReviews,
     externalDiscovery,
+    originClues: createOriginClueService({ repository: createDevOriginClueRepository() }),
     supplyChainRisk,
     protectionValidation: devProtectionValidationFacade,
     reviewedOperations: devReviewedOperations,
@@ -781,6 +791,42 @@ function blockPostgresStateRoute(runtimeConfig, serviceDeps, path, method, res) 
   return true;
 }
 
+function withCheckMissingControls(items) {
+  if (!Array.isArray(items)) return items;
+  return items.map((item) => {
+    const entry = item && typeof item === 'object' ? getMissingControl(item.check_id) : null;
+    const family = entry ? CONTROL_FAMILIES[entry.control_family] : null;
+    if (!entry || !family || item.missing_control) return item;
+    return { ...item, missing_control: { control_family: entry.control_family, control_label: family.label, layer: family.layer,
+      missing_control: entry.missing_control, required_policy: entry.required_policy } };
+  });
+}
+
+async function findingEdgeDetection(runtimeConfig, serviceDeps, ctx, targetId) {
+  if (!targetId) return null;
+  try {
+    if (typeof serviceDeps.evidence?.getTargetEdgeDetection === 'function') {
+      return presentTargetEdgeDetection(await serviceDeps.evidence.getTargetEdgeDetection(ctx, targetId));
+    }
+    if (runtimeConfig.persistenceMode === 'postgres') return null;
+    return presentTargetEdgeDetection(getTargetEdgeDetection(ctx.tenantId, targetId));
+  } catch {
+    return null;
+  }
+}
+
+async function withMissingControl(runtimeConfig, serviceDeps, ctx, finding) {
+  if (!finding || typeof finding !== 'object' || finding.missing_control) return finding;
+  if (finding.tenant_id && ctx?.tenantId && finding.tenant_id !== ctx.tenantId) return finding;
+  const missingControl = projectMissingControl({
+    checkId: finding.check_id,
+    explanation: finding.system_summary ?? null,
+    edgeDetection: await findingEdgeDetection(runtimeConfig, serviceDeps, ctx, finding.target_id),
+    gap: true,
+  });
+  return missingControl ? { ...finding, missing_control: missingControl } : finding;
+}
+
 function blockPostgresPortalRevampRoute(runtimeConfig, serviceDeps, path, method, res) {
   if (runtimeConfig.persistenceMode !== 'postgres') return false;
   if (!isPortalRevampRoute(path, method)) return false;
@@ -900,6 +946,7 @@ function subdomainServiceDeps(ctx, runtimeConfig, serviceDeps) {
     config: runtimeConfig.subdomainDiscovery,
     detectionEnabled: wafPostureEnabledFor(runtimeConfig, ctx?.tenantId),
     fetchFn: serviceDeps.subdomainFetch,
+    runUiFn: serviceDeps.subdomainUiRun,
   };
 }
 
@@ -1871,6 +1918,14 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
       return respondPostgresRouteNotWired(res);
     }
     return json(res, 200, await serviceDeps.subscriptions.getCurrentSubscriptionSummary(ctx));
+  }
+  if (method === 'POST' && path === '/v1/tenants/current/origin-clues/erase') {
+    const gate = requirePermission(ctx, 'tenant:write');
+    if (!gate.ok) return json(res, gate.status, gate.body);
+    if (typeof serviceDeps.retention?.eraseOriginCluesForCurrentTenant !== 'function') return respondPostgresRouteNotWired(res);
+    const body = await readJsonBody(req, Math.min(runtimeConfig.maxJsonBodyBytes ?? 4096, 4096));
+    const result = await serviceDeps.retention.eraseOriginCluesForCurrentTenant(ctx, body);
+    return json(res, result.status ?? 200, result);
   }
   if (method === 'PATCH' && path === '/v1/tenants/current') {
     const gate = requirePermission(ctx, 'tenant:write');
@@ -3464,6 +3519,23 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
     return json(res, 200, { initial_detection: await service.getInitialDetection(ctx, id) });
   }
 
+  const originCluesMatch = path.match(/^\/v1\/targets\/([^/]+)\/origin-clues(?:\/(collect|import))?$/);
+  if (originCluesMatch) {
+    const action = originCluesMatch[2] ?? null;
+    if ((action === null && method !== 'GET') || (action !== null && method !== 'POST')) return json(res, 405, { error: 'method_not_allowed' });
+    if (!originCluesEnabledFor(runtimeConfig, ctx.tenantId)) return json(res, 404, { error: 'origin_clues_feature_disabled', status: 404 });
+    const gate = requirePermission(ctx, action === null ? 'target_group:read' : 'target_group:write');
+    if (!gate.ok) return json(res, gate.status, gate.body);
+    const service = serviceDeps.originClues;
+    if (!service || typeof service[action ?? 'list'] !== 'function') return respondPostgresRouteNotWired(res);
+    const targetId = decodeURIComponent(originCluesMatch[1]);
+    const options = { runtimeConfig, idempotencyKey: req.headers['idempotency-key'] };
+    const result = action === null
+      ? await service.list(ctx, targetId, { limit: url.searchParams.get('limit') ?? undefined, cursor: url.searchParams.get('cursor') ?? undefined }, options)
+      : await service[action](ctx, targetId, await readJsonBody(req, Math.max(runtimeConfig.maxJsonBodyBytes, ORIGIN_CLUE_MAX_BYTES)), options);
+    return json(res, result?.error ? result.status ?? 400 : 200, result);
+  }
+
   const targetSubdomainsMatch = path.match(/^\/v1\/targets\/([^/]+)\/subdomains(?:\/(enumerate|detect))?$/);
   if (targetSubdomainsMatch) {
     const action = targetSubdomainsMatch[2] ?? null;
@@ -3760,13 +3832,13 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
     if (!gate.ok) return json(res, gate.status, gate.body);
     const scope = url.searchParams.get('scope') === 'all' ? 'all' : 'selectable';
     const targetId = url.searchParams.get('target_id');
-    if (!targetId) return json(res, 200, { items: await serviceDeps.testRuns.listChecks({ scope, tenantId: ctx.tenantId }) });
+    if (!targetId) return json(res, 200, { items: withCheckMissingControls(await serviceDeps.testRuns.listChecks({ scope, tenantId: ctx.tenantId })) });
     const owned = await readOwnTarget(ctx, runtimeConfig, serviceDeps, targetId);
     if (owned.missing) return respondPostgresRouteNotWired(res);
     if (!owned.target) return json(res, 404, { error: 'not_found' });
     const declarations = await readTargetDeclarationsForChecks(ctx, runtimeConfig, serviceDeps, targetId);
     const originBindings = await readTargetOriginBindingsForChecks(ctx, runtimeConfig, serviceDeps, targetId);
-    return json(res, 200, { items: await serviceDeps.testRuns.listChecks({ scope, target: owned.target, declarations, originBindings, tenantId: ctx.tenantId }), target_id: targetId });
+    return json(res, 200, { items: withCheckMissingControls(await serviceDeps.testRuns.listChecks({ scope, target: owned.target, declarations, originBindings, tenantId: ctx.tenantId })), target_id: targetId });
   }
   const checkByIdMatch = path.match(/^\/v1\/checks\/([^/]+)$/);
   if (checkByIdMatch && method === 'GET') {
@@ -3774,7 +3846,7 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
     if (!gate.ok) return json(res, gate.status, gate.body);
     const check = getCheckById(decodeURIComponent(checkByIdMatch[1]));
     if (!check) return json(res, 404, { error: 'not_found' });
-    return json(res, 200, { check: withCheckSection(check) });
+    return json(res, 200, { check: withCheckMissingControls([withCheckSection(check)])[0] });
   }
   if (path === '/v1/test-policies' && method === 'GET') {
     const gate = requirePermission(ctx, 'test_policy:read');
@@ -4036,7 +4108,7 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
     if (!gate.ok) return json(res, gate.status, gate.body);
     const f = await serviceDeps.findings.getFinding(ctx, fMatch[1]);
     if (!f) return json(res, 404, { error: 'not_found' });
-    return json(res, 200, f);
+    return json(res, 200, await withMissingControl(runtimeConfig, serviceDeps, ctx, f));
   }
   if (fMatch && method === 'PATCH') {
     const gate = requirePermission(ctx, 'finding:write');

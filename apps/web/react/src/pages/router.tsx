@@ -10,7 +10,6 @@ import {
   ReportsPage,
   SettingsPage,
   StaffSurfacePage,
-  SubscriptionPage,
   SupportPage,
 } from './page-components';
 import { IntegrationPage } from './integrations-page';
@@ -95,7 +94,6 @@ export function RouteView({ route, data, config, session, onRefresh, hydrating }
   }
   if (route === 'audit') return <AuditPage data={data} session={session} config={config} onRefresh={onRefresh} />;
   if (route === 'support') return <SupportPage data={data} session={session} config={config} />;
-  if (route === 'subscription') return <SubscriptionPage data={data} config={config} session={session} />;
   if (route === 'internal-soc') {
     return (
       <SocConsolePage

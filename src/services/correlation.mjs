@@ -6,7 +6,8 @@ import {
 import { verdictSupportsReadiness } from '../lib/readinessVerdicts.mjs';
 import { declaredNetworkPolicyFor } from '../contracts/controlDeclarations.mjs';
 import { inconclusiveReason } from '../lib/inconclusiveReasons.mjs';
-import { originObservationOf } from '../lib/externalObservationOutcomes.mjs';
+import { originObservationOf, WAF_GRADING_VERSION } from '../lib/externalObservationOutcomes.mjs';
+import { markerComparisonComplete } from '../lib/vectorProbes/wafProbeSupport.mjs';
 import { providerDisplayName } from '../lib/edgeDetectionPresenter.mjs';
 import { listProbePerspectives } from '../lib/probePerspectiveRegistry.mjs';
 
@@ -147,6 +148,19 @@ const HIGH_SEVERITY_PORTS = new Set([
   22, 23, 3389, 445, 139, 3306, 1433, 1521, 5432, 6379, 27017, 9200, 2375, 2379, 6443, 10250, 5900, 5985, 389, 636, 2049,
 ]);
 const MANAGED_TRANSFORM_FAMILIES = new Set(['sqli', 'xss', 'path_traversal']);
+const MARKER_CLASS_LABELS = Object.freeze({
+  sqli: 'SQL injection', xss: 'cross-site scripting', path_traversal: 'path traversal', rce: 'remote code execution',
+  command_injection: 'command injection', ldap_injection: 'LDAP injection', ssti: 'server-side template injection',
+  ssrf: 'server-side request forgery', xxe: 'XML external entity', jndi: 'JNDI/Log4Shell lookup', log4shell: 'JNDI/Log4Shell lookup',
+  scanner_signature: 'vulnerability-scanner signature', scanner_user_agent: 'vulnerability-scanner user-agent', nosqli: 'NoSQL injection', jwt: 'JWT tampering',
+  request_smuggling: 'HTTP request smuggling', smuggling: 'HTTP request smuggling', lfi: 'local file inclusion', rfi: 'remote file inclusion',
+});
+
+function markerClassLabel(markerClass) {
+  if (typeof markerClass !== 'string' || !markerClass.trim()) return null;
+  const key = markerClass.trim().toLowerCase();
+  return MARKER_CLASS_LABELS[key] ?? key.replace(/[_-]+/g, ' ');
+}
 const CHALLENGE_ACTIONS = new Set(['challenge', 'block_or_challenge']);
 const FAMILY_KEYS = Object.freeze(['ipv4', 'ipv6']);
 
@@ -198,6 +212,12 @@ function nfwExposed({ port, protocol, family, metadata, extra = '' }) {
 }
 
 function samplesDisagree(metadata, row = null) {
+  const allowed = ['single', 'agree', 'disagree'];
+  if (allowed.includes(row?.sample_agreement)) return row.sample_agreement === 'disagree';
+  const fams = metadata?.families && typeof metadata.families === 'object' ? Object.values(metadata.families) : [];
+  if (fams.length && fams.every((f) => allowed.includes(f?.sample_agreement))) {
+    return fams.some((f) => f?.sample_agreement === 'disagree');
+  }
   return metadata?.sample_agreement === 'disagree' || row?.sample_agreement === 'disagree';
 }
 
@@ -343,15 +363,17 @@ function correlateNfwViolation(probeKind, metadata, declarations) {
     }
     if (!leaks.length) return null;
     const leakingFamilies = [...new Set(leaks.map((row) => row.family))];
-    const primary = leaks[0];
+    const primary = leaks.find((row) => HIGH_SEVERITY_PORTS.has(Number(row.port))) ?? leaks[0];
+    const others = leaks.filter((row) => row !== primary);
     const parityMismatch = metadata?.parity === 'mismatch' && leakingFamilies.length === 1
       && bothFamiliesSampled(metadata, primary.port);
+    const alsoViolated = others.length ? ` Also violated: ${others.map((row) => `tcp/${row.port} (${row.family})`).join(', ')}.` : '';
     return nfwExposed({
       port: primary.port,
       protocol: 'tcp',
       family: primary.family,
       metadata,
-      extra: parityMismatch ? ` IPv6 parity mismatch: ${primary.family} is the leaking family.` : '',
+      extra: `${parityMismatch ? ` IPv6 parity mismatch: ${primary.family} is the leaking family.` : ''}${alsoViolated}`,
     });
   }
 
@@ -474,7 +496,9 @@ function correlateClassMarkerVerdict(metadata) {
       severity: custom ? 'low' : 'medium',
       explanation: custom
         ? "Your custom canary rule for AstraNull's marker was not enforced."
-        : 'Managed-rule marker was not enforced.',
+        : markerClassLabel(metadata?.marker_class)
+          ? `Managed-rule marker for ${markerClassLabel(metadata.marker_class)} was not enforced: the edge let it through to the origin.`
+          : 'Managed-rule marker was not enforced.',
     };
   }
   if (enforcement === 'partial') {
@@ -490,7 +514,9 @@ function correlateClassMarkerVerdict(metadata) {
       severity: 'low',
       explanation: custom
         ? `Your custom canary rule for AstraNull's marker was only partially enforced.${named}`
-        : `Managed-rule marker was only partially enforced.${named}`,
+        : markerClassLabel(metadata?.marker_class)
+          ? `Managed-rule marker for ${markerClassLabel(metadata.marker_class)} was only partially enforced.${named}`
+          : `Managed-rule marker was only partially enforced.${named}`,
     };
   }
   return null;
@@ -509,7 +535,9 @@ function correlateEvasionVerdict(metadata) {
       confidence: 'external_only',
       createsFinding: true,
       severity: medium ? 'medium' : 'low',
-      explanation: `normalization gap for ${transform}`,
+      explanation: markerClassLabel(family)
+        ? `normalization gap for ${transform}: the plain ${markerClassLabel(family)} marker was blocked, but the same marker sent with ${transform} encoding was allowed through.`
+        : `normalization gap for ${transform}`,
     };
   }
   return null;
@@ -567,24 +595,46 @@ function correlateRateLimitCanary(metadata, declarations) {
   return inconclusiveVerdict(`Rate-limit canary sent ${Number.isInteger(requestsSent) ? requestsSent : 'too few'} requests before the window or budget ran out, never exceeding the declared threshold of ${threshold} (window_expired_before_threshold).`);
 }
 
+function axfrLeakingNameservers(metadata) {
+  const names = Array.isArray(metadata?.nameserver_results)
+    ? [...new Set(metadata.nameserver_results.filter((row) => row?.axfr_leak === true && typeof row.nameserver === 'string').map((row) => row.nameserver))]
+    : [];
+  if (!names.length && metadata?.axfr_leak === true && typeof metadata?.nameserver === 'string' && metadata.nameserver.trim()) names.push(metadata.nameserver.trim());
+  return names.length ? ` Nameservers that allowed the transfer: ${names.slice(0, 8).join(', ')}.` : '';
+}
+
 function axfrLeaked(metadata, externalResult) {
   if (metadata?.axfr_leak === true) return true;
   if (Array.isArray(metadata?.nameserver_results) && metadata.nameserver_results.some((row) => row?.axfr_leak === true)) return true;
-  return externalResult === 'connected' && metadata?.axfr_leak !== false && !Array.isArray(metadata?.nameserver_results);
+  return false;
 }
 
 /** AXFR: exposed on any leaking nameserver; protected only when every nameserver was queried and refused. */
 function correlateAxfrVerdict(externalResult, metadata, probeIoObserved) {
-  if (axfrLeaked(metadata, externalResult)) {
+  if (externalResult === 'connected' && probeIoObserved === true && axfrLeaked(metadata, externalResult)) {
     return {
       verdict: 'exposed',
       confidence: 'external_only',
       createsFinding: true,
       severity: 'medium',
-      explanation: 'At least one authoritative nameserver answered a zone transfer (AXFR) request from the internet.',
+      explanation: `At least one authoritative nameserver answered a zone transfer (AXFR) request from the internet.${axfrLeakingNameservers(metadata)}`,
     };
   }
-  if (metadata?.enforcement === 'enforced' && probeIoObserved === true) {
+  const hasRefusalCoverage =
+    metadata?.axfr_refused === true &&
+    Number.isSafeInteger(metadata?.nameservers_total) &&
+    metadata.nameservers_total > 0 &&
+    metadata?.nameservers_queried === metadata.nameservers_total &&
+    Array.isArray(metadata?.nameserver_results) &&
+    metadata.nameserver_results.length > 0 &&
+    (!metadata?.unqueried_nameservers || (Array.isArray(metadata.unqueried_nameservers) && metadata.unqueried_nameservers.length === 0)) &&
+    metadata.nameserver_results.every((row) =>
+      row?.queried === true && row?.axfr_refused === true && row?.axfr_leak !== true &&
+      typeof row?.nameserver === 'string' && row.nameserver.trim().length > 0
+    ) &&
+    new Set(metadata.nameserver_results.map((row) => row.nameserver.trim())).size === metadata.nameservers_total;
+
+  if (probeIoObserved === true && !['error', 'not_run', 'timeout'].includes(externalResult) && hasRefusalCoverage) {
     return {
       verdict: 'protected',
       confidence: 'external_only',
@@ -700,9 +750,105 @@ function withPortResults(verdict, portResults) {
 /**
  * Correlate a verdict from external probe evidence only (ADR-0008: no agents).
  */
+const NEVER_PUBLIC_PORTS = Object.freeze({
+  23: 'Telnet', 445: 'SMB', 2375: 'Docker Engine API', 2379: 'etcd', 6379: 'Redis', 9200: 'Elasticsearch',
+  10250: 'Kubernetes kubelet', 27017: 'MongoDB',
+});
+const NEVER_PUBLIC_SCAN_CHECKS = new Set(['nfw.management_port_exposure.safe', 'l3.firewall_exposure_scan.safe']);
+const UNLIMITED_H2_STREAMS = 2147483647;
+
+function inferredGap(severity, explanation) {
+  return { verdict: 'exposed', confidence: 'external_only', createsFinding: true, severity, explanation, inferred_without_declaration: true };
+}
+
+function neverPublicPortGap(metadata) {
+  if (peerIsCdn(metadata) || samplesDisagree(metadata)) return null;
+  const familyRows = metadata?.families && typeof metadata.families === 'object'
+    ? Object.entries(metadata.families).filter(([, row]) => row && typeof row === 'object' && !row.not_sampled)
+    : [['ipv4', metadata]];
+  const exposed = [];
+  for (const [family, row] of familyRows) {
+    if (row !== metadata && (peerIsCdn(metadata, row) || samplesDisagree(metadata, row))) continue;
+    const open = Array.isArray(row.open_ports) ? row.open_ports.map(Number) : [];
+    const silentOrClosed = ['closed_ports', 'rejected_ports', 'filtered_ports']
+      .some((key) => Array.isArray(row[key]) && row[key].some((port) => !open.includes(Number(port))));
+    if (!silentOrClosed) continue;
+    for (const port of open) {
+      if (NEVER_PUBLIC_PORTS[port] && !exposed.some((item) => item.port === port && item.family === family)) exposed.push({ port, family });
+    }
+  }
+  if (!exposed.length) return null;
+  const listed = exposed.map((item) => `tcp/${item.port} ${NEVER_PUBLIC_PORTS[item.port]} (${item.family})`).join(', ');
+  return inferredGap('high', `Services that should never be reachable from the internet accepted a TCP handshake from ${perspectiveLabel(metadata)}: ${listed}. Other scanned ports were closed or filtered, so this is not an accept-all host.`);
+}
+
+function correlateInferredMissingControl({ checkId, probeKind, externalResult, probeIoObserved, probeMetadata: metadata }) {
+  if (!checkId || probeIoObserved !== true || !metadata || typeof metadata !== 'object') return null;
+  if (metadata.inconclusive_reason || metadata.error_class) return null;
+  if (correlateEvidenceGap(probeKind, metadata) || correlateProbeFailure(externalResult, probeKind, metadata)) return null;
+  if (externalResult !== 'connected') return null;
+  if (NEVER_PUBLIC_SCAN_CHECKS.has(checkId) && probeKind === 'port_scan_bounded') return neverPublicPortGap(metadata);
+  if (checkId === 'reflect.redis_direct_exposure.safe' && probeKind === 'tcp_connect') {
+    const samples = Array.isArray(metadata.samples) ? metadata.samples : [];
+    if (peerIsCdn(metadata) || metadata.sample_agreement !== 'agree' || samples.length < 2
+      || !samples.every((row) => row?.tcp_outcome === 'handshake' && Number(row?.port) === 6379)) return null;
+    return inferredGap('high', `Redis (tcp/6379) accepted a TCP handshake from ${perspectiveLabel(metadata)} on ${samples.length} of ${samples.length} samples; Redis should never be reachable from the internet.`);
+  }
+  if (checkId === 'tls.full_audit.safe' && probeKind === 'tls_audit' && metadata.complete === true) {
+    const issues = Array.isArray(metadata.tls_issues) ? metadata.tls_issues : [];
+    if (issues.includes('cert_expired')) {
+      return inferredGap('medium', `The certificate served on this endpoint expired ${Math.abs(Number(metadata.days_to_expiry))} day(s) ago${metadata.valid_to ? ` (valid to ${metadata.valid_to})` : ''}.`);
+    }
+    if (issues.includes('certificate_not_yet_valid')) {
+      return inferredGap('medium', 'The certificate served on this endpoint is not yet valid.');
+    }
+    return null;
+  }
+  if (checkId === 'dns.secondary_failover.safe' && probeKind === 'dns_failover_posture') {
+    if (metadata.nameserver_count_below_two !== true || metadata.nameserver_count !== 1) return null;
+    return inferredGap('medium', `The zone${metadata.zone ? ` ${metadata.zone}` : ''} is delegated to a single nameserver${Array.isArray(metadata.nameservers) && metadata.nameservers[0] ? ` (${metadata.nameservers[0]})` : ''}, so there is no secondary to answer if it is overwhelmed.`);
+  }
+  if (checkId === 'l7.cors_posture.safe' && probeKind === 'cors_posture_probe') {
+    if (metadata.access_control_allow_origin !== 'https://probe.invalid.astranull' || metadata.credentials_advertised !== true) return null;
+    return inferredGap('medium', "This URL reflected AstraNull's unrelated test Origin in Access-Control-Allow-Origin and allowed credentials, so any website can make credentialed requests to it.");
+  }
+  if (checkId === 'protocol.grpc_reflection_stream.safe' && probeKind === 'grpc_reflection_probe') {
+    if (metadata.reflection_service_exposed !== true || metadata.protocol_identity_confirmed !== true) return null;
+    return inferredGap('low', 'The gRPC server reflection service answered an unauthenticated list_services request, exposing the service catalog to anyone.');
+  }
+  if (checkId === 'tls.renegotiation.readiness' && probeKind === 'tls_session') {
+    if (metadata.tls_protocol !== 'TLSv1.2' || metadata.client_renegotiation_attempted !== true || metadata.client_renegotiation_accepted !== true) return null;
+    return inferredGap('low', 'The TLS 1.2 endpoint accepted a client-initiated renegotiation on an established connection, so one client can force repeated expensive handshakes.');
+  }
+  if (checkId === 'protocol.http2_stream_concurrency.safe' && probeKind === 'http2_settings') {
+    const streams = metadata.max_concurrent_streams;
+    if (!(streams === null || (Number.isFinite(Number(streams)) && Number(streams) >= UNLIMITED_H2_STREAMS)) || !('max_concurrent_streams' in metadata)) return null;
+    return inferredGap('low', 'The HTTP/2 endpoint advertised no SETTINGS_MAX_CONCURRENT_STREAMS limit, so one client can open an unbounded number of concurrent streams.');
+  }
+  return null;
+}
+
+function withInferredMissingControl(input, result) {
+  if (result?.verdict !== 'inconclusive') return result;
+  const inferred = correlateInferredMissingControl(input ?? {});
+  return inferred ? { ...inferred, ...(result.metadata ? { metadata: result.metadata } : {}) } : result;
+}
+
 export function correlateExternalOnlyVerdict(input) {
+  const isNfwKind = NFW_PROBE_KINDS.has(input?.probeKind);
+  if (isNfwKind && (!input?.probeIoObserved || ['error', 'not_run', 'timeout'].includes(input?.externalResult))) {
+    // Without attested I/O (or on a failed/absent probe) a declared deny cannot be proven violated:
+    // fall back to the established inconclusive verdict and never let unattested liveness read as exposed.
+    const single = correlateSingleExternalVerdict(input);
+    const base = single.verdict === 'exposed'
+      ? correlateObservationOnlyVerdict(input?.probeKind, input?.probeMetadata, input?.externalResult)
+      : single;
+    // Keep whatever per-port outcomes the probe did record as evidence; the verdict stays inconclusive.
+    const observedPorts = nfwPortResults(input?.probeKind, input?.probeMetadata, input?.declarations ?? null);
+    return observedPorts ? withPortResults(base, observedPorts) : base;
+  }
   const portResults = nfwPortResults(input?.probeKind, input?.probeMetadata, input?.declarations ?? null);
-  if (!portResults) return correlateSingleExternalVerdict(input);
+  if (!portResults) return withInferredMissingControl(input, correlateSingleExternalVerdict(input));
   const violated = portResults.filter((row) => row.result === 'violated');
   if (violated.length) {
     const severity = violated.some((row) => row.severity === 'high') ? 'high' : 'medium';
@@ -715,7 +861,7 @@ export function correlateExternalOnlyVerdict(input) {
       explanation: `Declared deny violated on ${ports} from ${perspectiveLabel(input.probeMetadata)} (${violated.length} of ${portResults.length} probed declared deny ports); denial cannot be proven from outside.`,
     }, portResults);
   }
-  return withPortResults(correlateSingleExternalVerdict(input), portResults);
+  return withInferredMissingControl(input, withPortResults(correlateSingleExternalVerdict(input), portResults));
 }
 
 function correlateSingleExternalVerdict({
@@ -741,6 +887,27 @@ function correlateSingleExternalVerdict({
   }
   const evidenceGap = correlateEvidenceGap(probeKind, probeMetadata);
   if (evidenceGap) return evidenceGap;
+
+  // Specialized fields cannot override a terminal failure or manufacture attested delivery.
+  const semanticKind = ['waf_class_marker_probe', 'waf_evasion_marker_probe', 'outside_in_waf_scan', 'waf_method_policy_probe', 'rate_limit_canary_probe', 'dns_axfr_leak'].includes(probeKind);
+  if (semanticKind) {
+    const failure = correlateProbeFailure(externalResult, probeKind, probeMetadata);
+    if (failure) return failure;
+    if (probeIoObserved !== true) return inconclusiveVerdict('Control metadata has no attested probe I/O; no enforcement or exposure conclusion is available.');
+    if (probeMetadata.assurance_scope === 'custom_canary_rule' || probeMetadata.setup_required === true) {
+      return inconclusiveVerdict('Custom canary setup is not bound to an installed exact-token rule and placements. This is an inert-token observation only, with no enforcement conclusion or managed-rule coverage; the current declaration workflow cannot establish that binding.');
+    }
+    if (['waf_class_marker_probe', 'outside_in_waf_scan'].includes(probeKind)
+      && (!markerComparisonComplete(probeMetadata) || probeMetadata.grading_version !== WAF_GRADING_VERSION)) {
+      return inconclusiveVerdict('The current marker comparison lacks complete attested planned delivery, healthy controls or compatible grading; excluded placements do not establish enforcement.');
+    }
+    if (probeMetadata.enforcement === 'enforced' && placementsOf(probeMetadata).some((row) => row.outcome === 'allowed' || row.allowed === true)) {
+      return inconclusiveVerdict('Enforcement metadata contradicts an allowed placement; the comparison must be repeated.');
+    }
+    if (probeMetadata.comparison_complete === false || probeMetadata.baseline_health === 'unhealthy') {
+      return inconclusiveVerdict('The specialized control comparison is incomplete or its baseline is unhealthy.');
+    }
+  }
 
   if (checkId === 'nfw.perspective_allowlist.safe') {
     return correlatePerspectiveAllowlist(probeMetadata, declarations, externalResult, env);

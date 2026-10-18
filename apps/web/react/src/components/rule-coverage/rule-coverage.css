@@ -60,3 +60,6 @@ body .badge.rc-status, body [data-ui='badge'].rc-status { display: inline-flex; 
 .rc-table tbody th { background: transparent; }
 body .badge.rc-assurance-partial, body [data-ui='badge'].rc-assurance-partial { display: inline-flex; align-items: center; gap: var(--space-1); border-style: dashed; color: var(--fg); }
 .rc-assurance-reason { display: block; max-width: 24ch; margin-top: var(--space-1); color: var(--fg-2); font-size: var(--text-xs); line-height: 1.4; }
+@media (pointer: coarse) {
+  .rc-legend summary, .rc-more summary { min-height: 44px; }
+}

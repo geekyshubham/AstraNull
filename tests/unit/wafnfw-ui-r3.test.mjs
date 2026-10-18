@@ -165,6 +165,14 @@ describe('custom canary members follow their own run', () => {
     assert.equal(rowEvidenceState(row('waf.crlf_injection_marker.safe', 'run_a'), { coverage, nowMs }), 'fresh');
   });
 
+  it('keeps unresolved member evidence unverified rather than inventing a version mismatch', () => {
+    const unresolved = { custom_canary_rollups: [{ rolled_up_pairs: [{ check_id: 'waf.open_redirect_marker.safe', last_run_id: 'run_b', state: 'unknown', fresh: false, pair_reason: 'invalid_or_unresolved_evidence', verdict: 'exposed' }] }] };
+    assert.equal(rowEvidenceState(row('waf.open_redirect_marker.safe', 'run_b'), { coverage: unresolved, nowMs }), 'unverified');
+    const [member] = customCanaryMembers(unresolved);
+    assert.equal(member.evidence, 'unverified');
+    assert.equal(member.label, 'Unverified, not counted');
+  });
+
   it('lists each member with the run it links to', () => {
     const members = customCanaryMembers(coverage);
     assert.deepEqual(members.map((member) => [member.checkId, member.runId, member.evidence]), [
@@ -173,6 +181,29 @@ describe('custom canary members follow their own run', () => {
     ]);
     assert.equal(members[1].label, 'Older check version, not counted');
     assert.deepEqual(customCanaryMembers(null), []);
+  });
+});
+
+describe('provider observation evidence boundaries', () => {
+  it('keeps unknown hosting neutral when an edge fingerprint is detected', () => {
+    const source = readFileSync(new URL('../../apps/web/react/src/components/targets/domain-protection.tsx', import.meta.url), 'utf8');
+    const observations = source.slice(source.indexOf('export function ProviderObservations('));
+    const setup = observations.slice(observations.indexOf('const edgeProxyRow ='), observations.indexOf('\n  return ('));
+    const rowStart = observations.indexOf('const statusLabel = row.statusLabel;');
+    assert.ok(rowStart >= 0, 'provider status is preserved rather than inferred from another family');
+    const rowCopy = observations.slice(rowStart, observations.indexOf('\n          return (', rowStart));
+    const present = new Function('rows', 'row', 'formatDate', `${setup}\n${rowCopy}\nreturn { statusLabel, metaText };`);
+    for (const [family, status] of [['cloud', 'not_detected'], ['cloud', 'not_recorded'], ['origin_hosting', 'unknown'], ['origin_hosting', 'not_recorded']]) {
+      const row = { family, status, statusLabel: 'Unknown hosting' };
+      const model = present([{ family: 'cdn', status: 'detected', providerName: 'Observed edge' }, row], row, () => 'time');
+      assert.equal(model.statusLabel, row.statusLabel, `${family}/${status}`);
+      assert.match(model.metaText, /edge fingerprint for Observed edge does not establish/);
+      assert.doesNotMatch(`${model.statusLabel} ${model.metaText}`, /masked|Public traffic routes through/i);
+    }
+    const origin = { family: 'origin_hosting', status: 'unknown', statusLabel: 'Unknown' };
+    const unnamed = present([{ family: 'cdn', status: 'detected' }, { family: 'dns', providerName: 'Unrelated DNS provider' }, origin], origin, () => 'time');
+    assert.match(unnamed.metaText, /does not establish origin hosting, reachability, or lockdown/);
+    assert.doesNotMatch(unnamed.metaText, /Unrelated DNS provider/);
   });
 });
 

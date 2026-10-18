@@ -1,0 +1,84 @@
+{
+  "schema": "astranull.efficacy-lab.v1",
+  "lab_id": "tls-proto-lab",
+  "networks": [
+    "anl-tls-proto-lab-net"
+  ],
+  "targets": [
+    {
+      "name": "tls-expired",
+      "address": "172.31.51.10",
+      "hostname": null,
+      "ports": [
+        {
+          "port": 443,
+          "protocol": "tcp",
+          "service": "https"
+        }
+      ],
+      "planted_condition": "X.509 certificate expired on 2026-01-01 GMT (not_valid_after is 290 days in the past relative to 2026-10-17)",
+      "declarations": {},
+      "expectations": [
+        {
+          "check": "tls.full_audit.safe",
+          "expected": "gap",
+          "why": "Certificate expired on 2026-01-01; probeTlsAudit records days_to_expiry < 0 and tls_issues contains 'cert_expired', causing correlateExternalOnlyVerdict to infer a medium severity gap."
+        }
+      ]
+    },
+    {
+      "name": "tls-not-yet-valid",
+      "address": "172.31.51.11",
+      "hostname": null,
+      "ports": [
+        {
+          "port": 443,
+          "protocol": "tcp",
+          "service": "https"
+        }
+      ],
+      "planted_condition": "X.509 certificate not yet valid until 2028-01-01 GMT (not_valid_before is 440 days in the future relative to 2026-10-17)",
+      "declarations": {},
+      "expectations": [
+        {
+          "check": "tls.full_audit.safe",
+          "expected": "gap",
+          "why": "Certificate validity begins 2028-01-01; probeTlsAudit records certificate_not_yet_valid: true and tls_issues contains 'certificate_not_yet_valid', causing correlateExternalOnlyVerdict to infer a medium severity gap."
+        }
+      ]
+    },
+    {
+      "name": "tls-h2-unbounded",
+      "address": "172.31.51.12",
+      "hostname": null,
+      "ports": [
+        {
+          "port": 443,
+          "protocol": "tcp",
+          "service": "https"
+        }
+      ],
+      "planted_condition": "HTTP/2 listener advertising unbounded concurrent streams (SETTINGS_MAX_CONCURRENT_STREAMS = 4294967295) with valid certificate (2025-2028)",
+      "declarations": {},
+      "expectations": [
+        {
+          "check": "tls.full_audit.safe",
+          "expected": "inconclusive_expected",
+          "why": "Certificate validity is current (2025 to 2028); probeTlsAudit observes no expired or not-yet-valid condition, and observation-only probe withholding verdict leaves conclusive result as inconclusive."
+        },
+        {
+          "check": "protocol.http2_stream_concurrency.safe",
+          "expected": "gap",
+          "why": "HTTP/2 listener advertises unbounded concurrent streams (SETTINGS_MAX_CONCURRENT_STREAMS = 4294967295) with valid TLS certificate; ALPN is fixed and independent proof confirms concurrency gap."
+        }
+      ]
+    }
+  ],
+  "verification": [
+    "curl -k -v https://172.31.51.10:443/ from a throwaway container on anl-tls-proto-lab-net shows expire date: Jan 1 00:00:00 2026 GMT (expired)",
+    "curl -k -v https://172.31.51.11:443/ from a throwaway container on anl-tls-proto-lab-net shows start date: Jan 1 00:00:00 2028 GMT (not yet valid)",
+    "curl -k -v https://172.31.51.12:443/ from a throwaway container on anl-tls-proto-lab-net negotiates HTTP/2 with valid cert (2025-2028)",
+    "node:http2 probe with ALPN against 172.31.51.12:443 confirms remote SETTINGS_MAX_CONCURRENT_STREAMS = 4294967295 (unbounded)",
+    "node:http2 probe without ALPN (reproducing safeNetworkProbes.mjs:1211) confirms ERR_HTTP2_ERROR (-505) defect"
+  ]
+}

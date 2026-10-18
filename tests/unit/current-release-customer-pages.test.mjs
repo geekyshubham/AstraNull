@@ -23,7 +23,6 @@ const policyPage = between(pageComponents, 'export function PolicyPage(', 'expor
 const reportsPage = between(pageComponents, 'export function ReportsPage(', 'function expiresAtFromForm(');
 const settingsPage = between(pageComponents, 'export function SettingsPage(', 'export function PolicyPage(');
 const supportPage = between(pageComponents, 'export function SupportPage(', 'const ENTITLEMENT_FEATURES');
-const subscriptionPage = between(pageComponents, 'export function SubscriptionPage(', 'export function StaffSurfacePage(');
 const auditPage = between(governance, 'export function AuditPage(', 'type ReleaseRecordView');
 const notificationsPage = between(governance, 'export function NotificationsPage(', 'function summarizeOperationResult(');
 const releasePage = between(governance, 'export function ReleaseEvidencePage(', 'export function SocConsolePage(');
@@ -244,18 +243,10 @@ describe('support (TF-14)', () => {
     const ownerBranch = between(supportPage, ') : ownerView ? (', ') : (');
     assert.match(ownerBranch, /No support channel is published for this deployment\. Ask the team that operates this AstraNull deployment to publish a support contact/);
     assert.doesNotMatch(ownerBranch, /workspace administrator|deployment administrator/);
-    const noSubscription = between(subscriptionPage, '{ownerView ? (', ') : (');
-    assert.match(noSubscription, /Plans are provisioned by the AstraNull operator for this deployment, not from this portal\./);
-    assert.match(noSubscription, /actionLabel=\{supportContact \? 'Contact support' : undefined\}/);
-    assert.doesNotMatch(noSubscription, /#support|workspace administrator|deployment administrator/);
-    const planChange = between(subscriptionPage, 'title="Change your plan or limits"', '</Card>');
-    assert.match(planChange, /Contact your AstraNull account team/);
-    assert.doesNotMatch(planChange, /workspace administrator|deployment administrator/);
     const users = between(settingsPage, '<CardTitle>Users and sign-in</CardTitle>', '</Card>');
     assert.match(users, /Inviting users, changing roles, and SSO mapping are handled by your AstraNull account team\./);
     assert.match(users, />Contact support</);
     assert.doesNotMatch(users, /workspace administrator|deployment administrator/);
-    assert.match(subscriptionPage, /session\?: Session/);
   });
 
   it('reads a published https or email support channel and never hard-codes a vendor address', () => {
@@ -383,7 +374,7 @@ describe('settings (TF-15)', () => {
   });
 
   it('describes exactly what each retention period purges and warns only for purging rows', () => {
-    assert.match(settingsPage, /Deletes events, evidence vault entries, notification history, and connector poll data older than this\./);
+    assert.match(settingsPage, /Deletes events, evidence vault entries, notification history, connector poll data, and origin clues and saved collection responses older than this\./);
     assert.match(settingsPage, /Generated report snapshots are kept for this period or the metadata period, whichever is longer\./);
     assert.match(settingsPage, /Recorded as your retention policy\. Audit logs are never purged automatically\./);
     assert.match(settingsPage, /Recorded as your retention policy\. SOC authorization packs are never purged automatically\./);
@@ -418,11 +409,8 @@ describe('settings (TF-15)', () => {
 });
 
 describe('plan and usage', () => {
-  it('never renders unknown usage as zero or unlimited and separates access from configuration', () => {
-    assert.match(subscriptionPage, /usage not measured \(not zero\)/);
-    assert.match(subscriptionPage, /limit not recorded \(not unlimited\)/);
-    assert.match(subscriptionPage, /Available does not mean it is configured or working/);
-    assert.doesNotMatch(subscriptionPage, /high_scale_requests_per_month/);
+  it('no longer ships a customer Plan & usage page', () => {
+    assert.doesNotMatch(pageComponents, /export function SubscriptionPage\(|SUBSCRIPTION_PAGE_STYLES|title="Plan & usage"/);
   });
 });
 

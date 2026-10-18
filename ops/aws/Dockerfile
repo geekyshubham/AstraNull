@@ -12,6 +12,11 @@ RUN addgroup -g 10001 -S astranull \
 WORKDIR /app
 
 COPY package.json package-lock.json ./
+COPY scripts/requirements-subdomains.txt /tmp/requirements-subdomains.txt
+RUN apk add --no-cache python3 py3-pip libstdc++ \
+  && python3 -m venv /opt/astranull-subdomains \
+  && /opt/astranull-subdomains/bin/pip install --no-cache-dir -r /tmp/requirements-subdomains.txt \
+  && rm /tmp/requirements-subdomains.txt
 # npm is only needed to install; it is removed so its bundled dependencies never ship
 # in the runtime image (nothing at runtime invokes npm/npx/yarn).
 RUN npm install --global npm@11.18.0 \
@@ -32,6 +37,7 @@ COPY workers ./workers
 USER astranull
 
 ENV NODE_ENV=production \
+    ASTRANULL_SUBDOMAIN_PYTHON=/opt/astranull-subdomains/bin/python \
     PORT=8080
 
 EXPOSE 8080

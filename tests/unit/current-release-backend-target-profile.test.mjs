@@ -17,6 +17,7 @@ import {
   patchTargetGroup,
 } from '../../src/services/targetGroups.mjs';
 import { getStore } from '../../src/store.mjs';
+import { sanitizeProbeMetadata } from '../../workers/probe-worker.mjs';
 import { freshStore } from '../helpers/reset.mjs';
 import { assuranceWorld, addAssuredObservation } from '../helpers/assurance-fixtures.mjs';
 import { WAF_GRADING_VERSION, SIGNATURE_CORPUS_VERSION } from '../../src/lib/externalObservationOutcomes.mjs';
@@ -370,10 +371,13 @@ describe('protection profile derivation', () => {
   it('uses the same catalog version derivation as run creation and distinguishes missing and changed versions', () => {
     const check = fixtureDefinition({ check_id: 'waf.digest', vector_family: 'waf', supported_targets: ['fqdn'], probe_profile: { scenario_family: 'marker' } });
     const stamp = deriveRunEvidenceStamp(check, {}, { probeMode: 'signed-worker', scenarioVersion: 'marker' });
+    const metadata = addAssuredObservation(assuranceWorld()).event.metadata;
     const coverageFor = (overrides) => deriveProtectionProfile({
       now: NOW, target, catalog: [check], observations: [{
         check_id: check.check_id,
-        run: { producer_kind: 'signed_probe', id: 'run_digest', status: 'verdicted', completed_at: FRESH, ...stamp, probe_metadata: { classifier_version: 'marker-comparison-v4', comparison_complete: true, planned_marker_legs: 2, completed_marker_legs: 2, permitted_baseline_health: 'healthy' }, ...overrides },
+        evidence_verified: true,
+        run: { producer_kind: 'signed_probe', id: 'run_digest', status: 'verdicted', completed_at: FRESH, ...stamp,
+          readiness_result_metadata: [metadata], probe_metadata: metadata, ...overrides },
         verdict: { verdict: 'edge_exposed', evidence_ids: ['ev_digest'] },
       }],
     }).coverage.pairs[0];
@@ -457,6 +461,38 @@ describe('protection profile derivation', () => {
     assert.equal(profile.effectiveness.percentage_reason, 'not_recorded');
     assert.notEqual(profile.effectiveness.percentage, coverage.percentage);
     assert.equal(coverage.runtime_launch_gates, 'not_evaluated');
+  });
+
+  it('records the cloud source from the stored cloud type when the layer lost its sources', () => {
+    const { protection_profile: profile } = deriveProtectionProfile({
+      now: NOW,
+      target,
+      catalog: CATALOG,
+      edgeRow: {
+        status: 'detected',
+        waf_status: 'not_detected',
+        cdn_status: 'detected',
+        cdn_provider: 'google',
+        cdn_type: 'address_range',
+        observed_at: FRESH,
+        test_run_id: 'run_edge',
+        evidence_json: {
+          cloud: { status: 'detected', provider: 'google', type: 'address_range' },
+          layers: [{ family: 'cloud', provider: 'google', confidence: 0.7 }],
+        },
+      },
+      policies: [],
+      observations: [],
+    });
+    assert.deepEqual(profile.families.cloud.sources, ['address_range']);
+    assert.deepEqual(profile.families.cdn.sources, ['address_range']);
+  });
+
+  it('keeps edge layer sources through the probe worker metadata sanitizer', () => {
+    const sanitized = sanitizeProbeMetadata({
+      edge_signature: { layers: [{ family: 'cloud', provider: 'google', confidence: 0.7, sources: ['address_range'] }] },
+    });
+    assert.deepEqual(sanitized.edge_signature.layers[0].sources, ['address_range']);
   });
 
   it('separates applicable, excluded, incompatible, stale, and zero denominators', () => {
@@ -728,7 +764,7 @@ describe('actual signed proof in the dev target profile reader', () => {
     world.verdicts.push({ ...world.verdicts[0], id: 'newer_unresolved_verdict', verdict: 'edge_protected',
       evidence_ids: ['unresolved_evidence'], created_at: new Date().toISOString() });
     const result = pair(world);
-    assert.equal(result.state, 'unknown'); assert.equal(result.pair_reason, 'no_evidence');
+    assert.equal(result.state, 'unknown'); assert.equal(result.pair_reason, 'invalid_or_unresolved_evidence');
     assert.equal(result.live_external, false);
   });
   it('never credits unresolved, cross-run, cross-tenant, wrong/missing nonce, unsigned, missing-ingestion, future or incomplete proof', () => {

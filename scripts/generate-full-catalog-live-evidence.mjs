@@ -28,16 +28,16 @@ const CATALOG_PATH = 'src/lib/data/vectorCatalog.generated.mjs';
 const CATALOG_ABSOLUTE_PATH = path.join(REPO_ROOT, CATALOG_PATH);
 
 export const GENERATOR_PATH = 'scripts/generate-full-catalog-live-evidence.mjs';
-export const GENERATOR_SCHEMA = 'astranull.full-catalog-live-evidence.v2';
+export const GENERATOR_SCHEMA = 'astranull.full-catalog-live-evidence.v3';
 export const ARTIFACT_TYPE = 'astranull_full_catalog_target_evaluation';
-export const ARTIFACT_SCHEMA_VERSION = 3;
+export const ARTIFACT_SCHEMA_VERSION = 4;
 export const EXPECTED_CATALOG_ROWS = 721;
-export const EXPECTED_SAFE_CHECK_RESULTS = 167;
+export const EXPECTED_SAFE_CHECK_RESULTS = 165;
 export const EXPECTED_DISPOSITIONS = Object.freeze({
-  safe_runnable: 373,
+  safe_runnable: 364,
   additional_input_required: 10,
   target_incompatible: 0,
-  soc_gated: 245,
+  soc_gated: 254,
   monitor_only: 49,
   not_runnable: 44,
 });
@@ -58,9 +58,9 @@ const EVALUATION_STATUS_BY_DISPOSITION = Object.freeze({
 
 const EXPECTED_EVALUATION_STATUS = Object.freeze({
   additional_input_required: 10,
-  evaluated_bounded: 373,
+  evaluated_bounded: 364,
   monitor_only_not_executed: 49,
-  soc_gated_not_executed: 245,
+  soc_gated_not_executed: 254,
   not_runnable: 44,
 });
 

@@ -10,8 +10,9 @@ import { checkExclusionReason, checkSupportsTarget } from './check-picker.mjs';
 import { checkPrerequisite, needsTargetAnswer } from './control-declarations.mjs';
 import { MAX_SCAN_CHECKS } from './validation-scan.mjs';
 import { requiredInputMissing } from './missing-input.mjs';
-import { plainCheckName, plainVerdictShortLabel } from './plain-language.mjs';
-import { OBSERVATION_ONLY_PROBE_KINDS } from '../../../../../src/lib/probeEvidenceTiers.mjs';
+import { plainVerdictShortLabel } from './plain-language.mjs';
+import { checkPresentation } from '../../../../../src/lib/checkPresentation.mjs';
+import { OBSERVATION_ONLY_PROBE_KINDS, isVerdictCapableProbeKind } from '../../../../../src/lib/probeEvidenceTiers.mjs';
 
 export const EDGE_DETECTION_CHECK_ID = 'waf.fingerprint.safe';
 export const ORIGIN_LOCKDOWN_CHECK_ID = 'nfw.origin_lockdown.safe';
@@ -50,6 +51,7 @@ export const ROW_STATUS_META = Object.freeze({
   inconclusive: { label: 'Inconclusive', tone: 'warn' },
   not_tested: { label: 'Not tested', tone: 'muted' },
   observed: { label: 'Observed', tone: 'muted' },
+  retained: { label: 'Retained · not current', tone: 'muted' },
   running: { label: 'Running', tone: 'info' },
   queued: { label: 'Queued', tone: 'muted' },
   waiting: { label: 'Waiting', tone: 'warn' },
@@ -58,7 +60,7 @@ export const ROW_STATUS_META = Object.freeze({
   cancelled: { label: 'Cancelled', tone: 'muted' },
   not_run: { label: 'Not run yet', tone: 'muted' },
 });
-export const ROW_STATUS_ORDER = ['failed', 'running', 'waiting', 'queued', 'inconclusive', 'not_tested', 'blocked', 'passed', 'observed', 'skipped', 'cancelled', 'not_run'];
+export const ROW_STATUS_ORDER = ['failed', 'running', 'waiting', 'queued', 'inconclusive', 'not_tested', 'blocked', 'passed', 'observed', 'retained', 'skipped', 'cancelled', 'not_run'];
 
 function text(value) {
   return String(value ?? '').trim();
@@ -95,7 +97,10 @@ function tierOf(check) {
 function isReadinessCapable(check) {
   return check?.observation_only !== true
     && check?.probe_profile?.observation_only !== true
+    && check?.readiness_conclusion !== false
     && check?.probe_profile?.readiness_conclusion !== false
+    && check?.produces_verdict !== false
+    && check?.probe_profile?.produces_verdict !== false
     && tierOf(check) === 'E3';
 }
 
@@ -185,6 +190,20 @@ export function targetCheckRequirement(check, target, context = null) {
   return '';
 }
 
+/** Catalog visibility is not execution eligibility; input-complete answers do not waive support or target restrictions. */
+export function targetCheckAvailability(check, target, context = null) {
+  const unavailable = (label, detail) => ({ state: 'unavailable', label, detail, missing: [], reason: '', cta: '', section: '' });
+  const exclusion = checkExclusionReason(check);
+  if (exclusion === 'soc_gated' || exclusion === 'not_customer_runnable') return checkPrerequisite(check, context ?? {});
+  if (exclusion) return unavailable(exclusion === 'monitor_only' ? 'Monitor only' : 'Execution unavailable', 'This definition is visible for reference, but direct customer execution is unavailable.');
+  if (!checkSupportsTarget(check, target)) return unavailable('Different target type', `Declare a compatible endpoint (${list(check.supported_targets).join(', ')}). This check cannot run on this target.`);
+  if (isDeclarationOnlyCheck(check) || check.probe_profile?.kind === 'ops_readiness') return unavailable('Declaration only', 'Declaration or operational evidence only; sends no external traffic and cannot be started here.');
+  const prerequisite = checkPrerequisite(check, { ...(context ?? {}), target });
+  if (prerequisite.state !== 'ready') return prerequisite;
+  const requirement = targetCheckRequirement(check, target, context);
+  return requirement ? unavailable('Dedicated workflow', requirement) : prerequisite;
+}
+
 /** Readiness checks ordered with origin exposure first, capped at the scan contract limit. */
 export function runAllChecks(checks, target, context = null) {
   return individualChecks(checks, target, context)
@@ -223,11 +242,27 @@ export function isViolationOnlyCheck(check) {
   return id.startsWith('nfw.') || VIOLATION_FAMILIES.has(family) || ORIGIN_LOCKDOWN_CHECK_IDS.has(id);
 }
 
+function producesVerdict(check) {
+  return check?.produces_verdict !== false && check?.probe_profile?.produces_verdict !== false
+    && !isDeclarationOnlyCheck(check) && isVerdictCapableProbeKind(text(check?.probe_profile?.kind));
+}
+
 function classifyVerdict(verdict, check) {
-  // Retained legacy grades cannot turn a currently observational check into protection credit,
-  // but a violation-only check may still report the exposure it was built to find.
+  // Producing a scoped verdict is separate from readiness credit. In particular the E2
+  // method-policy probe grades its declared policy, but cannot establish readiness.
+  if (check?.produces_verdict === false || check?.probe_profile?.produces_verdict === false) {
+    // Preserve historical publications as history. Current setup-only definitions must
+    // neither re-grade an old gap/pass nor relabel it as a new current observation.
+    return PASS_VERDICTS.has(verdict.toLowerCase()) || FAIL_VERDICTS.has(verdict.toLowerCase()) ? 'retained' : 'observed';
+  }
   if (tierOf(check) === 'E2' || OBSERVATION_ONLY_PROBE_KINDS.includes(check?.probe_profile?.kind)) {
-    return isViolationOnlyCheck(check) && FAIL_VERDICTS.has(verdict.toLowerCase()) ? 'failed' : 'observed';
+    const key = verdict.toLowerCase();
+    if (text(check?.probe_profile?.kind) === 'waf_method_policy_probe') {
+      if (PASS_VERDICTS.has(key)) return 'passed';
+      if (FAIL_VERDICTS.has(key)) return 'failed';
+      return 'inconclusive';
+    }
+    return isViolationOnlyCheck(check) && FAIL_VERDICTS.has(key) ? 'failed' : 'observed';
   }
   if (isDeclarationOnlyCheck(check)) return 'inconclusive';
   const key = verdict.toLowerCase();
@@ -259,8 +294,10 @@ function rowFromStep(step, check) {
   const missingInput = status === 'verdicted' ? requiredInputMissing(step) : null;
   let rowStatus = STEP_STATUS[status] ?? 'queued';
   if (status === 'verdicted') rowStatus = missingInput ? 'not_tested' : verdictText ? classifyVerdict(verdictText, check) : 'inconclusive';
+  const unverified = ['passed', 'failed', 'retained'].includes(rowStatus) && verdictEvidenceIds(step).length === 0;
   return {
-    status: rowStatus,
+    status: unverified ? 'retained' : rowStatus,
+    coverageReason: unverified ? 'no_evidence' : '',
     verdict: verdictText,
     explanation: missingInput ? missingInput.message : text(verdict?.explanation),
     missingInput,
@@ -289,9 +326,11 @@ function rowFromRun(run, check) {
   else if (missingInput) rowStatus = 'not_tested';
   // A verdict without cited evidence is not a result (same rule as the run tables).
   else if (published && verdictEvidenceIds(run).length > 0) rowStatus = classifyVerdict(verdictText, check);
+  else if (published && ['passed', 'failed', 'retained'].includes(classifyVerdict(verdictText, check))) rowStatus = 'retained';
   else rowStatus = tierOf(check) === 'E2' ? 'observed' : 'inconclusive';
   return {
     status: rowStatus,
+    coverageReason: rowStatus === 'retained' && verdictEvidenceIds(run).length === 0 ? 'no_evidence' : '',
     verdict: published ? verdictText : '',
     explanation: missingInput ? missingInput.message : text(record(run.verdict)?.explanation),
     missingInput,
@@ -317,10 +356,10 @@ function emptyRow() {
 }
 
 /**
- * One row per run-all check. The latest scan's step wins unless a newer standalone run of the
+ * One row per supplied catalog definition. The latest scan's step wins unless a newer standalone run of the
  * same check exists (for example the automatic edge detection after a scan finished).
  */
-export function buildCheckRows({ checks, scan = null, runs = [] }) {
+export function buildCheckRows({ checks, scan = null, runs = [], coverage = null }) {
   const stepByCheck = new Map(list(scan?.steps).map((step) => [text(step.check_id), step]));
   const latestRuns = latestRunByCheck(runs);
   const scanStartedAt = text(scan?.created_at ?? scan?.started_at);
@@ -330,15 +369,31 @@ export function buildCheckRows({ checks, scan = null, runs = [] }) {
     const run = latestRuns.get(checkId) ?? null;
     const runIsNewer = run && text(step?.test_run_id) !== text(run.id) && (!scanStartedAt || runTime(run).localeCompare(scanStartedAt) > 0);
     const base = step && !runIsNewer ? rowFromStep(step, check) : run ? rowFromRun(run, check) : emptyRow();
-    const meta = ROW_STATUS_META[base.status] ?? ROW_STATUS_META.not_run;
+    const index = pairIndex(coverage);
+    const directPair = index.direct.get(checkId);
+    const candidates = index.members.get(checkId) ?? [];
+    const pair = directPair && (!text(directPair.last_run_id) || text(directPair.last_run_id) === base.runId) ? directPair
+      : candidates.find((entry) => text(entry.last_run_id) === base.runId) ?? candidates.find((entry) => !text(entry.last_run_id));
+    const retained = ['passed', 'failed', 'retained'].includes(base.status) && pair
+      && (pair.live_external === false || ['stale', 'partial', 'unknown'].includes(text(pair.state)) || pair.fresh === false || Boolean(text(pair.version_gap)));
+    const status = retained ? 'retained' : base.status;
+    const meta = ROW_STATUS_META[status] ?? ROW_STATUS_META.not_run;
+    const presentation = checkPresentation(check);
     return {
       ...base,
+      status,
+      recordedStatus: base.status,
+      coverageReason: retained ? text(pair.pair_reason) : base.coverageReason || '',
       checkId,
-      name: plainCheckName(text(check.name) || checkId),
-      description: text(check.description),
+      name: presentation.name,
+      description: presentation.purpose,
+      limitations: presentation.limitations,
+      nextStep: presentation.next_step,
+      mechanism: presentation.mechanism,
       verdictLogic: text(check.verdict_logic),
-      expectedBehavior: text(check.default_expected_behavior ?? base.expectedBehavior),
+      expectedBehavior: base.expectedBehavior || text(check.default_expected_behavior),
       tier: tierOf(check),
+      producesVerdict: producesVerdict(check),
       readinessCapable: isReadinessCapable(check),
       probeKind: text(check.probe_profile?.kind),
       markerClass: text(check.probe_profile?.marker_class),
@@ -352,7 +407,7 @@ export function buildCheckRows({ checks, scan = null, runs = [] }) {
   });
 }
 
-const RECORDED_RESULT_STATUSES = new Set(['passed', 'failed', 'inconclusive']);
+const RECORDED_RESULT_STATUSES = new Set(['passed', 'failed', 'inconclusive', 'retained']);
 const STARTER_PROBE_KIND = 'waf_class_marker_probe';
 
 /**
@@ -442,14 +497,16 @@ function pairIndex(coverage) {
 
 /** Whether a recorded pass/fail still counts: server pair or rolled-up member state, else the row's age. */
 export function rowEvidenceState(row, { coverage = null, nowMs = Date.now() } = {}) {
-  if (!['passed', 'failed'].includes(row?.status)) return 'none';
+  if (!['passed', 'failed', 'retained'].includes(row?.status)) return 'none';
+  if (row.status === 'retained' && row.coverageReason === 'no_evidence') return 'unverified';
   const index = pairIndex(coverage);
   const pair = index.direct.get(text(row.checkId));
   if (pair && (!text(pair.last_run_id) || text(pair.last_run_id) === text(row.runId))) {
     const state = text(pair.state);
-    if (state === 'conclusive') return 'fresh';
     if (state === 'stale') return 'stale';
-    if (state === 'partial' || state === 'unknown') return 'version_gap';
+    if (state === 'partial') return 'version_gap';
+    if (state === 'unknown' || pair.live_external === false) return 'unverified';
+    if (state === 'conclusive') return row.status === 'retained' ? 'unverified' : 'fresh';
   }
   // A member speaks for the run the server graded; another run of the same check falls back to its own age.
   const candidates = index.members.get(text(row.checkId)) ?? [];
@@ -457,10 +514,12 @@ export function rowEvidenceState(row, { coverage = null, nowMs = Date.now() } = 
     ?? candidates.find((entry) => !text(entry.last_run_id));
   if (member) {
     const state = text(member.state);
-    if (text(member.version_gap) || state === 'partial' || state === 'unknown') return 'version_gap';
+    if (state === 'unknown' || member.live_external === false) return 'unverified';
+    if (text(member.version_gap) || state === 'partial') return 'version_gap';
     if (member.fresh !== true || state === 'stale') return 'stale';
-    return 'fresh';
+    return row.status === 'retained' ? 'unverified' : 'fresh';
   }
+  if (row.status === 'retained') return 'unverified';
   const finished = Date.parse(text(row.finishedAt) || text(row.startedAt));
   if (!Number.isFinite(finished)) return 'version_gap';
   return nowMs - finished > freshnessWindowMs(coverage) ? 'stale' : 'fresh';
@@ -470,6 +529,7 @@ const MEMBER_STATE_COPY = Object.freeze({
   fresh: Object.freeze({ label: 'Current, counted' }),
   stale: Object.freeze({ label: 'Stale, not counted' }),
   version_gap: Object.freeze({ label: 'Older check version, not counted' }),
+  unverified: Object.freeze({ label: 'Unverified, not counted' }),
 });
 
 /** Managed-rule markers that older coverage data may still roll into a custom-canary rollup. */
@@ -500,7 +560,7 @@ export function customCanaryMembers(coverage, { checks = [] } = {}) {
       if (!checkId || seen.has(key) || managed.has(checkId) || isManagedMarker(member)) continue;
       seen.add(key);
       const state = text(member.state);
-      const evidence = text(member.version_gap) || state === 'partial' || state === 'unknown' ? 'version_gap' : member.fresh !== true || state === 'stale' ? 'stale' : 'fresh';
+      const evidence = state === 'unknown' || member.live_external === false ? 'unverified' : text(member.version_gap) || state === 'partial' ? 'version_gap' : member.fresh !== true || state === 'stale' ? 'stale' : 'fresh';
       out.push({ checkId, runId, verdict: text(member.verdict), observedAt: text(member.observed_at), evidence, ...MEMBER_STATE_COPY[evidence] });
     }
   }
@@ -534,7 +594,7 @@ function tallyRules(rows, keyOf, options) {
     const fresh = states.filter((entry) => entry.evidence === 'fresh');
     if (fresh.some((entry) => entry.row.status === 'failed')) tally.notEnforced += 1;
     else if (fresh.some((entry) => entry.row.status === 'passed')) tally.enforced += 1;
-    else if (states.some((entry) => ['stale', 'version_gap'].includes(entry.evidence))) tally.ignored += 1;
+    else if (states.some((entry) => ['stale', 'version_gap', 'unverified'].includes(entry.evidence))) tally.ignored += 1;
     else if (members.some((row) => row.status === 'inconclusive')) tally.inconclusive += 1;
     else tally.notRun += 1;
   }
@@ -566,7 +626,7 @@ export function wafRuleEnforcement(rows, options = {}) {
 function shareSuffix(tally) {
   const parts = [];
   parts.push(`${tally.inconclusive} inconclusive`);
-  if (tally.ignored) parts.push(`${tally.ignored} not counted (stale or older check version)`);
+  if (tally.ignored) parts.push(`${tally.ignored} not counted (stale, version-mismatched or unverified)`);
   if (tally.notRun) parts.push(`${tally.notRun} not run`);
   return parts.join(' · ');
 }
@@ -613,7 +673,7 @@ function layerEfficacy(layer, rows, edge, exposed, options) {
   const layerRows = list(rows).filter((row) => inLayer(row, layer));
   const graded = layerRows.map((row) => ({ row, evidence: rowEvidenceState(row, options) }));
   const fresh = graded.filter((entry) => entry.evidence === 'fresh').map((entry) => entry.row);
-  const ignored = graded.filter((entry) => ['stale', 'version_gap'].includes(entry.evidence)).length;
+  const ignored = graded.filter((entry) => ['stale', 'version_gap', 'unverified'].includes(entry.evidence)).length;
   const inconclusive = layerRows.filter((row) => row.status === 'inconclusive').length;
   let passed = fresh.filter((row) => row.status === 'passed').length;
   let failed = fresh.length - passed;
@@ -670,7 +730,7 @@ function plural(count, one, many) {
 
 export function efficacySentence(efficacy) {
   const thing = efficacy.layer === 'waf' ? 'WAF checks' : 'edge checks';
-  const share = [`${efficacy.inconclusive} inconclusive`, efficacy.ignored ? `${efficacy.ignored} not counted (stale or older check version)` : ''].filter(Boolean).join(' · ');
+  const share = [`${efficacy.inconclusive} inconclusive`, efficacy.ignored ? `${efficacy.ignored} not counted (stale, version-mismatched or unverified)` : ''].filter(Boolean).join(' · ');
   if (efficacy.status === 'unknown') return 'No evidence yet. Run the checks to measure it.';
   if (efficacy.status === 'absent') return `No ${efficacy.layer === 'waf' ? 'WAF' : 'CDN'} was detected in front of this domain, and no check has measured blocking yet.`;
   if (efficacy.status === 'present_unmeasured') return 'Detected in front of this domain, but no check has tested whether it blocks anything. Run the checks to measure it.';

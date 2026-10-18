@@ -9,11 +9,13 @@ import { validateProbeResultBody } from '../../src/lib/probeResultValidation.mjs
 import { correlateExternalOnlyVerdict } from '../../src/services/correlation.mjs';
 import { deriveProtectionProfile } from '../../src/services/protectionProfile.mjs';
 import { executeProbeForJob } from '../../workers/probe-worker.mjs';
+import { assuranceWorld, addAssuredObservation } from '../helpers/assurance-fixtures.mjs';
 
 test('transport-only observations cannot depress readiness coverage or inflate it with a passing legacy verdict', () => {
   const transport = { check_id: 'transport', version: '1', vector_family: 'l7', supported_targets: ['fqdn'], probe_profile: { kind: 'http_head' } };
-  const semantic = { ...structuredClone(getCheckById('waf.http_method_policy_marker.safe')), check_id: 'semantic', version: '1' };
-  const run = { ...deriveRunEvidenceStamp(semantic, undefined, { probeMode: 'signed-worker', scenarioVersion: approvedScenarioVersion(semantic) }), status: 'verdicted', completed_at: '2026-10-04T10:00:00Z', check_version: '1', producer_kind: 'signed_probe', probe_external_result: 'not_run', probe_metadata: { classifier_version: 'marker-comparison-v4', comparison_complete: true, planned_marker_legs: 2, completed_marker_legs: 2, permitted_baseline_health: 'healthy' } };
+  const semantic = { ...structuredClone(getCheckById('waf.sqli_managed_marker.safe')), check_id: 'semantic', version: '1' };
+  const metadata = addAssuredObservation(assuranceWorld()).event.metadata;
+  const run = { ...deriveRunEvidenceStamp(semantic, undefined, { probeMode: 'signed-worker', scenarioVersion: approvedScenarioVersion(semantic) }), status: 'verdicted', completed_at: '2026-10-04T10:00:00Z', check_version: '1', producer_kind: 'signed_probe', probe_external_result: 'not_run', probe_metadata: metadata, readiness_result_metadata: [metadata] };
   const { coverage } = deriveProtectionProfile({
     now: '2026-10-04T11:00:00Z', target: { id: 'tgt', kind: 'fqdn' }, catalog: [transport, semantic],
     observations: [

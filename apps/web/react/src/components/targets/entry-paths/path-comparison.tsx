@@ -45,6 +45,7 @@ import { EvidenceRefList, FailureNotice, LimitationList, useStickySelection } fr
 const SCENARIO_PATTERN = /^[a-z0-9][a-z0-9_.:-]{0,95}$/;
 const MAX_PATHS = 32;
 const POLL_MS = 5000;
+const pairedScenario = (value: string) => /^(?:origin\.identity_pair\.(?:head|get)\.v1|origin-identity-(?:head|get)-v1)$/.test(value.trim());
 
 type ListState = { state: 'loading' } | { state: 'ready'; items: PathComparison[]; nextCursor: string } | { state: 'failed'; failure: PvFailure };
 type DetailState = { state: 'idle' } | { state: 'loading' } | { state: 'ready'; value: PathComparison } | { state: 'failed'; failure: PvFailure };
@@ -176,7 +177,9 @@ export function PathComparisonPanel({
     const errors: typeof draftErrors = {};
     const included = [...new Set([draft.primary, ...draft.included])].filter((id) => byId.get(id)?.status === 'active');
     if (!draft.primary || !byId.get(draft.primary)) errors.primary = 'Choose the primary route to compare against.';
-    if (included.length < 2) errors.included = 'Include the primary route and at least one other declared path.';
+    if (pairedScenario(draft.scenario)) {
+      if (included.length !== 1 || byId.get(draft.primary)?.relation_kind !== 'origin') errors.included = 'Select exactly one declared origin relation. Its protected baseline is included within the paired job.';
+    } else if (included.length < 2) errors.included = 'Include the primary route and at least one other declared path.';
     if (included.length > MAX_PATHS) errors.included = `A comparison covers at most ${MAX_PATHS} paths.`;
     if (!SCENARIO_PATTERN.test(draft.scenario.trim())) errors.scenario = 'Use a catalog scenario id, for example the marker scenario of an approved check.';
     setDraftErrors(errors);
@@ -195,6 +198,7 @@ export function PathComparisonPanel({
     setError('');
     try {
       const plan = await planEntryPathComparison(config, session, request);
+      if (pairedScenario(request.expectation.scenario) && plan.items.some((item) => item.eligible && !item.paired_plan)) throw new Error('The server did not return both reviewed destinations and limits. No paired check can start from this incomplete plan.');
       setReview({ request, plan });
     } catch (err) {
       setError(writeErrorCopy(pvErrorCode(err), apiErrorMessage(err, 'The plan could not be prepared. Nothing was started.')));
@@ -275,10 +279,19 @@ export function PathComparisonPanel({
     if (selectedId) void loadDetail(selectedId, undefined, true);
   }
 
+  const hasOrigin = active.some((path) => path.relation_kind === 'origin');
+  const isPaired = pairedScenario(draft.scenario);
   const startBlocker = !canStart ? 'Your role cannot start checks.'
     : !ownershipDone ? 'This target’s ownership is not verified, so checks cannot start from it.'
-      : active.length < 2 ? 'Declare at least two active entry paths to compare them.' : '';
-  const needsSecondPath = canStart && ownershipDone && active.length < 2 && list.state === 'ready' && !list.items.length;
+      : active.length < 2 && !hasOrigin ? 'Declare two active entry paths, or one verified origin relation for a paired identity check.' : '';
+  const needsSecondPath = canStart && ownershipDone && active.length < 2 && !hasOrigin && list.state === 'ready' && !list.items.length;
+
+  function chooseScenario(scenario: string) {
+    const paired = pairedScenario(scenario);
+    const primary = paired ? active.find((path) => path.relation_kind === 'origin') : active.find((path) => path.relation_kind === 'primary_route') ?? active[0];
+    setDraft((current) => ({ ...current, scenario, primary: primary?.id ?? '', included: primary ? [primary.id] : [], outcomes: paired ? defaultOutcomes(undefined) : defaultOutcomes(primary) }));
+    setDraftErrors({});
+  }
 
   if (!active.length && list.state === 'ready' && !list.items.length && !composing) return null;
 
@@ -287,7 +300,7 @@ export function PathComparisonPanel({
       <header className="td-section-head">
         <div>
           <h3 id="pv-compare-title">Entry-path comparisons</h3>
-          <p>Compare the primary route with other declared paths under one scenario. A primary-route result never counts for a path that was not tested.</p>
+          <p>Compare declared paths under one scenario, or review a paired identity check for one verified origin relation. Results cover only the exact paths tested.</p>
         </div>
         {!composing ? (
           <Button size="sm" variant="secondary" disabled={Boolean(startBlocker)} title={startBlocker || undefined} onClick={() => openCompose()}>Plan a comparison</Button>
@@ -315,15 +328,16 @@ export function PathComparisonPanel({
         <form className="pv-form" noValidate onSubmit={(event) => { event.preventDefault(); void reviewPlan(requestFromDraft()); }} aria-labelledby="pv-compose-title">
           <h3 id="pv-compose-title" ref={composeHeading} tabIndex={-1}>Plan a comparison</h3>
           <p className="pv-copy">Planning is passive. You review the exact checks, targets and upper bounds before anything starts.</p>
+          <label className="td-field"><span id="pv-mode-label">Comparison mode</span><select aria-labelledby="pv-mode-label" value={isPaired ? (draft.scenario.includes('get') ? 'origin.identity_pair.get.v1' : 'origin.identity_pair.head.v1') : 'catalog'} onChange={(event) => chooseScenario(event.target.value === 'catalog' ? '' : event.target.value)}><option value="catalog">Catalog scenario across declared paths</option><option value="origin.identity_pair.head.v1">Origin identity · two HEAD requests</option><option value="origin.identity_pair.get.v1">Origin identity · two bounded GET requests</option></select></label>
           <label className="td-field">
-            <span>Primary route</span>
-            <select value={draft.primary} aria-invalid={draftErrors.primary ? true : undefined} aria-describedby="pv-primary-help" onChange={(event) => setDraft((current) => ({ ...current, primary: event.target.value, included: [...new Set([event.target.value, ...current.included])] }))}>
-              <option value="">Choose the primary route</option>
-              {active.map((path) => <option key={path.id} value={path.id}>{pathLabel(path, path.id)}</option>)}
+            <span>{isPaired ? 'Declared origin path' : 'Primary route'}</span>
+            <select value={draft.primary} aria-invalid={draftErrors.primary ? true : undefined} aria-describedby="pv-primary-help" onChange={(event) => setDraft((current) => ({ ...current, primary: event.target.value, included: isPaired ? [event.target.value] : [...new Set([event.target.value, ...current.included])] }))}>
+              <option value="">{isPaired ? 'Choose an origin relation' : 'Choose the primary route'}</option>
+              {active.filter((path) => !isPaired || path.relation_kind === 'origin').map((path) => <option key={path.id} value={path.id}>{pathLabel(path, path.id)}</option>)}
             </select>
-            <span id="pv-primary-help" className={draftErrors.primary ? 'td-form-error' : 'td-muted small'}>{draftErrors.primary ?? 'Its healthy, enforcing result is the reference for every other path.'}</span>
+            <span id="pv-primary-help" className={draftErrors.primary ? 'td-form-error' : 'td-muted small'}>{draftErrors.primary ?? (isPaired ? 'The same job compares the protected hostname with this verified bound IP; it does not start an extra primary-route job.' : 'Its healthy, enforcing result is the reference for every other path.')}</span>
           </label>
-          <fieldset aria-describedby="pv-included-help" aria-invalid={draftErrors.included ? true : undefined}>
+          {isPaired ? <p className="pv-copy">Exactly one origin relation. Both ownership proofs and the binding must remain current. No automatic redirect, asset request or particular WAF-rule bypass claim. Content similarity without a fresh nonce baseline is supporting evidence only.{draftErrors.included ? <span className="td-form-error"> {draftErrors.included}</span> : null}</p> : <fieldset aria-describedby="pv-included-help" aria-invalid={draftErrors.included ? true : undefined}>
             <legend>Paths to compare</legend>
             {active.map((path) => (
               <label key={path.id} className="pv-check">
@@ -337,13 +351,13 @@ export function PathComparisonPanel({
               </label>
             ))}
             <span id="pv-included-help" className={draftErrors.included ? 'td-form-error' : 'td-muted small'}>{draftErrors.included ?? 'Paths left out stay not tested.'}</span>
-          </fieldset>
+          </fieldset>}
           <label className="td-field">
             <span>Scenario</span>
-            <input value={draft.scenario} autoComplete="off" spellCheck={false} aria-invalid={draftErrors.scenario ? true : undefined} aria-describedby="pv-scenario-help" onChange={(event) => setDraft((current) => ({ ...current, scenario: event.target.value }))} />
+            <input value={draft.scenario} readOnly={isPaired} autoComplete="off" spellCheck={false} aria-invalid={draftErrors.scenario ? true : undefined} aria-describedby="pv-scenario-help" onChange={(event) => setDraft((current) => ({ ...current, scenario: event.target.value }))} />
             <span id="pv-scenario-help" className={draftErrors.scenario ? 'td-form-error' : 'td-muted small'}>{draftErrors.scenario ?? 'The catalog scenario id every path is checked with. A marker result covers that marker only.'}</span>
           </label>
-          <fieldset>
+          {!isPaired ? <fieldset>
             <legend>Expected outcome per layer</legend>
             <div className="pv-grid-2">
               {PROTECTION_LAYERS.map((layer) => (
@@ -355,7 +369,7 @@ export function PathComparisonPanel({
                 </label>
               ))}
             </div>
-          </fieldset>
+          </fieldset> : <p className="td-muted small">Identity observation only. No positive readiness credit or layer-enforcement assurance.</p>}
           <div className="row-actions">
             <Button type="submit" size="sm" loading={planning} loadingText="Preparing plan">Review plan</Button>
             <Button type="button" size="sm" variant="ghost" onClick={() => setComposing(false)}>Cancel</Button>
@@ -366,7 +380,7 @@ export function PathComparisonPanel({
       {list.state === 'loading' ? <div className="skeleton skeleton-row" aria-label="Loading comparisons" /> : null}
       {list.state === 'failed' ? <FailureNotice failure={list.failure} subject="entry-path comparisons" onRetry={() => setReload((value) => value + 1)} /> : null}
       {list.state === 'ready' && !list.items.length && active.length >= 2 ? (
-        <EmptyState className="pv-empty" icon={GitCompareArrows} title="No comparison recorded yet." body="Plan a comparison to test the primary route against another declared path under one scenario." />
+        <EmptyState className="pv-empty" icon={GitCompareArrows} title="No comparison recorded yet." body="Compare declared paths, or review both legs of a bounded identity check for one verified origin relation." />
       ) : null}
       {needsSecondPath ? (
         <EmptyState className="pv-empty" icon={GitCompareArrows} title="Declare a second entry path to compare." body="A comparison needs at least two active entry paths on this application." />
@@ -426,6 +440,7 @@ export function PathComparisonPanel({
                 <li key={item.entry_path_id} className="pv-ref">
                   <span className="pv-break">{pathLabel(byId.get(item.entry_path_id), item.entry_path_id)}</span>
                   <code>check {item.check_id || 'none'}{item.check_version ? ` v${item.check_version}` : ''} · target {item.target_id}{item.origin_binding_id ? ` · origin relation ${item.origin_binding_id}` : ''}</code>
+                  {item.paired_plan ? <PairedPlanReview plan={item.paired_plan} /> : null}
                   {item.eligible ? <Badge tone="default">Will run</Badge> : <Badge tone="muted">Skipped: {(item.ineligible_reason ?? 'not eligible').replace(/_/g, ' ')}</Badge>}
                 </li>
               ))}
@@ -466,6 +481,24 @@ export function PathComparisonPanel({
       />
     </section>
   );
+}
+
+function PairedPlanReview({ plan }: { plan: DataItem }) {
+  const object = (value: unknown): DataItem => value && typeof value === 'object' && !Array.isArray(value) ? value as DataItem : {};
+  const protectedTarget = object(plan.protected_target);
+  const originTarget = object(plan.origin_target);
+  const limits = object(plan.limits);
+  const number = (value: unknown) => typeof value === 'number' && Number.isFinite(value) ? String(value) : 'Not returned';
+  return <div className="stack-tight">
+    <dl className="td-review-list">
+      <div><dt>Protected baseline</dt><dd className="mono pv-break">{str(protectedTarget, 'value')} · {str(protectedTarget, 'id')}</dd></div>
+      <div><dt>Direct destination</dt><dd className="mono pv-break">{str(plan, 'address')} · {str(originTarget, 'id')}</dd></div>
+      <div><dt>Exact request scope</dt><dd className="mono pv-break">{str(plan, 'method')} {str(plan, 'scheme')} · Host {str(plan, 'host')} · SNI {str(plan, 'sni')} · port {number(plan.port)} · path {str(plan, 'path')}</dd></div>
+      <div><dt>Aggregate limits</dt><dd>{number(limits.http_requests)} HTTP requests; {number(limits.dns_queries)} DNS questions; {number(limits.response_body_bytes_per_leg)} body bytes per leg; {number(limits.response_body_bytes_total)} body bytes total; {number(limits.duration_ms)} ms; {number(limits.redirects)} redirects; {number(limits.extra_assets)} extra assets.</dd></div>
+      {(['protected', 'origin'] as const).map((side) => { const proof = object(plan[`${side}_ownership_binding`]); return <div key={side}><dt>{side === 'protected' ? 'Protected' : 'Origin'} ownership</dt><dd className="mono pv-break">{str(proof, 'target_id')} · {str(proof, 'kind')} · {str(proof, 'state')} · {str(proof, 'transitioned_at')} · digest {str(proof, 'source_ref_digest')}</dd></div>; })}
+    </dl>
+    <p>Both legs share one job nonce and worker. Only a healthy, fresh comparable nonce baseline can confirm the stronger application path. A certificate, matching title or content alone cannot. TLS trust and identity limitations remain in the Inspector.</p>
+  </div>;
 }
 
 function ComparisonResult({

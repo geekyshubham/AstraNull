@@ -1,0 +1,54 @@
+name: anl-waf-coraza
+
+services:
+  origin:
+    image: nginx:1.27-alpine@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10
+    container_name: anl-waf-coraza-origin
+    restart: unless-stopped
+    cpus: 1.0
+    mem_limit: 768m
+    volumes:
+      - ./origin.conf:/etc/nginx/conf.d/default.conf:ro
+    networks:
+      anl-waf-coraza-net:
+        ipv4_address: 172.31.25.20
+
+  coraza-spoa:
+    image: ghcr.io/corazawaf/coraza-spoa:snapshot@sha256:5bc0e0b7435833ee1636008ccad5bd7708c4c8c50bafe03fb1813e2791584df7
+    container_name: anl-waf-coraza-spoa
+    restart: unless-stopped
+    cpus: 1.0
+    mem_limit: 768m
+    volumes:
+      - ./coraza-spoa.yaml:/config.yaml:ro
+    command: ["/coraza-spoa", "--config", "/config.yaml"]
+    networks:
+      anl-waf-coraza-net:
+        ipv4_address: 172.31.25.15
+
+  target:
+    image: haproxy:3.0-alpine@sha256:d84eb36e91830bcaa67b23cfde1909850b99f11eb60da3abd185bd0daf3f75bb
+    container_name: anl-waf-coraza-target
+    restart: unless-stopped
+    cpus: 1.0
+    mem_limit: 768m
+    volumes:
+      - ./haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+      - ./coraza.cfg:/usr/local/etc/haproxy/coraza.cfg:ro
+      - ./errors/403.http:/usr/local/etc/haproxy/errors/403.http:ro
+    depends_on:
+      - origin
+      - coraza-spoa
+    networks:
+      anl-waf-coraza-net:
+        ipv4_address: 172.31.25.10
+
+networks:
+  anl-waf-coraza-net:
+    name: anl-waf-coraza-net
+    driver: bridge
+    internal: true
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.31.25.0/24

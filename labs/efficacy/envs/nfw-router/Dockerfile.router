@@ -1,0 +1,8 @@
+FROM alpine:3.20
+
+RUN apk add --no-cache iptables iproute2 bash curl
+
+COPY router-entrypoint.sh /usr/local/bin/router-entrypoint.sh
+RUN chmod +x /usr/local/bin/router-entrypoint.sh
+
+ENTRYPOINT ["/usr/local/bin/router-entrypoint.sh"]

@@ -24,6 +24,7 @@ import { targetOwnershipProof } from './ownershipVerification.mjs';
 import { executionReservation, probeExecutionReceipt, probeExecutionEvidenceReceipt, normalizeStopAcknowledgment, mergeProbeCapture } from '../lib/probeExecution.mjs';
 import { createProbeSourceResolver, probeSourceResolverFromEnv } from '../lib/probeSourcePerspective.mjs';
 import { perspectiveWorkerSecret, probePerspectiveEvidence } from '../lib/probePerspectiveRegistry.mjs';
+import { bindingRecordsFromStore, historicalOriginBindingForRun, validateOriginBindingForExecution } from './originBindings.mjs';
 
 const PROBE_WORKER_SIG_VERSION = 'pw2';
 
@@ -291,6 +292,12 @@ export function reserveProbeExecution(ctx, jobId, body) {
     || !targetOwnershipProof(ctx, group, target.id).verified) {
     return { error: 'probe_execution_not_authorized', status: 409 };
   }
+  const reference = historicalOriginBindingForRun(run);
+  const binding = reference ? (store.originBindings ?? []).find((row) => row.tenant_id === ctx.tenantId && row.id === reference.id) : null;
+  const records = bindingRecordsFromStore(store, ctx.tenantId);
+  records.targets = records.targets.filter((row) => !row.archived_at && (store.targetGroups ?? []).some((candidate) =>
+    candidate.id === row.target_group_id && candidate.tenant_id === ctx.tenantId && !candidate.deleted_at && !candidate.archived_at));
+  if (validateOriginBindingForExecution({ job, run, binding, records }).error) return { error: 'probe_execution_not_authorized', status: 409 };
   const parsed = executionReservation(job, ctx.workerId, body.leased_at, newId('reservation'));
   if (parsed.error) return parsed;
   job.worker_metadata ??= {};

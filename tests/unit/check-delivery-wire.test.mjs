@@ -309,7 +309,8 @@ for (const terminal of ['cancel', 'timeout', 'peer_close']) {
         connectFn: (authority, options) => { session = http2.connect(authority, options); return session; },
         tlsConnectFn: (options) => { assert.equal(options.host, '127.0.0.1'); return tls.connect({ ...options, port, ca: cert.cert, ALPNProtocols: ['h2'] }); },
       });
-      assert.equal(outcome.external_result, terminal === 'timeout' ? 'timeout' : 'error');
+      assert.equal(outcome.external_result, terminal === 'peer_close' ? 'error' : 'timeout');
+      assert.equal(outcome.metadata.error_class, terminal === 'peer_close' ? 'ECONNRESET' : 'timeout');
       assert.equal(outcome.requests_sent, 1);
       assert.equal(outcome.metadata.max_concurrent_streams, undefined);
       assert.equal(outcome.metadata.enable_push, undefined);

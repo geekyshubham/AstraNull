@@ -1,0 +1,74 @@
+{
+  "schema": "astranull.efficacy-lab.v1",
+  "lab_id": "fault-lab",
+  "networks": [],
+  "targets": [
+    {
+      "name": "fault-container-loopback",
+      "address": "127.0.0.1",
+      "hostname": null,
+      "ports": [
+        {
+          "port": 18080,
+          "protocol": "tcp",
+          "service": "tcp"
+        }
+      ],
+      "planted_condition": "Exact client/server tuple (127.0.0.1:40001 -> 127.0.0.1:18080) DROP rule via iptables with SYN retransmit timeout; second tuple (127.0.0.1:40002 -> 127.0.0.1:18080) completes TCP handshake",
+      "declarations": {},
+      "expectations": [
+        {
+          "check": "l3.firewall_exposure_scan.safe",
+          "expected": "not_applicable",
+          "why": "The signed probe worker cannot join network none"
+        },
+        {
+          "check": "l3.ipv6_reachability.safe",
+          "expected": "not_applicable",
+          "why": "The signed probe worker cannot join network none"
+        },
+        {
+          "check": "l3.smtp_connection_flood.readiness",
+          "expected": "not_applicable",
+          "why": "The signed probe worker cannot join network none"
+        },
+        {
+          "check": "l3.ssh_connection_flood.readiness",
+          "expected": "not_applicable",
+          "why": "The signed probe worker cannot join network none"
+        },
+        {
+          "check": "l3.ftp_connection_flood.readiness",
+          "expected": "not_applicable",
+          "why": "The signed probe worker cannot join network none"
+        },
+        {
+          "check": "reflect.redis_direct_exposure.safe",
+          "expected": "not_applicable",
+          "why": "The signed probe worker cannot join network none"
+        },
+        {
+          "check": "nfw.management_port_exposure.safe",
+          "expected": "not_applicable",
+          "why": "The signed probe worker cannot join network none"
+        },
+        {
+          "check": "nfw.ipv6_parity.safe",
+          "expected": "not_applicable",
+          "why": "The signed probe worker cannot join network none"
+        },
+        {
+          "check": "nfw.connection_limit.safe",
+          "expected": "not_applicable",
+          "why": "The signed probe worker cannot join network none"
+        }
+      ]
+    }
+  ],
+  "verification": [
+    "Internal Node.js client inside network_mode none executes two TCP connects against 127.0.0.1:18080",
+    "Tuple 2 (127.0.0.1:40002 -> 127.0.0.1:18080) completes TCP handshake and receives ASTRANULL_CONNECT_FAULT_LAB_OK with 0 drops on Tuple 1 DROP rule",
+    "Tuple 1 (127.0.0.1:40001 -> 127.0.0.1:18080) times out on SYN retransmissions, incrementing iptables DROP counter for that exact tuple",
+    "Signed probe worker cannot join network none, so remote catalog checks are not_applicable"
+  ]
+}

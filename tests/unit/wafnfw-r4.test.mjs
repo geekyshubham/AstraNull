@@ -40,6 +40,7 @@ describe('R4 Verifier round-3 regression tests', () => {
       });
 
       const sanitized = sanitizeProbeMetadata(raw.metadata ?? raw);
+      sanitized.safety_attestation = { probe_requests_sent: raw.requests_sent };
       assert.ok(sanitized.baseline, 'must store baseline feature');
 
       const replay = buildVerdictReplay({
@@ -176,6 +177,7 @@ describe('R4 Verifier round-3 regression tests', () => {
       };
       const v = correlateExternalOnlyVerdict({
         probeKind: 'rate_limit_canary_probe',
+        probeIoObserved: true,
         probeMetadata: { requests_sent: 5, first_limited_at: 3, first_limited_action: 'challenge' },
         declarations: decl,
       });

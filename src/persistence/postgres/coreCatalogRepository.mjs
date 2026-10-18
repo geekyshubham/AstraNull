@@ -26,6 +26,7 @@ import {
 } from '../../lib/connectorProviders/domainInventory.mjs';
 import { ownershipProofFromStates, ownershipSummaryFromTargetStates } from '../../lib/ownershipPolicy.mjs';
 import { presentTargetEdgeDetection } from '../../lib/edgeDetectionPresenter.mjs';
+import { targetDnsObservation } from '../../lib/targetDnsObservation.mjs';
 import {
   DeclarationValidationError,
   mergeStoredDeclaration,
@@ -517,7 +518,9 @@ export function createCoreCatalogRepository(pool, options = {}) {
                   verification.state AS verification_state,
                   verification.source_kind AS verification_source_kind,
                   verification.source_ref AS verification_source_ref,
-                  verification.transitioned_at AS verification_transitioned_at
+                  verification.transitioned_at AS verification_transitioned_at,
+                  edge.observed_at AS dns_observed_at,
+                  edge.dns_evidence
            FROM targets t
            JOIN target_groups tg
              ON tg.id = t.target_group_id AND tg.tenant_id = t.tenant_id
@@ -525,6 +528,18 @@ export function createCoreCatalogRepository(pool, options = {}) {
              ON environment.id = tg.environment_id AND environment.tenant_id = t.tenant_id
            LEFT JOIN target_verification_current verification
              ON verification.tenant_id = t.tenant_id AND verification.target_id = t.id
+           LEFT JOIN LATERAL (
+             SELECT ed.observed_at,
+                    jsonb_build_object(
+                      'dns_cname_chain', ed.evidence_json->'dns_cname_chain',
+                      'dns_resolved_ips', ed.evidence_json->'dns_resolved_ips',
+                      'cname_matches', ed.evidence_json->'cname_matches',
+                      'cname_cdn_matches', ed.evidence_json->'cname_cdn_matches',
+                      'address_matches', ed.evidence_json->'address_matches'
+                    ) AS dns_evidence
+             FROM target_edge_detections ed
+             WHERE ed.tenant_id = t.tenant_id AND ed.target_id = t.id
+           ) edge ON TRUE
            WHERE t.tenant_id = $1
              AND t.deleted_at IS NULL
              AND tg.tenant_id = $1
@@ -533,7 +548,14 @@ export function createCoreCatalogRepository(pool, options = {}) {
            ORDER BY t.created_at DESC, t.id`,
           [ctx.tenantId],
         );
-        return rows.map(mapTargetInventoryRow);
+        return rows.map((row) => {
+          const item = mapTargetInventoryRow(row);
+          if (!item) return item;
+          const dnsObservation = row.dns_evidence
+            ? targetDnsObservation({ observed_at: row.dns_observed_at, evidence_json: row.dns_evidence })
+            : null;
+          return { ...item, dns_observation: dnsObservation };
+        });
       });
     },
 

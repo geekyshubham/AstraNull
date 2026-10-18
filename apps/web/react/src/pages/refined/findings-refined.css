@@ -191,6 +191,18 @@
   text-underline-offset: 3px;
 }
 
+.refined .rf-alert-missing {
+  color: var(--fg);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.refined .rf-alert-missing-key {
+  color: var(--meta);
+  font-weight: 400;
+}
+
 .refined .rf-alert-check {
   color: var(--fg-2);
   font-size: var(--text-xs);

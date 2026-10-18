@@ -1,7 +1,8 @@
 import { expect, test } from '@playwright/test';
-import { assertPortalInitialLoad } from '../../helpers/portal-browser-failures.mjs';
+import { assertPortalInitialLoad, collectPortalBrowserFailures } from '../../helpers/portal-browser-failures.mjs';
+import { PORTAL_FONT_STYLESHEET } from '../../helpers/portal-browser-resources.mjs';
 import AxeBuilder from '@axe-core/playwright';
-import { assessmentChecks, withTargetRunnableChecks } from '../../../apps/web/react/src/lib/domain-checks.mjs';
+import { assessmentChecks, targetCheckAvailability, withTargetRunnableChecks } from '../../../apps/web/react/src/lib/domain-checks.mjs';
 import { targetRunnableIndex } from '../../../apps/web/react/src/lib/control-declarations.mjs';
 import { PORTAL_BASELINE_IDS } from '../../fixtures/portal-baseline/seed.mjs';
 import { applyPortalBaselineReadinessBoost } from '../../fixtures/portal-baseline/readiness.mjs';
@@ -14,6 +15,7 @@ import {
 import {
   gotoPortalRoute,
   injectPortalDevHeadersSession,
+  PORTAL_AUDITOR_SESSION,
   waitForPortalRouteSettled,
 } from '../../helpers/portal-playwright-session.mjs';
 
@@ -118,7 +120,7 @@ test.describe('target workspace: recorded attribution, checks and reviewed runs 
     await stopPortalPlaywrightServer();
   });
 
-  test('shows recorded per-family attribution, its sources, and per-check status with evidence in place', async ({ page }) => {
+  test('shows recorded family attribution and retains unverifiable custom-token outcomes without current gaps', async ({ page }) => {
     await page.route(`**/v1/targets/${VERIFIED_FRESH_TARGET}`, async (route) => {
       const response = await route.fetch();
       const payload = await response.json();
@@ -155,15 +157,19 @@ test.describe('target workspace: recorded attribution, checks and reviewed runs 
 
     await page.getByRole('tab', { name: /Validate/ }).click();
     const panel = page.locator('.td-checks');
-    await expect(panel.getByRole('button', { name: /^Gap found/ })).toBeVisible();
-    await panel.getByRole('button', { name: /^Gap found/ }).click();
-    const gapRow = panel.locator('.td-check[data-status="failed"]');
-    await expect(gapRow).toHaveCount(1);
+    await expect(panel.getByRole('button', { name: /^Gap found/ })).toHaveCount(0);
+    await expect(panel.getByRole('button', { name: /^Retained, not current/ })).toBeVisible();
+    await panel.getByRole('button', { name: /^Retained, not current/ }).click();
+    const gapRow = panel.locator(`.td-check[data-focus-key="check-${GRADED_GAP_CHECK}"]`);
+    await expect(gapRow).toHaveAttribute('data-status', 'retained');
+    const category = panel.locator('.td-cat').filter({ has: page.locator(`.td-check[data-focus-key="check-${GRADED_GAP_CHECK}"]`) });
+    if (!await category.evaluate((element) => element.open)) await category.locator(':scope > summary').click();
+    await expect(gapRow.locator('.td-check-summary')).toBeVisible();
     await gapRow.locator('.td-check-summary').click();
     await expect(gapRow).toContainText('How it works');
     await expect(gapRow).toContainText('Upper bound');
     await expect(gapRow).toContainText('HTTP 200');
-    await expect(gapRow).toContainText('the edge did not block this scenario');
+    await expect(gapRow).toContainText('does not count as a current verified result');
     await expect(page).toHaveURL(/check=waf\.crlf_injection_marker\.safe/);
     await gapRow.getByRole('button', { name: 'View evidence' }).click();
     await expect(page.locator('.inspector-panel').getByRole('heading', { name: 'Check result' })).toBeVisible();
@@ -171,7 +177,7 @@ test.describe('target workspace: recorded attribution, checks and reviewed runs 
     await expect(page.locator('.target-detail-view')).not.toContainText(/wafw00f|cdncheck/i);
     await expect(page).toHaveURL(/inspect=check_result&ev_target=tgt_checkout_2&ev_check=waf\.crlf_injection_marker\.safe&ev_run=run_fx_1/);
     await page.keyboard.press('Escape');
-    await panel.getByRole('button', { name: /^All/ }).click();
+    await panel.getByRole('group', { name: 'Filter checks by result' }).getByRole('button', { name: /^All/ }).click();
     await expect(panel.locator('.td-cat').filter({ hasText: 'Origin exposure' })).toBeVisible();
 
     expect(edgePosts, 'an existing detection is never re-queued automatically').toEqual([]);
@@ -261,7 +267,7 @@ test.describe('target workspace: recorded attribution, checks and reviewed runs 
     await expect(page.locator('.probe-activity')).toBeVisible();
     await expect(page.locator('.td-check[data-selected="true"][data-focus-key="check-waf.fingerprint.safe"]')).toHaveCount(1);
     await expect(page.locator('input[name=target-run-check][value="waf.fingerprint.safe"]')).not.toBeChecked();
-    await expect(page.locator('.td-checks')).toContainText('WAF and CDN Fingerprint (Safe)');
+    await expect(page.locator('.td-checks')).toContainText('WAF and CDN Fingerprint');
     await expect(page.getByText(/The linked check.*is not compatible/)).toHaveCount(0);
   });
 
@@ -364,7 +370,7 @@ test.describe('target workspace: recorded attribution, checks and reviewed runs 
 
     const category = panel.locator('.td-cat-shell').filter({ has: page.getByRole('checkbox', { name: 'Select all in DNS' }) });
     await category.getByRole('checkbox', { name: 'Select all in DNS' }).check();
-    const categoryIds = await category.locator('input[name=target-run-check]').evaluateAll((inputs) => inputs.map((input) => input.value));
+    const categoryIds = await category.locator('input[name=target-run-check]:not([disabled])').evaluateAll((inputs) => inputs.map((input) => input.value));
     expect(categoryIds.length).toBeGreaterThan(0);
     const checkedIds = await panel.locator('input[name=target-run-check]:checked').evaluateAll((inputs) => inputs.map((input) => input.value));
     expect(checkedIds.sort()).toEqual([...categoryIds].sort());
@@ -387,6 +393,111 @@ test.describe('target workspace: recorded attribution, checks and reviewed runs 
     expect(scanBodies[0].target_id).toBe(VERIFIED_FRESH_TARGET);
     expect([...scanBodies[0].check_ids].sort()).toEqual([...notRunIds].sort());
     expect(scanBodies[0].name).toMatch(/^Selected checks · /);
+  });
+
+  for (const historyLength of [0, 100]) {
+    test(`the full catalog stays visible with ${historyLength} recorded runs`, async ({ page }) => {
+      const diagnostics = await collectPortalBrowserFailures(page, getPortalPlaywrightBaseUrl());
+      const writes = [];
+      page.on('request', (request) => { if (request.method() === 'POST') writes.push(request.url()); });
+      await page.route('**/v1/validation-scans?*', (route) => route.fulfill({ json: { items: [], count: 0 } }));
+      await page.route('**/v1/test-runs?*', async (route) => {
+        if (new URL(route.request().url()).searchParams.get('target_id') !== VERIFIED_FRESH_TARGET) return route.fallback();
+        await route.fulfill({ json: { items: Array.from({ length: historyLength }, (_, index) => ({ id: `run_history_${index}`, target_id: VERIFIED_FRESH_TARGET, check_id: 'waf.fingerprint.safe', status: 'completed', created_at: '2030-01-01T00:00:00.000Z' })), count: historyLength } });
+      });
+      await injectPortalDevHeadersSession(page, historyLength === 100 ? PORTAL_AUDITOR_SESSION : undefined);
+      await gotoPortalRoute(page, 'target-detail', getPortalPlaywrightBaseUrl(), { entityIds: { 'target-detail': VERIFIED_FRESH_TARGET } });
+      await page.getByRole('tab', { name: /Validate/ }).click();
+      const panel = page.locator('.td-checks');
+      const headers = { 'x-tenant-id': PORTAL_BASELINE_IDS.tenantId, 'x-user-id': 'usr_owner', 'x-role': 'owner' };
+      const catalog = await page.request.get(`${getPortalPlaywrightBaseUrl()}/v1/checks?scope=all`, { headers }).then((response) => response.json());
+      await expect(panel.locator('[data-filter="all"]')).toHaveText(`All${catalog.items.length}`);
+      await expect(panel.locator('.td-check')).toHaveCount(catalog.items.length);
+      const ids = await panel.locator('.td-check').evaluateAll((elements) => elements.map((element) => element.dataset.focusKey.slice('check-'.length)));
+      expect(ids.sort()).toEqual(catalog.items.map((check) => check.check_id).sort());
+      if (!historyLength) {
+        await expect(panel.locator('.td-check[data-status="not_run"]')).toHaveCount(catalog.items.length);
+      } else {
+        await expect(panel.locator('input[name=target-run-check]')).toHaveCount(0);
+        await expect(panel.getByRole('button', { name: /^Review all/ })).toHaveCount(0);
+        await expect(page.locator('.td-start-bar')).toHaveCount(0);
+      }
+      expect(writes).toEqual([]);
+      diagnostics.assertClean();
+    });
+  }
+
+  test('reference-only definitions can be inspected but not started individually', async ({ page }) => {
+    const diagnostics = await collectPortalBrowserFailures(page, getPortalPlaywrightBaseUrl());
+    const writes = [];
+    page.on('request', (request) => { if (request.method() === 'POST') writes.push(request.url()); });
+    await page.route('**/v1/validation-scans?*', (route) => route.fulfill({ json: { items: [], count: 0 } }));
+    await page.route('**/v1/test-runs?*', (route) => route.fulfill({ json: { items: [], count: 0 } }));
+    await injectPortalDevHeadersSession(page);
+    await gotoPortalRoute(page, 'target-detail', getPortalPlaywrightBaseUrl(), { entityIds: { 'target-detail': VERIFIED_FRESH_TARGET } });
+    await page.getByRole('tab', { name: /Validate/ }).click();
+    const panel = page.locator('.td-checks');
+    const headers = { 'x-tenant-id': PORTAL_BASELINE_IDS.tenantId, 'x-user-id': 'usr_owner', 'x-role': 'owner' };
+    const catalog = await page.request.get(`${getPortalPlaywrightBaseUrl()}/v1/checks?scope=all&target_id=${VERIFIED_FRESH_TARGET}`, { headers }).then((response) => response.json());
+    await expect(panel.locator('.td-check')).toHaveCount(catalog.items.length);
+    const cases = [
+      ['SOC only', catalog.items.find((check) => check.risk_class === 'soc_gated')],
+      ['Declaration only', catalog.items.find((check) => check.evidence_tier === 'E1' && check.safety_class === 'safe' && check.supported_targets.includes('fqdn'))],
+      ['Execution unavailable', catalog.items.find((check) => check.mechanism_supported === false && check.safety_class === 'safe' && !(check.runnable_requires ?? []).includes('port'))],
+      ['Different target type', catalog.items.find((check) => !check.supported_targets.includes('fqdn') && check.safety_class === 'safe' && check.mechanism_supported !== false && check.evidence_tier !== 'E1')],
+    ];
+    for (const [label, check] of cases) {
+      expect(check, label).toBeTruthy();
+      const row = panel.locator(`.td-check[data-focus-key="check-${check.check_id}"]`);
+      const category = panel.locator('.td-cat').filter({ has: page.locator(`.td-check[data-focus-key="check-${check.check_id}"]`) });
+      if (!await category.evaluate((element) => element.open)) await category.locator(':scope > summary').click();
+      await expect(row.getByRole('checkbox')).toBeDisabled();
+      await expect(row).toContainText(label);
+      await row.locator('.td-check-summary').click();
+      await expect(row).toContainText('Before it can run');
+      await expect(row).toContainText('Not run on this target yet.');
+      await expect(row).toContainText('No recorded result to inspect yet.');
+      await expect(page.locator('.td-start-bar').getByRole('button', { name: 'Review and start', exact: true })).toBeDisabled();
+      await expect(page.locator('dialog.modal-confirm[open]')).toHaveCount(0);
+    }
+    expect(writes).toEqual([]);
+    await expectNoBlockingAxeViolations(page, '.td-checks');
+    diagnostics.assertClean();
+  });
+
+  test('catalog failure labels the partial inventory and explicit retry restores all definitions', async ({ page }) => {
+    const catalogUrl = `${getPortalPlaywrightBaseUrl()}/v1/checks?scope=all&target_id=${VERIFIED_FRESH_TARGET}`;
+    const diagnostics = await collectPortalBrowserFailures(page, getPortalPlaywrightBaseUrl(), { allowResponse: (response) => response.url() === catalogUrl && response.status() === 503 });
+    let failCatalog = true;
+    let releaseRetry;
+    const retryHeld = new Promise((resolve) => { releaseRetry = resolve; });
+    await page.route('**/v1/checks?*', async (route) => {
+      if (route.request().url() !== catalogUrl) return route.fallback();
+      if (failCatalog) return route.fulfill({ status: 503, json: { error: 'catalog_unavailable', message: 'The full check catalog could not load.' } });
+      await retryHeld;
+      return route.fallback();
+    });
+    await injectPortalDevHeadersSession(page);
+    await gotoPortalRoute(page, 'target-detail', getPortalPlaywrightBaseUrl(), { entityIds: { 'target-detail': VERIFIED_FRESH_TARGET } });
+    await page.getByRole('tab', { name: /Validate/ }).click();
+    const panel = page.locator('.td-checks');
+    await expect(panel.getByRole('alert')).toContainText('Only the loaded selection subset is shown.');
+    await expect(panel.locator('[data-filter="all"]')).toHaveText(/^Loaded\d+$/);
+    await expect(panel.getByRole('button', { name: /^Review all/ })).toBeDisabled();
+    await expect(panel).toContainText('Load the full catalog before reviewing the complete evaluation.');
+    failCatalog = false;
+    await panel.getByRole('button', { name: 'Retry catalog', exact: true }).click();
+    await expect(panel.getByRole('status')).toContainText('Loading the full check catalog.');
+    await expect(panel.locator('[data-filter="all"]')).toHaveText(/^Loaded\d+$/);
+    await expect(panel.getByRole('button', { name: /^Review all/ })).toBeDisabled();
+    releaseRetry();
+    const headers = { 'x-tenant-id': PORTAL_BASELINE_IDS.tenantId, 'x-user-id': 'usr_owner', 'x-role': 'owner' };
+    const catalog = await page.request.get(catalogUrl, { headers }).then((response) => response.json());
+    await expect(panel.locator('[data-filter="all"]')).toHaveText(`All${catalog.items.length}`);
+    await expect(panel.locator('.td-check')).toHaveCount(catalog.items.length);
+    await expect(panel.getByRole('alert')).toHaveCount(0);
+    await expect(panel.getByRole('button', { name: /^Review all/ })).toBeEnabled();
+    diagnostics.assertClean();
   });
 
   test('the header shows when this target was last checked', async ({ page }) => {
@@ -428,11 +539,13 @@ test.describe('target workspace: recorded attribution, checks and reviewed runs 
     const panel = page.locator('.td-checks');
     const catalog = await page.request.get(`${getPortalPlaywrightBaseUrl()}/v1/checks?scope=all`, { headers: { 'x-tenant-id': PORTAL_BASELINE_IDS.tenantId, 'x-user-id': 'usr_owner', 'x-role': 'owner' } }).then((response) => response.json());
     await expect(panel).toContainText(`${catalog.items.length} checks in the catalog.`);
-    await expect(panel).toContainText('runnable on this target, including observation checks');
-    await expect(panel.locator('.td-catalog-requirements summary')).toContainText('catalog checks not runnable on this target · requirements');
-    await panel.locator('.td-catalog-requirements summary').click();
-    await expect(panel.locator('.td-catalog-requirements')).toContainText('origin.direct_bypass.safe');
-    await expect(panel.locator('.td-catalog-requirements')).toContainText('Requires SOC approval');
+    await expect(panel.getByRole('group', { name: 'Filter checks by result' }).getByRole('button', { name: `All ${catalog.items.length}`, exact: true })).toBeVisible();
+    await expect(panel.locator('.td-check')).toHaveCount(catalog.items.length);
+    const displayedIds = await panel.locator('input[name=target-run-check]').evaluateAll((inputs) => inputs.map((input) => input.value));
+    expect([...displayedIds].sort()).toEqual(catalog.items.map((check) => check.check_id).sort());
+    await expect(panel).toContainText('eligible for selection on this target');
+    await expect(panel.locator('input[name=target-run-check][value="origin.direct_bypass.safe"]')).toBeDisabled();
+    await expect(panel.locator('.td-check').filter({ hasText: 'SOC only' }).first()).toHaveCount(1);
     await expect(panel.locator('input[name=target-run-check][value="dns.authoritative_response.safe"]')).toHaveCount(1);
     await page.setViewportSize({ width: 375, height: 950 });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
@@ -442,6 +555,24 @@ test.describe('target workspace: recorded attribution, checks and reviewed runs 
     await expect(dialog).toContainText(/Start \d+ checks on checkout\.acme\.com\?/);
     await expect(dialog).toContainText('one at a time inside your safe-run limits');
     await expect(dialog).toContainText('The server re-checks ownership');
+    await expect(dialog).toContainText('Runs every eligible check for this target');
+    const excludedSummary = await dialog.locator('.td-requirements > summary').textContent();
+    const exclusionMatch = /^(\d+) of (\d+) definitions cannot run in this evaluation$/.exec(excludedSummary);
+    expect(exclusionMatch).not.toBeNull();
+    expect(Number(exclusionMatch[2])).toBe(catalog.items.length);
+    await dialog.locator('.td-requirements > summary').click();
+    await expect(dialog.locator('.td-requirements')).toContainText('These are not executed and receive no new result or readiness credit.');
+    await expect(dialog.locator('.td-requirements li')).toHaveCount(Number(exclusionMatch[1]));
+    for (const theme of ['light', 'dark']) {
+      await page.evaluate((value) => document.documentElement.setAttribute('data-theme', value), theme);
+      for (const width of [375, 768, 1024, 1440]) {
+        await page.setViewportSize({ width, height: 950 });
+        expect(await dialog.evaluate((element) => element.scrollWidth <= element.clientWidth), `${theme} review at ${width}px`).toBe(true);
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+        await expectNoBlockingAxeViolations(page, 'dialog.modal-confirm[open]');
+        await page.screenshot({ path: `/tmp/astranull-inventory-review-${theme}-${width}.png` });
+      }
+    }
     await expect(dialog).toContainText("holds this target's execution slot");
     await expect(dialog).toContainText('What your team will see');
     const acceptedResponse = page.waitForResponse((response) => response.request().method() === 'POST' && new URL(response.url()).pathname === '/v1/validation-scans');
@@ -469,6 +600,11 @@ test.describe('target workspace: recorded attribution, checks and reviewed runs 
       serverRunnableIndex: targetRunnableIndex(targetCatalog.items),
     });
     expect(body.check_ids).toEqual(expected.map((check) => check.check_id));
+    const eligible = targetCatalog.items.filter((check) => targetCheckAvailability(check, target.target, {
+      declarations: { version: 1 }, perspectiveCount: 1, serverRunnableIndex: targetRunnableIndex(targetCatalog.items),
+    }).state === 'ready');
+    expect([...body.check_ids].sort()).toEqual(eligible.map((check) => check.check_id).sort());
+    expect(body.check_ids.length + Number(exclusionMatch[1])).toBe(catalog.items.length);
     expect(new Set(body.check_ids).size).toBe(body.check_ids.length);
     expect(accepted.steps.map((step) => step.check_id)).toEqual(body.check_ids);
     expect(new Set(accepted.steps.map((step) => step.target_id))).toEqual(new Set([PORTAL_BASELINE_IDS.targetId]));
@@ -483,5 +619,62 @@ test.describe('target workspace: recorded attribution, checks and reviewed runs 
     await stop.getByRole('button', { name: /Stop/ }).last().click();
     await expect(page.getByText('Scan stop requested. Queued checks cannot start; finished results are kept. Worker acknowledgment remains separate.')).toBeVisible();
     await expect(panel.getByRole('button', { name: /^Review all/ })).toBeVisible();
+  });
+});
+
+test.describe('served target catalog bundle', () => {
+  test.beforeAll(async () => {
+    await startPortalPlaywrightServer({ env: { ASTRANULL_PROBE_MODE: 'simulation' } });
+  });
+  test.afterAll(async () => { await stopPortalPlaywrightServer(); });
+
+  test('the built inventory is complete, keyboard accessible and fits phone through desktop in both themes', async ({ page }) => {
+    test.setTimeout(150_000);
+    const writes = [];
+    page.on('request', (request) => { if (request.method() === 'POST') writes.push(request.url()); });
+    await injectPortalDevHeadersSession(page);
+    const diagnostics = await assertPortalInitialLoad(page, getPortalPlaywrightBaseUrl(), { hash: `target-detail?id=${VERIFIED_FRESH_TARGET}&tab=validate` });
+    expect([...diagnostics.modules].some((url) => new URL(url).pathname === '/react-app.js')).toBe(true);
+    // The initial load already verified the exact empty system-font fixture. Inline that
+    // no-op stylesheet for axe, whose CSSOM refetch otherwise violates connect-src 'self'.
+    // Application styles, CSP and strict console collection stay unchanged.
+    const inlined = await page.evaluate((href) => {
+      const links = [...document.querySelectorAll('link[rel="stylesheet"]')].filter((link) => link.href === href);
+      for (const link of links) {
+        const style = document.createElement('style');
+        style.textContent = '/* Owned empty system-font fixture. Real Google Fonts are not verified. */';
+        link.replaceWith(style);
+      }
+      return links.length;
+    }, PORTAL_FONT_STYLESHEET);
+    expect(inlined).toBe(1);
+    const headers = { 'x-tenant-id': PORTAL_BASELINE_IDS.tenantId, 'x-user-id': 'usr_owner', 'x-role': 'owner' };
+    const catalog = await page.request.get(`${getPortalPlaywrightBaseUrl()}/v1/checks?scope=all`, { headers }).then((response) => response.json());
+    const panel = page.locator('.td-checks');
+    await expect(panel.locator('.td-check')).toHaveCount(catalog.items.length);
+    for (const theme of ['light', 'dark']) {
+      await page.evaluate((value) => document.documentElement.setAttribute('data-theme', value), theme);
+      for (const width of [375, 768, 1024, 1440]) {
+        await page.setViewportSize({ width, height: 950 });
+        await expect(panel.locator('[data-filter="all"]')).toHaveText(`All${catalog.items.length}`);
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), `${theme} at ${width}px`).toBe(true);
+        await expectNoBlockingAxeViolations(page, '.td-checks');
+        await panel.locator('.td-impact').scrollIntoViewIfNeeded();
+        await page.screenshot({ path: `/tmp/astranull-inventory-${theme}-${width}.png` });
+      }
+    }
+    const category = panel.locator('.td-cat').first();
+    await category.locator(':scope > summary').focus();
+    const wasOpen = await category.evaluate((element) => element.open);
+    await page.keyboard.press('Enter');
+    await expect(category).toHaveJSProperty('open', !wasOpen);
+    if (wasOpen) await page.keyboard.press('Enter');
+    const trigger = category.locator('.td-check-summary').first();
+    await trigger.focus();
+    await page.keyboard.press('Enter');
+    await expect(trigger).toHaveAttribute('aria-expanded', 'true');
+    await expect(trigger).toBeFocused();
+    expect(writes).toEqual([]);
+    diagnostics.assertClean();
   });
 });

@@ -82,3 +82,7 @@ export type DeclarationsDiffRow = { section: string; label: string; theirs: stri
 export function declarationsDraftDiff(latestDoc: unknown, draft: DeclarationsDraft | null): DeclarationsDiffRow[];
 export const TARGET_LINK_SECTIONS: Readonly<Record<'origin_relations', Readonly<{ tab: string; section: string }>>>;
 export function controlsHref(targetId: string, section?: string): string;
+export type DeclarationEditorSection = 'network' | 'connection_limits' | 'perspectives' | 'waf_signature' | 'waf_action' | 'rate_limit' | 'marker_paths' | 'origin' | 'canary_sink';
+export const DECLARATION_SECTION_GROUPS: ReadonlyArray<Readonly<{ id: string; label: string; sections: ReadonlyArray<DeclarationEditorSection> }>>;
+export type DeclarationSectionState = { id: DeclarationEditorSection; label: string; declared: boolean; detail: string; edited: boolean };
+export function declarationSectionStates(stored: unknown, draft?: DeclarationsDraft | null): DeclarationSectionState[];

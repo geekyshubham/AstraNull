@@ -1,0 +1,30 @@
+services:
+  target:
+    image: anl-nfw-ipv6-gap-target:local
+    container_name: anl-nfw-ipv6-gap-target
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+    cpus: 1.0
+    mem_limit: 768m
+    networks:
+      anl-nfw-ipv6-gap-net:
+        ipv4_address: 172.31.33.10
+        ipv6_address: fd00:a57a:33::10
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:80/ | grep -q healthy || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 2s
+
+networks:
+  anl-nfw-ipv6-gap-net:
+    name: anl-nfw-ipv6-gap-net
+    internal: true
+    enable_ipv6: true
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.31.33.0/24
+        - subnet: fd00:a57a:33::/64

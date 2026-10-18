@@ -1,0 +1,89 @@
+services:
+  router:
+    build:
+      context: .
+      dockerfile: Dockerfile.router
+    image: anl-nfw-router-router:local
+    container_name: anl-nfw-router-router
+    restart: unless-stopped
+    cpus: 1.0
+    mem_limit: 768m
+    cap_add:
+      - NET_ADMIN
+    sysctls:
+      - net.ipv4.ip_forward=1
+    networks:
+      anl-nfw-router-client:
+        ipv4_address: 172.31.31.2
+      anl-nfw-router-server:
+        ipv4_address: 172.31.32.2
+    healthcheck:
+      test: ["CMD-SHELL", "iptables -L FORWARD -n | grep -q 'dpt:80' && iptables -L FORWARD -n | grep -q 'dpt:8083' || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 2s
+
+  server:
+    build:
+      context: .
+      dockerfile: Dockerfile.server
+    image: anl-nfw-router-server:local
+    container_name: anl-nfw-router-server
+    restart: unless-stopped
+    cpus: 1.0
+    mem_limit: 768m
+    cap_add:
+      - NET_ADMIN
+    networks:
+      anl-nfw-router-server:
+        ipv4_address: 172.31.32.10
+    healthcheck:
+      test: ["CMD-SHELL", "node -e 'const http = require(\"http\"); http.get(\"http://127.0.0.1/\", (res) => process.exit(res.statusCode === 200 ? 0 : 1)).on(\"error\", () => process.exit(1));'"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 2s
+
+  client:
+    build:
+      context: .
+      dockerfile: Dockerfile.client
+    image: anl-nfw-router-client:local
+    container_name: anl-nfw-router-client
+    restart: unless-stopped
+    cpus: 1.0
+    mem_limit: 768m
+    cap_add:
+      - NET_ADMIN
+    networks:
+      anl-nfw-router-client:
+        ipv4_address: 172.31.31.100
+    depends_on:
+      router:
+        condition: service_healthy
+      server:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 172.31.31.2 80 || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 2s
+
+networks:
+  anl-nfw-router-client:
+    name: anl-nfw-router-client
+    internal: true
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.31.31.0/24
+
+  anl-nfw-router-server:
+    name: anl-nfw-router-server
+    internal: true
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.31.32.0/24

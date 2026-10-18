@@ -424,6 +424,14 @@ export const ADDITIONAL_INPUT_REASON_COPY = Object.freeze({
     declaration: '',
     detail: 'Needs at least two registered probe source locations. One source cannot tell "allowed only from X" apart from "denied for everyone".',
   }),
+  reviewed_origin_identity_comparison_required: Object.freeze({
+    state: 'needs_setup',
+    label: 'Needs a reviewed paired identity plan',
+    cta: '',
+    section: '',
+    declaration: '',
+    detail: 'Use Entry-path comparisons on the protected target’s Overview tab. Select one verified origin relation, review both destinations and limits, then explicitly start the paired HEAD or bounded GET check.',
+  }),
   target_bound_direct_address_required: Object.freeze({
     state: 'needs_setup',
     label: 'Needs an origin relation',
@@ -527,6 +535,7 @@ export function targetRequirementForReason(reason) {
 const TARGET_ANSWERED_REQUIREMENTS = Object.freeze([
   'port',
   'port_or_declared_tcp_deny',
+  'port_or_declared_udp_deny',
   'declared_tcp_deny',
   'declared_udp_deny',
   'declared_connection_limit',
@@ -702,4 +711,70 @@ export function controlsHref(targetId, section = '') {
   if (elsewhere) params.set('section', elsewhere.section);
   else if (section) params.set('section', section);
   return `#target-detail?${params.toString()}`;
+}
+
+/** Editor sections in display order, grouped for the overview and form. */
+export const DECLARATION_SECTION_GROUPS = Object.freeze([
+  Object.freeze({ id: 'network', label: 'Network and firewall', sections: Object.freeze(['network', 'connection_limits', 'perspectives']) }),
+  Object.freeze({ id: 'waf', label: 'WAF behaviour', sections: Object.freeze(['waf_signature', 'waf_action', 'rate_limit', 'marker_paths']) }),
+  Object.freeze({ id: 'origin', label: 'Origin and SOC inputs', sections: Object.freeze(['origin', 'canary_sink']) }),
+]);
+
+const plural = (count, one, many) => `${count} ${count === 1 ? one : many}`;
+
+const SECTION_STATUS = Object.freeze([
+  ['network', 'Network policy', (body) => body.network_policy, (doc) => {
+    const rules = list(doc.network_policy);
+    const denied = rules.filter((rule) => rule?.action === 'deny').length;
+    return rules.length ? `${plural(rules.length, 'rule', 'rules')}, ${denied} denied` : 'No rules';
+  }],
+  ['connection_limits', 'Connection limits', (body) => body.connection_limits, (doc) => {
+    const count = list(doc.connection_limits).length;
+    return count ? plural(count, 'limit', 'limits') : 'No limits';
+  }],
+  ['perspectives', 'Probe perspectives', (body) => body.perspectives, (doc) => {
+    const row = record(doc.perspectives);
+    const allowed = list(row?.allowlisted_perspective_ids).length;
+    const denied = list(row?.denied_perspective_ids).length;
+    return allowed + denied ? `${allowed} allowed, ${denied} denied` : 'None marked';
+  }],
+  ['waf_signature', 'WAF block signature', (body) => body.waf?.block_signature, (doc) => {
+    const name = text(record(record(doc.waf)?.block_signature)?.header_name);
+    return name ? `Header ${name}` : 'Not declared';
+  }],
+  ['waf_action', 'Expected WAF action', (body) => body.waf?.expected_action, (doc) => {
+    const value = text(record(doc.waf)?.expected_action);
+    return EXPECTED_WAF_ACTIONS.find((option) => option.value === value)?.label ?? 'Catalog default';
+  }],
+  ['rate_limit', 'Rate-limit canary route', (body) => body.waf?.rate_limit_canary, (doc) => {
+    const canary = record(record(doc.waf)?.rate_limit_canary);
+    return canary ? `${text(canary.method) || 'GET'} ${text(canary.path) || '?'}` : 'Not declared';
+  }],
+  ['marker_paths', 'Extra marker paths', (body) => body.waf?.marker_paths, (doc) => {
+    const count = list(record(doc.waf)?.marker_paths).length;
+    return count ? plural(count, 'extra path', 'extra paths') : 'Root path only';
+  }],
+  ['origin', 'Origin lockdown', (body) => body.origin, (doc) => {
+    const origin = record(doc.origin);
+    if (!origin) return 'Not declared';
+    return origin.lockdown_expected === true ? 'CDN traffic only' : 'Direct access by design';
+  }],
+  ['canary_sink', 'Canary sink URL', (body) => body.canary_sink, (doc) => (text(record(doc.canary_sink)?.url) ? 'URL declared' : 'Not declared')],
+]);
+
+/** Per-section saved state for the overview: whether the stored document declares it, a short detail, and whether the draft changes it. */
+export function declarationSectionStates(stored, draft) {
+  const doc = record(stored) ?? {};
+  const savedBody = declarationsFromDraft(draftFromDeclarations(doc));
+  const draftBody = draft ? declarationsFromDraft(draft) : savedBody;
+  return SECTION_STATUS.map(([id, label, slice, detail]) => {
+    const saved = slice(savedBody);
+    return {
+      id,
+      label,
+      declared: saved !== undefined,
+      detail: detail(doc),
+      edited: JSON.stringify(saved ?? null) !== JSON.stringify(slice(draftBody) ?? null),
+    };
+  });
 }

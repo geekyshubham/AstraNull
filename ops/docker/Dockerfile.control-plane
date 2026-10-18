@@ -14,6 +14,11 @@ WORKDIR /app
 # Lockfile copied without a glob: a missing lockfile must fail the build rather
 # than fall back to an unpinned install.
 COPY package.json package-lock.json ./
+COPY scripts/requirements-subdomains.txt /tmp/requirements-subdomains.txt
+RUN apk add --no-cache python3 py3-pip libstdc++ \
+  && python3 -m venv /opt/astranull-subdomains \
+  && /opt/astranull-subdomains/bin/pip install --no-cache-dir -r /tmp/requirements-subdomains.txt \
+  && rm /tmp/requirements-subdomains.txt
 # npm is removed after install; nothing at runtime invokes npm/npx/yarn.
 RUN npm ci --omit=dev && npm cache clean --force \
   && rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx /opt/yarn-* /usr/local/bin/yarn /usr/local/bin/yarnpkg
@@ -28,7 +33,8 @@ COPY tests/fixtures ./tests/fixtures
 
 USER astranull
 
-ENV PORT=3000
+ENV PORT=3000 \
+    ASTRANULL_SUBDOMAIN_PYTHON=/opt/astranull-subdomains/bin/python
 
 EXPOSE 3000
 

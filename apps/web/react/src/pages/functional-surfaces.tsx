@@ -72,8 +72,9 @@ import { VariantSwitch } from '../components/ui/variant-switch';
 import { RunsRefined, type RunsRefinedProps } from './refined/runs-refined';
 import { FindingsRefined, type FindingsRefinedProps } from './refined/findings-refined';
 import { RoleRestrictedCard } from '../components/ui/role-restricted';
+import { checkPresentation } from '../lib/check-presentation.mjs';
 // @ts-ignore Plain ESM keeps executive labels directly testable with node:test.
-import { plainCheckName, plainVerdictLabel } from '../lib/plain-language.mjs';
+import { plainVerdictLabel } from '../lib/plain-language.mjs';
 
 const WAF_POSTURE_SURFACE_TABS = [
   ...WAF_POSTURE_TABS,
@@ -583,8 +584,7 @@ function coverageStatusHint(status: string) {
 
 function checkDisplayName(checks: DataItem[], checkId: string, runId = '') {
   const check = checks.find((entry) => getString(entry, ['check_id']) === checkId);
-  const name = getString(check ?? {}, ['name'], checkId);
-  return plainCheckName(name || runId || 'View run');
+  return checkPresentation(check ?? checkId).name || runId || 'View run';
 }
 
 function truncateText(text: string, max = 72) {
@@ -800,6 +800,8 @@ export function ValidationSurfacePage({
       return [
         getString(check, ['check_id'], ''),
         getString(check, ['name', 'title'], ''),
+        checkPresentation(check).name,
+        checkPresentation(check).purpose,
         getString(check, ['description', 'summary'], ''),
         getString(check, ['vector_family'], ''),
         getString(check, ['evidence_tier'], '')
@@ -961,7 +963,7 @@ export function ValidationSurfacePage({
             : [];
           return (
             <span className="catalog-check-primary">
-              <strong>{getString(item, ['name', 'title', 'check_id'], '—')}</strong>
+              <strong>{checkPresentation(item).name}</strong>
               <code className="traffic-path-label" title={checkId}>{checkId || 'No check ID'}</code>
               {targets.length ? <small>Targets: {targets.join(', ')}</small> : null}
             </span>
@@ -1009,7 +1011,7 @@ export function ValidationSurfacePage({
         label: 'Expected behavior',
         render: (item) => {
           const expected = getString(item, ['expected_behavior', 'expected_result'], '');
-          const description = getString(item, ['description', 'summary'], '');
+          const description = checkPresentation(item).purpose;
           return (
             <span className="catalog-cell-stack">
               <strong>{expected ? formatSnakeLabel(expected) : 'Declared per target'}</strong>

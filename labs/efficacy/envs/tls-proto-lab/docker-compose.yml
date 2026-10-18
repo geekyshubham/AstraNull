@@ -1,0 +1,74 @@
+name: anl-tls-proto-lab
+
+services:
+  anl-tls-proto-lab-expired:
+    image: nginx:1.27-alpine
+    container_name: anl-tls-proto-lab-expired
+    restart: unless-stopped
+    cpus: 0.5
+    mem_limit: 128m
+    volumes:
+      - ./conf/expired-nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./certs/expired.crt:/etc/nginx/certs/expired.crt:ro
+      - ./certs/expired.key:/etc/nginx/certs/expired.key:ro
+    networks:
+      anl-tls-proto-lab-net:
+        ipv4_address: 172.31.51.10
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 443 || exit 1"]
+      interval: 2s
+      timeout: 2s
+      retries: 5
+      start_period: 2s
+
+  anl-tls-proto-lab-not-yet-valid:
+    image: nginx:1.27-alpine
+    container_name: anl-tls-proto-lab-not-yet-valid
+    restart: unless-stopped
+    cpus: 0.5
+    mem_limit: 128m
+    volumes:
+      - ./conf/not-yet-valid-nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./certs/not_yet_valid.crt:/etc/nginx/certs/not_yet_valid.crt:ro
+      - ./certs/not_yet_valid.key:/etc/nginx/certs/not_yet_valid.key:ro
+    networks:
+      anl-tls-proto-lab-net:
+        ipv4_address: 172.31.51.11
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 443 || exit 1"]
+      interval: 2s
+      timeout: 2s
+      retries: 5
+      start_period: 2s
+
+  anl-tls-proto-lab-h2-unbounded:
+    image: node:22-alpine
+    container_name: anl-tls-proto-lab-h2-unbounded
+    restart: unless-stopped
+    cpus: 0.5
+    mem_limit: 128m
+    working_dir: /app
+    volumes:
+      - ./server-h2.js:/app/server.js:ro
+      - ./certs/valid_h2.crt:/app/certs/valid_h2.crt:ro
+      - ./certs/valid_h2.key:/app/certs/valid_h2.key:ro
+    command: ["node", "/app/server.js"]
+    networks:
+      anl-tls-proto-lab-net:
+        ipv4_address: 172.31.51.12
+    healthcheck:
+      test: ["CMD-SHELL", "node -e 'require(\"node:tls\").connect(443, \"127.0.0.1\", { rejectUnauthorized: false }, () => process.exit(0)).on(\"error\", () => process.exit(1))'"]
+      interval: 2s
+      timeout: 2s
+      retries: 5
+      start_period: 2s
+
+networks:
+  anl-tls-proto-lab-net:
+    name: anl-tls-proto-lab-net
+    driver: bridge
+    internal: true
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.31.51.0/24

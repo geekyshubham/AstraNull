@@ -161,28 +161,28 @@ describe('721-vector library contract', () => {
     assert.deepEqual([...rowRunnableIds].sort(), matrix.runnable_safe_check_ids);
     assert.equal(matrix.summary.runnable_safe_check_count, matrix.runnable_safe_check_ids.length);
     assert.deepEqual(matrix.summary.evidence_capabilities, {
-      semantic_safe: 97,
-      soc_governed: 245,
+      semantic_safe: 46,
+      soc_governed: 254,
       declaration_only: 102,
-      transport_only: 228,
+      transport_only: 270,
       monitor_only: 49,
     });
     assert.deepEqual(matrix.summary.execution_dispositions, {
-      safe_validation_available: 383,
+      safe_validation_available: 374,
       not_currently_runnable: 44,
-      soc_gated_only: 245,
+      soc_gated_only: 254,
       monitor_only: 49,
     });
     assert.deepEqual(matrix.summary.evidence_execution_matrix, {
-      semantic_safe: { safe_validation_available: 97 },
-      soc_governed: { soc_gated_only: 245 },
+      semantic_safe: { safe_validation_available: 46 },
+      soc_governed: { soc_gated_only: 254 },
       declaration_only: { safe_validation_available: 102 },
-      transport_only: { safe_validation_available: 184, not_currently_runnable: 44 },
+      transport_only: { safe_validation_available: 226, not_currently_runnable: 44 },
       monitor_only: { monitor_only: 49 },
     });
-    assert.deepEqual(matrix.summary.dispositions, { safe_runnable: 373, additional_input_required: 10,
-      target_incompatible: 0, soc_gated: 245, monitor_only: 49, not_runnable: 44 });
-    assert.equal(matrix.summary.runnable_safe_check_count, 167);
+    assert.deepEqual(matrix.summary.dispositions, { safe_runnable: 364, additional_input_required: 10,
+      target_incompatible: 0, soc_gated: 254, monitor_only: 49, not_runnable: 44 });
+    assert.equal(matrix.summary.runnable_safe_check_count, 165);
     for (const vectorId of ['APP-003', 'NET-016']) {
       const row = matrix.rows.find((candidate) => candidate.vector_id === vectorId);
       assert.equal(row?.target_disposition, 'soc_gated', vectorId);
@@ -245,11 +245,19 @@ describe('GET /v1/vectors', () => {
         },
       },
     });
-    await new Promise((resolve) => server.listen(0, resolve));
+    await new Promise((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(0, '127.0.0.1', resolve);
+    });
     baseUrl = `http://127.0.0.1:${server.address().port}`;
   });
 
   after(async () => closeServer(server));
+
+  it('binds the API fixture to the IPv4 loopback used by its clients', () => {
+    assert.equal(server.address().address, '127.0.0.1');
+    assert.equal(server.address().family, 'IPv4');
+  });
 
   it('requires authentication and exposes bounded pagination/filter metadata', async () => {
     const denied = await request(baseUrl, 'GET', '/v1/vectors?limit=2');
@@ -308,9 +316,14 @@ describe('GET /v1/vectors', () => {
         ASTRANULL_DATABASE_URL: 'postgres://unused:unused@127.0.0.1:1/unused',
       },
     });
-    await new Promise((resolve) => postgresServer.listen(0, resolve));
-    const postgresBaseUrl = `http://127.0.0.1:${postgresServer.address().port}`;
     try {
+      await new Promise((resolve, reject) => {
+        postgresServer.once('error', reject);
+        postgresServer.listen(0, '127.0.0.1', resolve);
+      });
+      assert.equal(postgresServer.address().address, '127.0.0.1');
+      assert.equal(postgresServer.address().family, 'IPv4');
+      const postgresBaseUrl = `http://127.0.0.1:${postgresServer.address().port}`;
       const response = await request(postgresBaseUrl, 'GET', '/v1/vectors?limit=1', {
         headers: signedSessionHeaders(
           'viewer',

@@ -57,6 +57,10 @@ function toFullwidth(value) {
 export const OBSERVATION_ONLY_TRANSFORMS = Object.freeze(['base64_wrap', 'numeric_repr', 'homoglyph']);
 const BENIGN_PADDING_BYTES = 2048;
 const MARKER_DELIVERY_MAX_BYTES = 8192;
+const DEFAULT_HEADERS = Object.freeze({
+  accept: 'text/html,application/xhtml+xml',
+  'accept-language': 'en-US,en;q=0.9',
+});
 
 function toHomoglyph(value) {
   return value.replace(/a/g, 'а').replace(/o/gi, 'о');
@@ -149,7 +153,7 @@ export function isSupportedEvasionTransform(transform) {
 /** Actual bounded request; unsupported descriptors never reach the transport. */
 export function buildEvasionRequest(targetUrl, variant) {
   const url = new URL(targetUrl);
-  const headers = {};
+  const headers = { ...DEFAULT_HEADERS };
   const delivery = variant.delivery ?? {};
   if (variant.transform && !isSupportedEvasionTransform(variant.transform)) {
     throw new Error('unsupported_evasion_delivery');

@@ -94,7 +94,7 @@
 <body>
   <header class="page">
     <h1>AstraNull Check Library</h1>
-    <p>Reference for every check in <code>CHECK_CATALOG</code> (273 entries).
+    <p>Reference for every check in <code>CHECK_CATALOG</code> (275 entries).
     Safe checks use either signed bounded probes or explicit E1 declaration-only records; E1 never means live-tested. SOC-gated checks require authorization and SOC execution.
     Generated from the repo catalog — re-run <code>node scripts/generate-check-library-html.mjs</code> after catalog changes.</p>
   </header>
@@ -141,13 +141,13 @@
       <table class="probe-table">
         <thead><tr><th>Kind</th><th>What it does</th></tr></thead>
         <tbody>
-          <tr><td><code>http_head</code></td><td>Single bounded HTTP HEAD with optional harmless marker header.</td></tr><tr><td><code>tcp_connect</code></td><td>One TCP connect attempt to declared host:port.</td></tr><tr><td><code>dns_resolve</code></td><td>Single DNS lookup for declared name.</td></tr><tr><td><code>metadata_marker</code></td><td>No live network I/O — records declared intent only (deferred checks).</td></tr><tr><td><code>udp_probe</code></td><td>One labeled UDP datagram (no amplification).</td></tr><tr><td><code>quic_reachability</code></td><td>HTTPS Alt-Svc read plus one UDP/443 datagram.</td></tr><tr><td><code>alert_webhook_ping</code></td><td>One POST to declared alert webhook; expects HTTP 2xx.</td></tr><tr><td><code>ops_readiness</code></td><td>Validates runbook/kill-switch evidence metadata (no traffic to customer edge).</td></tr><tr><td><code>ownership_challenge</code></td><td>Bounded HEAD with challenge nonce for ownership verification.</td></tr><tr><td><code>tls_session</code></td><td>One TLS handshake; collects protocol/cipher/cert metadata.</td></tr><tr><td><code>http2_settings</code></td><td>Reads HTTP/2 SETTINGS frame limits (no reset flood).</td></tr><tr><td><code>origin_leak_scan</code></td><td>Bounded prefix DNS scan on declared apex (fixed label list, not internet-wide).</td></tr><tr><td><code>host_sni_bypass</code></td><td>HEAD to declared direct IP using protected hostname as Host/SNI.</td></tr><tr><td><code>port_scan_bounded</code></td><td>TCP connect to capped port list on declared host.</td></tr><tr><td><code>rate_limit_sequence</code></td><td>Up to 5 spaced HEAD requests to observe 429/challenge.</td></tr><tr><td><code>waf_enforcement_probe</code></td><td>Harmless marker request; blocked/challenged = WAF enforcing.</td></tr><tr><td><code>dnssec_posture</code></td><td>DNSKEY/DS lookups for DNSSEC signals.</td></tr><tr><td><code>dns_open_recursion</code></td><td>Single recursion test via declared resolver.</td></tr><tr><td><code>dns_failover_posture</code></td><td>NS count and secondary NS reachability.</td></tr><tr><td><code>dns_axfr_leak</code></td><td>One TCP-53 AXFR attempt; leak if zone transfers when unauthorized.</td></tr><tr><td><code>tls_audit</code></td><td>Full TLS handshake audit (version, cipher, cert expiry).</td></tr><tr><td><code>cache_abuse_probe</code></td><td>Bounded cache-bust HEAD sequence.</td></tr><tr><td><code>api_surface_scan</code></td><td>HEAD on declared/common API doc paths.</td></tr><tr><td><code>cors_posture_probe</code></td><td>OPTIONS with foreign Origin; weak ACAO = finding.</td></tr><tr><td><code>bot_challenge_probe</code></td><td>Cookie-less client; expects bot challenge or block.</td></tr><tr><td><code>graphql_posture_probe</code></td><td>Bounded GraphQL endpoint posture (no deep queries).</td></tr><tr><td><code>websocket_upgrade_posture</code></td><td>Single WebSocket upgrade request; classifies 101/403/426.</td></tr><tr><td><code>grpc_reflection_probe</code></td><td>One bounded TLS HTTP/2 gRPC health or reflection request; retains status metadata only.</td></tr><tr><td><code>http_method_matrix</code></td><td>HEAD and OPTIONS only; reads the Allow policy and never executes advertised unsafe methods.</td></tr><tr><td><code>header_size_probe</code></td><td>Baseline plus one bounded 8–16 KiB inert header to observe an explicit size rejection.</td></tr><tr><td><code>slow_header_probe</code></td><td>One incomplete harmless header connection held for at most the signed timeout; no concurrent holds.</td></tr><tr><td><code>http2_frame_probe</code></td><td>Bounded HTTP/2 SETTINGS read with optional ping/single reset according to the signed cap; HPACK mode uses SETTINGS only.</td></tr><tr><td><code>http3_control_probe</code></td><td>One HTTPS HEAD reads Alt-Svc only; it does not establish QUIC control-stream or SETTINGS posture.</td></tr><tr><td><code>waf_inspection_limit_probe</code></td><td>Baseline plus bounded inert marker variants; no verdict without a usable blocked baseline.</td></tr><tr><td><code>waf_class_marker_probe</code></td><td>Bounded inert WAF class markers; no functional exploit payloads.</td></tr><tr><td><code>waf_evasion_marker_probe</code></td><td>Bounded inert baseline/variant comparison for a named normalization transform.</td></tr><tr><td><code>l7_resource_posture_probe</code></td><td>Tiny inert declared-shape requests; never sends resource-exhaustion payloads.</td></tr><tr><td><code>outside_in_waf_scan</code></td><td>Up to 13 pre-reserved, destination-pinned HTTP probes: WAF fingerprint, benign markers, evasion variants, origin bypass; no redirects or standalone DNS/TLS hints.</td></tr>
+          <tr><td><code>http_head</code></td><td>Single bounded HTTP HEAD with optional harmless marker header.</td></tr><tr><td><code>tcp_connect</code></td><td>One TCP connect attempt to declared host:port.</td></tr><tr><td><code>dns_resolve</code></td><td>Single DNS lookup for declared name.</td></tr><tr><td><code>metadata_marker</code></td><td>No live network I/O — records declared intent only (deferred checks).</td></tr><tr><td><code>udp_probe</code></td><td>One labeled UDP datagram (no amplification).</td></tr><tr><td><code>quic_reachability</code></td><td>HTTPS Alt-Svc read plus one UDP/443 datagram.</td></tr><tr><td><code>alert_webhook_ping</code></td><td>One POST to declared alert webhook; expects HTTP 2xx.</td></tr><tr><td><code>ops_readiness</code></td><td>Validates runbook/kill-switch evidence metadata (no traffic to customer edge).</td></tr><tr><td><code>ownership_challenge</code></td><td>Bounded HEAD with challenge nonce for ownership verification.</td></tr><tr><td><code>tls_session</code></td><td>One TLS handshake; collects protocol/cipher/cert metadata.</td></tr><tr><td><code>http2_settings</code></td><td>Reads HTTP/2 SETTINGS frame limits (no reset flood).</td></tr><tr><td><code>origin_leak_scan</code></td><td>Bounded prefix DNS scan on declared apex (fixed label list, not internet-wide).</td></tr><tr><td><code>host_sni_bypass</code></td><td>HEAD to declared direct IP using protected hostname as Host/SNI.</td></tr><tr><td><code>origin_identity_pair</code></td><td>Two separately reviewed HEAD or bounded GET requests with shared nonce: protected baseline and verified bound origin, preserving Host/SNI. E2 identity observation only; no readiness or general WAF-bypass assurance.</td></tr><tr><td><code>port_scan_bounded</code></td><td>TCP connect to capped port list on declared host.</td></tr><tr><td><code>rate_limit_sequence</code></td><td>Up to 5 spaced HEAD requests to observe 429/challenge.</td></tr><tr><td><code>waf_enforcement_probe</code></td><td>Harmless marker request; blocked/challenged = WAF enforcing.</td></tr><tr><td><code>dnssec_posture</code></td><td>DNSKEY/DS lookups for DNSSEC signals.</td></tr><tr><td><code>dns_open_recursion</code></td><td>Single recursion test via declared resolver.</td></tr><tr><td><code>dns_failover_posture</code></td><td>NS count and secondary NS reachability.</td></tr><tr><td><code>dns_axfr_leak</code></td><td>One TCP-53 AXFR attempt; leak if zone transfers when unauthorized.</td></tr><tr><td><code>tls_audit</code></td><td>Full TLS handshake audit (version, cipher, cert expiry).</td></tr><tr><td><code>cache_abuse_probe</code></td><td>Bounded cache-bust HEAD sequence.</td></tr><tr><td><code>api_surface_scan</code></td><td>HEAD on declared/common API doc paths.</td></tr><tr><td><code>cors_posture_probe</code></td><td>OPTIONS with foreign Origin; weak ACAO = finding.</td></tr><tr><td><code>bot_challenge_probe</code></td><td>Cookie-less client; expects bot challenge or block.</td></tr><tr><td><code>graphql_posture_probe</code></td><td>Bounded GraphQL endpoint posture (no deep queries).</td></tr><tr><td><code>websocket_upgrade_posture</code></td><td>Single WebSocket upgrade request; classifies 101/403/426.</td></tr><tr><td><code>grpc_reflection_probe</code></td><td>One bounded TLS HTTP/2 gRPC health or reflection request; retains status metadata only.</td></tr><tr><td><code>http_method_matrix</code></td><td>HEAD and OPTIONS only; reads the Allow policy and never executes advertised unsafe methods.</td></tr><tr><td><code>header_size_probe</code></td><td>Baseline plus one bounded 8–16 KiB inert header to observe an explicit size rejection.</td></tr><tr><td><code>slow_header_probe</code></td><td>One incomplete harmless header connection held for at most the signed timeout; no concurrent holds.</td></tr><tr><td><code>http2_frame_probe</code></td><td>Bounded HTTP/2 SETTINGS read with optional ping/single reset according to the signed cap; HPACK mode uses SETTINGS only.</td></tr><tr><td><code>http3_control_probe</code></td><td>One HTTPS HEAD reads Alt-Svc only; it does not establish QUIC control-stream or SETTINGS posture.</td></tr><tr><td><code>waf_inspection_limit_probe</code></td><td>Baseline plus bounded inert marker variants; no verdict without a usable blocked baseline.</td></tr><tr><td><code>waf_class_marker_probe</code></td><td>Bounded inert WAF class markers; no functional exploit payloads.</td></tr><tr><td><code>waf_evasion_marker_probe</code></td><td>Bounded inert baseline/variant comparison for a named normalization transform.</td></tr><tr><td><code>l7_resource_posture_probe</code></td><td>Tiny inert declared-shape requests; never sends resource-exhaustion payloads.</td></tr><tr><td><code>outside_in_waf_scan</code></td><td>Up to 13 pre-reserved, destination-pinned HTTP probes: WAF fingerprint, benign markers, evasion variants, origin bypass; no redirects or standalone DNS/TLS hints.</td></tr>
         </tbody>
       </table>
     </section>
     
     <section id="family-origin">
-      <h2>Origin &amp; bypass <span style="color:var(--muted);font-weight:400">(7)</span></h2>
+      <h2>Origin &amp; bypass <span style="color:var(--muted);font-weight:400">(9)</span></h2>
       <div class="checks">
     <article class="check" id="origin.direct_reachability.safe">
       <header>
@@ -351,6 +351,64 @@
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
       <details><summary>Customer setup required</summary><ul><li>origin.lockdown_expected</li><li>origin_binding</li></ul></details>
+    </article>
+    <article class="check" id="origin.identity_pair.head.v1">
+      <header>
+        <h3>Paired origin identity (HEAD)</h3>
+        <code class="check-id">origin.identity_pair.head.v1</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">Exactly two reviewed HEAD requests: one to the protected declared target and one to its independently verified bound address. No redirects or extra assets. Content and certificates are supporting clues only; no readiness or protected outcome.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>Observation-only. A fresh same-worker, same-scope nonce-bound permitted baseline may confirm a direct application path, never general WAF bypass, origin protection or capacity.</dd>
+        <dt>How we detect</dt>
+        <dd>E2: Two separately reviewed HEAD or bounded GET requests with shared nonce: protected baseline and verified bound origin, preserving Host/SNI. E2 identity observation only; no readiness or general WAF-bypass assurance. Max 2 request(s), timeout ≤ 5000ms. Observation only: this transport result remains inconclusive for readiness.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>origin_identity_pair</code></dd>
+        <dt>Evidence tier</dt>
+        <dd><code>E2</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>application_l7 <span class="muted">(registry: ATT-100)</span></dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>ip, url</dd>
+        <dt>Evidence required</dt>
+        <dd>probe_result</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>reviewed_entry_path_comparison</li><li>origin_binding</li><li>both_current_ownership_proofs</li></ul></details>
+    </article>
+    <article class="check" id="origin.identity_pair.get.v1">
+      <header>
+        <h3>Paired origin identity (GET)</h3>
+        <code class="check-id">origin.identity_pair.get.v1</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">Exactly two reviewed GET requests: one to the protected declared target and one to its independently verified bound address. No redirects or extra assets. Content and certificates are supporting clues only; no readiness or protected outcome.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>Observation-only. A fresh same-worker, same-scope nonce-bound permitted baseline may confirm a direct application path, never general WAF bypass, origin protection or capacity.</dd>
+        <dt>How we detect</dt>
+        <dd>E2: Two separately reviewed HEAD or bounded GET requests with shared nonce: protected baseline and verified bound origin, preserving Host/SNI. E2 identity observation only; no readiness or general WAF-bypass assurance. Max 2 request(s), timeout ≤ 5000ms. Observation only: this transport result remains inconclusive for readiness.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>origin_identity_pair</code></dd>
+        <dt>Evidence tier</dt>
+        <dd><code>E2</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>application_l7 <span class="muted">(registry: ATT-100)</span></dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>ip, url</dd>
+        <dt>Evidence required</dt>
+        <dd>probe_result</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>reviewed_entry_path_comparison</li><li>origin_binding</li><li>both_current_ownership_proofs</li></ul></details>
     </article></div>
     </section>
     <section id="family-l3_l4">
@@ -1431,7 +1489,7 @@
         <dt>Targets</dt>
         <dd>fqdn, dns</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, health_signal</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -1940,16 +1998,16 @@
         <code class="check-id">waf.http_method_policy_marker.safe</code>
         <span class="badge safe">safe</span>
       </header>
-      <p class="desc">Proves a customer rule written for AstraNull's inert HTTP Method/Protocol Policy token. An opaque detection string is sent in query, path and header; a block means that customer-written canary rule fired. This does not prove managed-ruleset coverage or exploit mitigation.</p>
+      <p class="desc">Observes the response to an opaque inert token in query, path and header. The current declaration workflow cannot bind an installed exact-token rule to its placements and expected action. This does not test the named attack or establish an installed rule failure.</p>
       <dl>
         <dt>What we detect</dt>
-        <dd>Healthy comparable permitted baseline and a control-specific denial of AstraNull's inert canary token required. All planned legs must complete conclusively. A block proves only that a customer rule matching this token is enforced on the probed path. An allow means that canary rule did not fire.</dd>
+        <dd>Setup-unavailable observation only. Existing block_signature, expected_action and marker_paths are not proof that an exact-token custom rule is installed; no protection verdict, finding or readiness credit.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Bounded inert WAF class markers; no functional exploit payloads. Max 8 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
+        <dd>E2: Bounded inert WAF class markers; no functional exploit payloads. Max 8 request(s), timeout ≤ 5000ms. Observation only: this transport result remains inconclusive for readiness.</dd>
         <dt>Probe kind</dt>
         <dd><code>waf_class_marker_probe</code></dd>
         <dt>Evidence tier</dt>
-        <dd><code>E3</code></dd>
+        <dd><code>E2</code></dd>
         <dt>Exhausted resource</dt>
         <dd>integrity_attack</dd>
         <dt>Default expected behavior</dt>
@@ -1969,16 +2027,16 @@
         <code class="check-id">waf.request_smuggling_marker.safe</code>
         <span class="badge safe">safe</span>
       </header>
-      <p class="desc">Proves a customer rule written for AstraNull's inert Request Smuggling token. An opaque detection string is sent in query, path and header; a block means that customer-written canary rule fired. This does not prove managed-ruleset coverage or exploit mitigation.</p>
+      <p class="desc">Observes the response to an opaque inert token in query, path and header. The current declaration workflow cannot bind an installed exact-token rule to its placements and expected action. This does not test the named attack or establish an installed rule failure.</p>
       <dl>
         <dt>What we detect</dt>
-        <dd>Healthy comparable permitted baseline and a control-specific denial of AstraNull's inert canary token required. All planned legs must complete conclusively. A block proves only that a customer rule matching this token is enforced on the probed path. An allow means that canary rule did not fire.</dd>
+        <dd>Setup-unavailable observation only. Existing block_signature, expected_action and marker_paths are not proof that an exact-token custom rule is installed; no protection verdict, finding or readiness credit.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Bounded inert WAF class markers; no functional exploit payloads. Max 8 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
+        <dd>E2: Bounded inert WAF class markers; no functional exploit payloads. Max 8 request(s), timeout ≤ 5000ms. Observation only: this transport result remains inconclusive for readiness.</dd>
         <dt>Probe kind</dt>
         <dd><code>waf_class_marker_probe</code></dd>
         <dt>Evidence tier</dt>
-        <dd><code>E3</code></dd>
+        <dd><code>E2</code></dd>
         <dt>Exhausted resource</dt>
         <dd>integrity_attack</dd>
         <dt>Default expected behavior</dt>
@@ -1998,16 +2056,16 @@
         <code class="check-id">waf.crlf_injection_marker.safe</code>
         <span class="badge safe">safe</span>
       </header>
-      <p class="desc">Proves a customer rule written for AstraNull's inert CRLF/Response-Splitting token. An opaque detection string is sent in query, path and header; a block means that customer-written canary rule fired. This does not prove managed-ruleset coverage or exploit mitigation.</p>
+      <p class="desc">Observes the response to an opaque inert token in query, path and header. The current declaration workflow cannot bind an installed exact-token rule to its placements and expected action. This does not test the named attack or establish an installed rule failure.</p>
       <dl>
         <dt>What we detect</dt>
-        <dd>Healthy comparable permitted baseline and a control-specific denial of AstraNull's inert canary token required. All planned legs must complete conclusively. A block proves only that a customer rule matching this token is enforced on the probed path. An allow means that canary rule did not fire.</dd>
+        <dd>Setup-unavailable observation only. Existing block_signature, expected_action and marker_paths are not proof that an exact-token custom rule is installed; no protection verdict, finding or readiness credit.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Bounded inert WAF class markers; no functional exploit payloads. Max 8 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
+        <dd>E2: Bounded inert WAF class markers; no functional exploit payloads. Max 8 request(s), timeout ≤ 5000ms. Observation only: this transport result remains inconclusive for readiness.</dd>
         <dt>Probe kind</dt>
         <dd><code>waf_class_marker_probe</code></dd>
         <dt>Evidence tier</dt>
-        <dd><code>E3</code></dd>
+        <dd><code>E2</code></dd>
         <dt>Exhausted resource</dt>
         <dd>integrity_attack</dd>
         <dt>Default expected behavior</dt>
@@ -2027,16 +2085,16 @@
         <code class="check-id">waf.open_redirect_marker.safe</code>
         <span class="badge safe">safe</span>
       </header>
-      <p class="desc">Proves a customer rule written for AstraNull's inert Open Redirect / Parameter Policy token. An opaque detection string is sent in query, path and header; a block means that customer-written canary rule fired. This does not prove managed-ruleset coverage or exploit mitigation.</p>
+      <p class="desc">Observes the response to an opaque inert token in query, path and header. The current declaration workflow cannot bind an installed exact-token rule to its placements and expected action. This does not test the named attack or establish an installed rule failure.</p>
       <dl>
         <dt>What we detect</dt>
-        <dd>Healthy comparable permitted baseline and a control-specific denial of AstraNull's inert canary token required. All planned legs must complete conclusively. A block proves only that a customer rule matching this token is enforced on the probed path. An allow means that canary rule did not fire.</dd>
+        <dd>Setup-unavailable observation only. Existing block_signature, expected_action and marker_paths are not proof that an exact-token custom rule is installed; no protection verdict, finding or readiness credit.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Bounded inert WAF class markers; no functional exploit payloads. Max 8 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
+        <dd>E2: Bounded inert WAF class markers; no functional exploit payloads. Max 8 request(s), timeout ≤ 5000ms. Observation only: this transport result remains inconclusive for readiness.</dd>
         <dt>Probe kind</dt>
         <dd><code>waf_class_marker_probe</code></dd>
         <dt>Evidence tier</dt>
-        <dd><code>E3</code></dd>
+        <dd><code>E2</code></dd>
         <dt>Exhausted resource</dt>
         <dd>integrity_attack</dd>
         <dt>Default expected behavior</dt>
@@ -2056,16 +2114,16 @@
         <code class="check-id">waf.nosql_injection_marker.safe</code>
         <span class="badge safe">safe</span>
       </header>
-      <p class="desc">Proves a customer rule written for AstraNull's inert NoSQL Injection token. An opaque detection string is sent in query, path and header; a block means that customer-written canary rule fired. This does not prove managed-ruleset coverage or exploit mitigation.</p>
+      <p class="desc">Observes the response to an opaque inert token in query, path and header. The current declaration workflow cannot bind an installed exact-token rule to its placements and expected action. This does not test the named attack or establish an installed rule failure.</p>
       <dl>
         <dt>What we detect</dt>
-        <dd>Healthy comparable permitted baseline and a control-specific denial of AstraNull's inert canary token required. All planned legs must complete conclusively. A block proves only that a customer rule matching this token is enforced on the probed path. An allow means that canary rule did not fire.</dd>
+        <dd>Setup-unavailable observation only. Existing block_signature, expected_action and marker_paths are not proof that an exact-token custom rule is installed; no protection verdict, finding or readiness credit.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Bounded inert WAF class markers; no functional exploit payloads. Max 8 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
+        <dd>E2: Bounded inert WAF class markers; no functional exploit payloads. Max 8 request(s), timeout ≤ 5000ms. Observation only: this transport result remains inconclusive for readiness.</dd>
         <dt>Probe kind</dt>
         <dd><code>waf_class_marker_probe</code></dd>
         <dt>Evidence tier</dt>
-        <dd><code>E3</code></dd>
+        <dd><code>E2</code></dd>
         <dt>Exhausted resource</dt>
         <dd>integrity_attack</dd>
         <dt>Default expected behavior</dt>
@@ -2085,16 +2143,16 @@
         <code class="check-id">waf.xpath_injection_marker.safe</code>
         <span class="badge safe">safe</span>
       </header>
-      <p class="desc">Proves a customer rule written for AstraNull's inert XPath/XML Injection token. An opaque detection string is sent in query, path and header; a block means that customer-written canary rule fired. This does not prove managed-ruleset coverage or exploit mitigation.</p>
+      <p class="desc">Observes the response to an opaque inert token in query, path and header. The current declaration workflow cannot bind an installed exact-token rule to its placements and expected action. This does not test the named attack or establish an installed rule failure.</p>
       <dl>
         <dt>What we detect</dt>
-        <dd>Healthy comparable permitted baseline and a control-specific denial of AstraNull's inert canary token required. All planned legs must complete conclusively. A block proves only that a customer rule matching this token is enforced on the probed path. An allow means that canary rule did not fire.</dd>
+        <dd>Setup-unavailable observation only. Existing block_signature, expected_action and marker_paths are not proof that an exact-token custom rule is installed; no protection verdict, finding or readiness credit.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Bounded inert WAF class markers; no functional exploit payloads. Max 8 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
+        <dd>E2: Bounded inert WAF class markers; no functional exploit payloads. Max 8 request(s), timeout ≤ 5000ms. Observation only: this transport result remains inconclusive for readiness.</dd>
         <dt>Probe kind</dt>
         <dd><code>waf_class_marker_probe</code></dd>
         <dt>Evidence tier</dt>
-        <dd><code>E3</code></dd>
+        <dd><code>E2</code></dd>
         <dt>Exhausted resource</dt>
         <dd>integrity_attack</dd>
         <dt>Default expected behavior</dt>
@@ -2114,16 +2172,16 @@
         <code class="check-id">waf.jndi_ldap_marker.safe</code>
         <span class="badge safe">safe</span>
       </header>
-      <p class="desc">Proves a customer rule written for AstraNull's inert JNDI/LDAP token. An opaque detection string is sent in query, path and header; a block means that customer-written canary rule fired. This does not prove managed-ruleset coverage or exploit mitigation.</p>
+      <p class="desc">Observes the response to an opaque inert token in query, path and header. The current declaration workflow cannot bind an installed exact-token rule to its placements and expected action. This does not test the named attack or establish an installed rule failure.</p>
       <dl>
         <dt>What we detect</dt>
-        <dd>Healthy comparable permitted baseline and a control-specific denial of AstraNull's inert canary token required. All planned legs must complete conclusively. A block proves only that a customer rule matching this token is enforced on the probed path. An allow means that canary rule did not fire.</dd>
+        <dd>Setup-unavailable observation only. Existing block_signature, expected_action and marker_paths are not proof that an exact-token custom rule is installed; no protection verdict, finding or readiness credit.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Bounded inert WAF class markers; no functional exploit payloads. Max 8 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
+        <dd>E2: Bounded inert WAF class markers; no functional exploit payloads. Max 8 request(s), timeout ≤ 5000ms. Observation only: this transport result remains inconclusive for readiness.</dd>
         <dt>Probe kind</dt>
         <dd><code>waf_class_marker_probe</code></dd>
         <dt>Evidence tier</dt>
-        <dd><code>E3</code></dd>
+        <dd><code>E2</code></dd>
         <dt>Exhausted resource</dt>
         <dd>integrity_attack</dd>
         <dt>Default expected behavior</dt>
@@ -2143,16 +2201,16 @@
         <code class="check-id">waf.csv_formula_marker.safe</code>
         <span class="badge safe">safe</span>
       </header>
-      <p class="desc">Proves a customer rule written for AstraNull's inert CSV/Formula token. An opaque detection string is sent in query, path and header; a block means that customer-written canary rule fired. This does not prove managed-ruleset coverage or exploit mitigation.</p>
+      <p class="desc">Observes the response to an opaque inert token in query, path and header. The current declaration workflow cannot bind an installed exact-token rule to its placements and expected action. This does not test the named attack or establish an installed rule failure.</p>
       <dl>
         <dt>What we detect</dt>
-        <dd>Healthy comparable permitted baseline and a control-specific denial of AstraNull's inert canary token required. All planned legs must complete conclusively. A block proves only that a customer rule matching this token is enforced on the probed path. An allow means that canary rule did not fire.</dd>
+        <dd>Setup-unavailable observation only. Existing block_signature, expected_action and marker_paths are not proof that an exact-token custom rule is installed; no protection verdict, finding or readiness credit.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Bounded inert WAF class markers; no functional exploit payloads. Max 8 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
+        <dd>E2: Bounded inert WAF class markers; no functional exploit payloads. Max 8 request(s), timeout ≤ 5000ms. Observation only: this transport result remains inconclusive for readiness.</dd>
         <dt>Probe kind</dt>
         <dd><code>waf_class_marker_probe</code></dd>
         <dt>Evidence tier</dt>
-        <dd><code>E3</code></dd>
+        <dd><code>E2</code></dd>
         <dt>Exhausted resource</dt>
         <dd>integrity_attack</dd>
         <dt>Default expected behavior</dt>
@@ -2172,16 +2230,16 @@
         <code class="check-id">waf.prototype_pollution_marker.safe</code>
         <span class="badge safe">safe</span>
       </header>
-      <p class="desc">Proves a customer rule written for AstraNull's inert Prototype Pollution token. An opaque detection string is sent in query, path and header; a block means that customer-written canary rule fired. This does not prove managed-ruleset coverage or exploit mitigation.</p>
+      <p class="desc">Observes the response to an opaque inert token in query, path and header. The current declaration workflow cannot bind an installed exact-token rule to its placements and expected action. This does not test the named attack or establish an installed rule failure.</p>
       <dl>
         <dt>What we detect</dt>
-        <dd>Healthy comparable permitted baseline and a control-specific denial of AstraNull's inert canary token required. All planned legs must complete conclusively. A block proves only that a customer rule matching this token is enforced on the probed path. An allow means that canary rule did not fire.</dd>
+        <dd>Setup-unavailable observation only. Existing block_signature, expected_action and marker_paths are not proof that an exact-token custom rule is installed; no protection verdict, finding or readiness credit.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Bounded inert WAF class markers; no functional exploit payloads. Max 8 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
+        <dd>E2: Bounded inert WAF class markers; no functional exploit payloads. Max 8 request(s), timeout ≤ 5000ms. Observation only: this transport result remains inconclusive for readiness.</dd>
         <dt>Probe kind</dt>
         <dd><code>waf_class_marker_probe</code></dd>
         <dt>Evidence tier</dt>
-        <dd><code>E3</code></dd>
+        <dd><code>E2</code></dd>
         <dt>Exhausted resource</dt>
         <dd>integrity_attack</dd>
         <dt>Default expected behavior</dt>
@@ -2201,16 +2259,16 @@
         <code class="check-id">waf.deserialization_marker.safe</code>
         <span class="badge safe">safe</span>
       </header>
-      <p class="desc">Proves a customer rule written for AstraNull's inert Unsafe Deserialization token. An opaque detection string is sent in query, path and header; a block means that customer-written canary rule fired. This does not prove managed-ruleset coverage or exploit mitigation.</p>
+      <p class="desc">Observes the response to an opaque inert token in query, path and header. The current declaration workflow cannot bind an installed exact-token rule to its placements and expected action. This does not test the named attack or establish an installed rule failure.</p>
       <dl>
         <dt>What we detect</dt>
-        <dd>Healthy comparable permitted baseline and a control-specific denial of AstraNull's inert canary token required. All planned legs must complete conclusively. A block proves only that a customer rule matching this token is enforced on the probed path. An allow means that canary rule did not fire.</dd>
+        <dd>Setup-unavailable observation only. Existing block_signature, expected_action and marker_paths are not proof that an exact-token custom rule is installed; no protection verdict, finding or readiness credit.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Bounded inert WAF class markers; no functional exploit payloads. Max 8 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
+        <dd>E2: Bounded inert WAF class markers; no functional exploit payloads. Max 8 request(s), timeout ≤ 5000ms. Observation only: this transport result remains inconclusive for readiness.</dd>
         <dt>Probe kind</dt>
         <dd><code>waf_class_marker_probe</code></dd>
         <dt>Evidence tier</dt>
-        <dd><code>E3</code></dd>
+        <dd><code>E2</code></dd>
         <dt>Exhausted resource</dt>
         <dd>integrity_attack</dd>
         <dt>Default expected behavior</dt>
@@ -2230,16 +2288,16 @@
         <code class="check-id">waf.ssrf_marker.safe</code>
         <span class="badge safe">safe</span>
       </header>
-      <p class="desc">Proves a customer rule written for AstraNull's inert SSRF token. An opaque detection string is sent in query, path and header; a block means that customer-written canary rule fired. This does not prove managed-ruleset coverage or exploit mitigation.</p>
+      <p class="desc">Observes the response to an opaque inert token in query, path and header. The current declaration workflow cannot bind an installed exact-token rule to its placements and expected action. This does not test the named attack or establish an installed rule failure.</p>
       <dl>
         <dt>What we detect</dt>
-        <dd>Healthy comparable permitted baseline and a control-specific denial of AstraNull's inert canary token required. All planned legs must complete conclusively. A block proves only that a customer rule matching this token is enforced on the probed path. An allow means that canary rule did not fire.</dd>
+        <dd>Setup-unavailable observation only. Existing block_signature, expected_action and marker_paths are not proof that an exact-token custom rule is installed; no protection verdict, finding or readiness credit.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Bounded inert WAF class markers; no functional exploit payloads. Max 8 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
+        <dd>E2: Bounded inert WAF class markers; no functional exploit payloads. Max 8 request(s), timeout ≤ 5000ms. Observation only: this transport result remains inconclusive for readiness.</dd>
         <dt>Probe kind</dt>
         <dd><code>waf_class_marker_probe</code></dd>
         <dt>Evidence tier</dt>
-        <dd><code>E3</code></dd>
+        <dd><code>E2</code></dd>
         <dt>Exhausted resource</dt>
         <dd>access_control</dd>
         <dt>Default expected behavior</dt>
@@ -2259,16 +2317,16 @@
         <code class="check-id">waf.xxe_marker.safe</code>
         <span class="badge safe">safe</span>
       </header>
-      <p class="desc">Proves a customer rule written for AstraNull's inert XXE token. An opaque detection string is sent in query, path and header; a block means that customer-written canary rule fired. This does not prove managed-ruleset coverage or exploit mitigation.</p>
+      <p class="desc">Observes the response to an opaque inert token in query, path and header. The current declaration workflow cannot bind an installed exact-token rule to its placements and expected action. This does not test the named attack or establish an installed rule failure.</p>
       <dl>
         <dt>What we detect</dt>
-        <dd>Healthy comparable permitted baseline and a control-specific denial of AstraNull's inert canary token required. All planned legs must complete conclusively. A block proves only that a customer rule matching this token is enforced on the probed path. An allow means that canary rule did not fire.</dd>
+        <dd>Setup-unavailable observation only. Existing block_signature, expected_action and marker_paths are not proof that an exact-token custom rule is installed; no protection verdict, finding or readiness credit.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Bounded inert WAF class markers; no functional exploit payloads. Max 8 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
+        <dd>E2: Bounded inert WAF class markers; no functional exploit payloads. Max 8 request(s), timeout ≤ 5000ms. Observation only: this transport result remains inconclusive for readiness.</dd>
         <dt>Probe kind</dt>
         <dd><code>waf_class_marker_probe</code></dd>
         <dt>Evidence tier</dt>
-        <dd><code>E3</code></dd>
+        <dd><code>E2</code></dd>
         <dt>Exhausted resource</dt>
         <dd>data_exposure</dd>
         <dt>Default expected behavior</dt>
@@ -2288,16 +2346,16 @@
         <code class="check-id">waf.file_upload_marker.safe</code>
         <span class="badge safe">safe</span>
       </header>
-      <p class="desc">Proves a customer rule written for AstraNull's inert File Upload token. An opaque detection string is sent in query, path and header; a block means that customer-written canary rule fired. This does not prove managed-ruleset coverage or exploit mitigation.</p>
+      <p class="desc">Observes the response to an opaque inert token in query, path and header. The current declaration workflow cannot bind an installed exact-token rule to its placements and expected action. This does not test the named attack or establish an installed rule failure.</p>
       <dl>
         <dt>What we detect</dt>
-        <dd>Healthy comparable permitted baseline and a control-specific denial of AstraNull's inert canary token required. All planned legs must complete conclusively. A block proves only that a customer rule matching this token is enforced on the probed path. An allow means that canary rule did not fire.</dd>
+        <dd>Setup-unavailable observation only. Existing block_signature, expected_action and marker_paths are not proof that an exact-token custom rule is installed; no protection verdict, finding or readiness credit.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Bounded inert WAF class markers; no functional exploit payloads. Max 8 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
+        <dd>E2: Bounded inert WAF class markers; no functional exploit payloads. Max 8 request(s), timeout ≤ 5000ms. Observation only: this transport result remains inconclusive for readiness.</dd>
         <dt>Probe kind</dt>
         <dd><code>waf_class_marker_probe</code></dd>
         <dt>Evidence tier</dt>
-        <dd><code>E3</code></dd>
+        <dd><code>E2</code></dd>
         <dt>Exhausted resource</dt>
         <dd>integrity_attack</dd>
         <dt>Default expected behavior</dt>
@@ -2317,16 +2375,16 @@
         <code class="check-id">waf.jwt_tamper_marker.safe</code>
         <span class="badge safe">safe</span>
       </header>
-      <p class="desc">Proves a customer rule written for AstraNull's inert JWT Tamper token. An opaque detection string is sent in query, path and header; a block means that customer-written canary rule fired. This does not prove managed-ruleset coverage or exploit mitigation.</p>
+      <p class="desc">Observes the response to an opaque inert token in query, path and header. The current declaration workflow cannot bind an installed exact-token rule to its placements and expected action. This does not test the named attack or establish an installed rule failure.</p>
       <dl>
         <dt>What we detect</dt>
-        <dd>Healthy comparable permitted baseline and a control-specific denial of AstraNull's inert canary token required. All planned legs must complete conclusively. A block proves only that a customer rule matching this token is enforced on the probed path. An allow means that canary rule did not fire.</dd>
+        <dd>Setup-unavailable observation only. Existing block_signature, expected_action and marker_paths are not proof that an exact-token custom rule is installed; no protection verdict, finding or readiness credit.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Bounded inert WAF class markers; no functional exploit payloads. Max 8 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
+        <dd>E2: Bounded inert WAF class markers; no functional exploit payloads. Max 8 request(s), timeout ≤ 5000ms. Observation only: this transport result remains inconclusive for readiness.</dd>
         <dt>Probe kind</dt>
         <dd><code>waf_class_marker_probe</code></dd>
         <dt>Evidence tier</dt>
-        <dd><code>E3</code></dd>
+        <dd><code>E2</code></dd>
         <dt>Exhausted resource</dt>
         <dd>access_control</dd>
         <dt>Default expected behavior</dt>
@@ -2349,7 +2407,7 @@
       <p class="desc">Bounded inert-marker validation of a customer-declared login URL: GET/HEAD only, no request body, no credentials, no account interaction, no redirects followed. Checks that the edge WAF blocks the benign marker in the query string and a benign header, percent-encoded, with a form content type, and after bounded inspection-limit padding.</p>
       <dl>
         <dt>What we detect</dt>
-        <dd>Healthy comparable permitted baseline and control-specific vendor/exact declared denial signatures required. All planned safe marker legs must complete conclusively for enforcement; incomplete or unhealthy comparisons remain inconclusive. A blocked managed-class marker supports a scoped protected verdict for that class on the probed path; an allowed marker is a scoped exposed finding. Marker acceptance is limited to this route and does not establish exploit mitigation or DDoS capacity.</dd>
+        <dd>The budget-selected marker plan and healthy benign controls must complete. Received unsigned or redirected placements are excluded from grading, not relabelled as missing delivery. At least one graded placement is required; conclusions cover only those placements and tested paths, never exploit mitigation or capacity.</dd>
         <dt>How we detect</dt>
         <dd>E3: Bounded inert WAF class markers; no functional exploit payloads. Max 8 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
@@ -2378,7 +2436,7 @@
       <p class="desc">Bounded inert-marker validation of a customer-declared API URL: GET/HEAD only with a JSON Accept header, no request body, no credentials, no redirects followed. Checks that the edge WAF blocks the benign marker in the query string and a benign header, double-encoded, with a JSON content type, and after bounded inspection-limit padding.</p>
       <dl>
         <dt>What we detect</dt>
-        <dd>Healthy comparable permitted baseline and control-specific vendor/exact declared denial signatures required. All planned safe marker legs must complete conclusively for enforcement; incomplete or unhealthy comparisons remain inconclusive. A blocked managed-class marker supports a scoped protected verdict for that class on the probed path; an allowed marker is a scoped exposed finding. Marker acceptance is limited to this route and does not establish exploit mitigation or DDoS capacity.</dd>
+        <dd>The budget-selected marker plan and healthy benign controls must complete. Received unsigned or redirected placements are excluded from grading, not relabelled as missing delivery. At least one graded placement is required; conclusions cover only those placements and tested paths, never exploit mitigation or capacity.</dd>
         <dt>How we detect</dt>
         <dd>E3: Bounded inert WAF class markers; no functional exploit payloads. Max 8 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
@@ -3915,7 +3973,7 @@
       <p class="desc">Sends the plain inert SQLi marker that managed OWASP rulesets recognise. A block is a scoped protected verdict for SQLi on the probed path; an allow is a scoped exposed finding. GET/HEAD only, no request body.</p>
       <dl>
         <dt>What we detect</dt>
-        <dd>Healthy comparable permitted baseline and control-specific vendor/exact declared denial signatures required. All planned safe marker legs must complete conclusively for enforcement; incomplete or unhealthy comparisons remain inconclusive. A blocked managed-class marker supports a scoped protected verdict for that class on the probed path; an allowed marker is a scoped exposed finding. Marker acceptance is limited to this route and does not establish exploit mitigation or DDoS capacity.</dd>
+        <dd>The budget-selected marker plan and healthy benign controls must complete. Received unsigned or redirected placements are excluded from grading, not relabelled as missing delivery. At least one graded placement is required; conclusions cover only those placements and tested paths, never exploit mitigation or capacity.</dd>
         <dt>How we detect</dt>
         <dd>E3: Bounded inert WAF class markers; no functional exploit payloads. Max 8 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
@@ -3944,7 +4002,7 @@
       <p class="desc">Sends the plain inert XSS marker that managed OWASP rulesets recognise. A block is a scoped protected verdict for XSS on the probed path; an allow is a scoped exposed finding. GET/HEAD only, no request body.</p>
       <dl>
         <dt>What we detect</dt>
-        <dd>Healthy comparable permitted baseline and control-specific vendor/exact declared denial signatures required. All planned safe marker legs must complete conclusively for enforcement; incomplete or unhealthy comparisons remain inconclusive. A blocked managed-class marker supports a scoped protected verdict for that class on the probed path; an allowed marker is a scoped exposed finding. Marker acceptance is limited to this route and does not establish exploit mitigation or DDoS capacity.</dd>
+        <dd>The budget-selected marker plan and healthy benign controls must complete. Received unsigned or redirected placements are excluded from grading, not relabelled as missing delivery. At least one graded placement is required; conclusions cover only those placements and tested paths, never exploit mitigation or capacity.</dd>
         <dt>How we detect</dt>
         <dd>E3: Bounded inert WAF class markers; no functional exploit payloads. Max 8 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
@@ -3973,7 +4031,7 @@
       <p class="desc">Sends the plain inert path-traversal marker that managed OWASP rulesets recognise. A block is a scoped protected verdict for path traversal on the probed path; an allow is a scoped exposed finding. GET/HEAD only, no request body.</p>
       <dl>
         <dt>What we detect</dt>
-        <dd>Healthy comparable permitted baseline and control-specific vendor/exact declared denial signatures required. All planned safe marker legs must complete conclusively for enforcement; incomplete or unhealthy comparisons remain inconclusive. A blocked managed-class marker supports a scoped protected verdict for that class on the probed path; an allowed marker is a scoped exposed finding. Marker acceptance is limited to this route and does not establish exploit mitigation or DDoS capacity.</dd>
+        <dd>The budget-selected marker plan and healthy benign controls must complete. Received unsigned or redirected placements are excluded from grading, not relabelled as missing delivery. At least one graded placement is required; conclusions cover only those placements and tested paths, never exploit mitigation or capacity.</dd>
         <dt>How we detect</dt>
         <dd>E3: Bounded inert WAF class markers; no functional exploit payloads. Max 8 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
@@ -3999,16 +4057,16 @@
         <code class="check-id">waf.ssti_marker.safe</code>
         <span class="badge safe">safe</span>
       </header>
-      <p class="desc">Proves a customer rule written for AstraNull's inert SSTI token. An opaque detection string is sent in query, path and header; a block means that customer-written canary rule fired. This does not prove managed-ruleset coverage or exploit mitigation.</p>
+      <p class="desc">Observes the response to an opaque inert token in query, path and header. The current declaration workflow cannot bind an installed exact-token rule to its placements and expected action. This does not test the named attack or establish an installed rule failure.</p>
       <dl>
         <dt>What we detect</dt>
-        <dd>Healthy comparable permitted baseline and a control-specific denial of AstraNull's inert canary token required. All planned legs must complete conclusively. A block proves only that a customer rule matching this token is enforced on the probed path. An allow means that canary rule did not fire.</dd>
+        <dd>Setup-unavailable observation only. Existing block_signature, expected_action and marker_paths are not proof that an exact-token custom rule is installed; no protection verdict, finding or readiness credit.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Bounded inert WAF class markers; no functional exploit payloads. Max 8 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
+        <dd>E2: Bounded inert WAF class markers; no functional exploit payloads. Max 8 request(s), timeout ≤ 5000ms. Observation only: this transport result remains inconclusive for readiness.</dd>
         <dt>Probe kind</dt>
         <dd><code>waf_class_marker_probe</code></dd>
         <dt>Evidence tier</dt>
-        <dd><code>E3</code></dd>
+        <dd><code>E2</code></dd>
         <dt>Exhausted resource</dt>
         <dd>integrity_attack</dd>
         <dt>Default expected behavior</dt>
@@ -4031,7 +4089,7 @@
       <p class="desc">Sends the inert scanner user-agent that managed bot/scanner rulesets recognise. A block is a scoped protected verdict for that signature on the probed path; an allow is a scoped exposed finding. GET/HEAD only, no request body.</p>
       <dl>
         <dt>What we detect</dt>
-        <dd>Healthy comparable permitted baseline and control-specific vendor/exact declared denial signatures required. All planned safe marker legs must complete conclusively for enforcement; incomplete or unhealthy comparisons remain inconclusive. A blocked managed-class marker supports a scoped protected verdict for that class on the probed path; an allowed marker is a scoped exposed finding. Marker acceptance is limited to this route and does not establish exploit mitigation or DDoS capacity.</dd>
+        <dd>The budget-selected marker plan and healthy benign controls must complete. Received unsigned or redirected placements are excluded from grading, not relabelled as missing delivery. At least one graded placement is required; conclusions cover only those placements and tested paths, never exploit mitigation or capacity.</dd>
         <dt>How we detect</dt>
         <dd>E3: Bounded inert WAF class markers; no functional exploit payloads. Max 8 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
@@ -8122,7 +8180,7 @@
     </section>
   </main>
   <footer>
-    AstraNull · Check catalog v1.2.1 · 251 safe + 22 SOC-gated
+    AstraNull · Check catalog v1.2.1 · 253 safe + 22 SOC-gated
   </footer>
 </body>
 </html>

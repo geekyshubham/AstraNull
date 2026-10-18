@@ -165,6 +165,7 @@ export type ComparisonPlanItem = {
   check_id: string;
   check_version: string | null;
   origin_binding_id: string | null;
+  paired_plan: DataItem | null;
   eligible: boolean;
   ineligible_reason: string | null;
 };
@@ -532,6 +533,7 @@ function parsePlan(value: unknown): ComparisonPlan {
       check_id: str(item.check_id),
       check_version: strOrNull(item.check_version),
       origin_binding_id: strOrNull(item.origin_binding_id),
+      paired_plan: rec(item.paired_plan),
       eligible: item.eligible === true,
       ineligible_reason: strOrNull(item.ineligible_reason),
     })),

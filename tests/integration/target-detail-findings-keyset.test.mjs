@@ -12,6 +12,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { createPortalRevampRepository } from '../../src/persistence/postgres/portalRevampRepository.mjs';
+import { createPgPool, closePgPool } from '../../src/persistence/postgres/pool.mjs';
 import { encodeCursor } from '../../src/lib/cursorPagination.mjs';
 import {
   resolvePostgresHarnessAvailability,
@@ -497,6 +498,28 @@ describeMaybe('target detail findings keyset pagination', () => {
         { queryCounter: legacy },
       );
       assert.equal(legacy.count, 16, 'legacy cursor adds one indexed resolution lookup');
+
+      await pool.query(`UPDATE targets SET kind = 'ip', value = '203.0.113.10', normalized_value = '203.0.113.10'
+        WHERE tenant_id = $1 AND id = $2`, [IDS.tenantId, IDS.otherTargetId]);
+      await pool.query(`INSERT INTO origin_bindings
+        (id, tenant_id, protected_target_id, protected_target_group_id, origin_target_id, origin_target_group_id, host, sni)
+        VALUES ('binding_keyset', $1, $2, $3, $4, $3, $5, $5)`,
+      [IDS.tenantId, IDS.targetId, IDS.targetGroupId, IDS.otherTargetId, `${IDS.targetId}.keyset.test`]);
+      const singlePool = createPgPool({ ASTRANULL_DATABASE_URL: pool.options.connectionString,
+        ASTRANULL_PG_POOL_MAX: '1', ASTRANULL_PG_CONNECTION_TIMEOUT_MS: '1000' });
+      const connect = singlePool.connect.bind(singlePool);
+      let checkouts = 0;
+      singlePool.connect = (...args) => { checkouts += 1; return connect(...args); };
+      try {
+        const bound = { count: 0 };
+        const detail = await createPortalRevampRepository(singlePool).getTargetDetailBundle(
+          CTX, IDS.targetId, { findings_limit: 5 }, { queryCounter: bound });
+        assert.equal(singlePool.options.max, 1);
+        assert.equal(checkouts, 1, 'bound detail and shared current-proof reads use the same checked-out tenant client');
+        assert.equal(bound.count, 20, 'a related binding adds one exact-evidence query and four shared current-proof context queries');
+        assert.equal(detail.protection_profile.origin_bindings[0].currently_authorized, false,
+          'a binding row without two current proofs never becomes authorization');
+      } finally { await closePgPool(singlePool); }
     });
   });
 });

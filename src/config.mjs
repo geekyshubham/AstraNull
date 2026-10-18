@@ -13,7 +13,7 @@ import {
 } from './lib/secrets.mjs';
 import { validateHmacSecretEntropy } from './lib/evidenceSigning.mjs';
 import { loadEvidenceSigningConfig } from './lib/evidenceSigningConfig.mjs';
-import { boundedMaxResults } from './lib/subdomainEnumeration.mjs';
+import { boundedMaxResults, resolveSubdomainSource } from './lib/subdomainEnumeration.mjs';
 import { approvedProbeSourcesFromEnv } from './lib/probeSourcePerspective.mjs';
 
 export const AUTH_MODES = ['dev-headers', 'signed-session', 'oidc-jwt'];
@@ -705,6 +705,11 @@ export function loadRuntimeConfig(env = process.env) {
     'ASTRANULL_WAF_POSTURE_ENABLED',
     false,
   );
+  // Origin clues always require a named tenant opt-in; there is no global enable switch.
+  const originCluesEnabledTenants = parseTenantBooleanMap(
+    env.ASTRANULL_ORIGIN_CLUES_ENABLED_TENANTS,
+    'ASTRANULL_ORIGIN_CLUES_ENABLED_TENANTS',
+  );
   const externalDiscoveryEnabled = parseOptionalBoolean(
     env.ASTRANULL_EXTERNAL_DISCOVERY_ENABLED,
     'ASTRANULL_EXTERNAL_DISCOVERY_ENABLED',
@@ -724,11 +729,19 @@ export function loadRuntimeConfig(env = process.env) {
   const virusTotalApiKey = typeof env.ASTRANULL_VIRUSTOTAL_API_KEY === 'string'
     ? env.ASTRANULL_VIRUSTOTAL_API_KEY.trim()
     : '';
+  const resolvedSubdomainSource = resolveSubdomainSource({
+    requested: env.ASTRANULL_SUBDOMAIN_SOURCE,
+    virusTotalApiKey,
+  });
   const subdomainDiscovery = Object.freeze({
-    source: 'virustotal',
-    configured: virusTotalApiKey.length > 0,
+    source: resolvedSubdomainSource.source,
+    configured: resolvedSubdomainSource.configured,
+    reason: resolvedSubdomainSource.reason,
     virusTotalApiKey,
     maxResults: boundedMaxResults(env.ASTRANULL_SUBDOMAIN_MAX_RESULTS),
+    proxyUrl: typeof env.ASTRANULL_SUBDOMAIN_PROXY_URL === 'string' ? env.ASTRANULL_SUBDOMAIN_PROXY_URL.trim() : '',
+    pythonExecutable: typeof env.ASTRANULL_SUBDOMAIN_PYTHON === 'string' && env.ASTRANULL_SUBDOMAIN_PYTHON.trim()
+      ? env.ASTRANULL_SUBDOMAIN_PYTHON.trim() : '',
   });
   const connectorWorkerConfig = loadConnectorWorkerConfig(env);
   const {
@@ -893,6 +906,7 @@ export function loadRuntimeConfig(env = process.env) {
     featureFlags: {
       wafPostureEnabled,
       externalDiscoveryEnabled,
+      originCluesEnabledTenants,
       connectorsEnabledDefault,
       connectorsEnabledTenants,
       protectionValidationEnabledDefault,

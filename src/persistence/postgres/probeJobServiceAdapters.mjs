@@ -245,14 +245,14 @@ export async function recordProbeResultEdgeDetection(
   { run, job, probeMetadata, observedAt, newIdFn, client },
 ) {
   const edgeCheck = job.check_id === WAF_EDGE_DETECTION_CHECK_ID;
-  const originCheck = getCheckById(job.check_id)?.probe_profile?.kind === 'host_sni_bypass';
+  const originCheck = ['host_sni_bypass', 'origin_identity_pair'].includes(getCheckById(job.check_id)?.probe_profile?.kind);
   if ((!edgeCheck && !originCheck) || !job.target_id) return null;
   const targetGroupId = run.target_group_id ?? job.target_group_id ?? null;
   if (!targetGroupId) return null;
 
   const completed = probeMetadata?.source_completed_at ?? probeMetadata?.completed_at ?? null;
   const stamp = historyStamp(run);
-  const bindingId = run.origin_binding_id ?? null;
+  const bindingId = run.origin_binding_id ?? run.provenance_json?.origin_lockdown?.binding_id ?? null;
 
   if (originCheck) {
     const outcome = originOutcomeFromProbe(probeMetadata);

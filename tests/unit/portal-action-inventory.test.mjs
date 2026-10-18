@@ -125,6 +125,105 @@ test('a callback invoked through a wrapper parameter contributes its exact reque
   assert.deepEqual(named.traits.unresolvedCallbacks, []);
 });
 
+test('object-destructured callbacks bind only actual property invocations including aliases, forwarding and defaults', () => {
+  fixture('lib/navigation.ts', "export const NAV_ITEMS=[{id:'settings'}]; export const DETAIL_ROUTE_ITEMS=[];");
+  fixture('pages/router.tsx', "import {SettingsPage} from './settings'; export function RouteView({route}) {if(route==='settings') return <SettingsPage/>;}");
+  fixture('components/layout/app-shell.tsx', 'export function AppShell(){return null;}');
+  fixture('pages/settings.tsx', `export function SettingsPage(){
+    const [busy,setBusy]=useState(false);const [value,setValue]=useState(null);
+    async function lifecycle({load: read,onCommit,onError,onSettled=()=>{}}){setBusy(true);try{onCommit(await read());}catch(error){onError(error);}finally{onSettled();}}
+    function forward(load){return lifecycle({load,onCommit:value=>setValue(value),onError:()=>setValue(null),onSettled:()=>setBusy(false)});}
+    function save(){return forward(()=>requestJson(config,session,'/v1/lifecycle',{method:'POST'}));}
+    function defaults(){return lifecycle({load:()=>requestJson(config,session,'/v1/default',{method:'GET'}),onCommit:()=>{},onError:()=>{}});}
+    return <><button onClick={save} disabled={busy}>Object lifecycle</button><button onClick={defaults}>Default callback</button></>;
+  }`);
+  const actual = buildPortalActionInventory({ root: fixtureRoot });
+  const action = actual.actions.find((item) => item.label === 'Object lifecycle');
+  assert.deepEqual(action.traits.requests.map(({endpointShape,method}) => ({endpointShape,method})), [{endpointShape:'/v1/lifecycle',method:'POST'}]);
+  assert.deepEqual(action.traits.unresolvedCallbacks, []);
+  assert.equal(actionStateApplicability(action).busy.applicable, true);
+  assert.equal(actionStateApplicability(action).reload.applicable, true);
+  const defaults = actual.actions.find((item) => item.label === 'Default callback');
+  assert.deepEqual(defaults.traits.unresolvedCallbacks, []);
+  assert.deepEqual(defaults.traits.requests.map(({endpointShape,method}) => ({endpointShape,method})), [{endpointShape:'/v1/default',method:'GET'}]);
+});
+
+test('object-destructured callbacks keep opaque, spread-overridden and shadowed bindings unresolved', () => {
+  fixture('pages/settings.tsx', `export function SettingsPage({opaque,onCommit}){
+    function lifecycle({load,onCommit,onSettled}){load();onCommit();onSettled?.();}
+    function unknown(){return lifecycle(opaque);}
+    function spread(){return lifecycle({load:()=>requestJson(config,session,'/v1/overridden',{method:'POST'}),onCommit:()=>{},...opaque});}
+    function injected(){return lifecycle({load:()=>{},onCommit});}
+    function shadow(){return lifecycle({load:onCommit,onCommit:()=>{}});}
+    return <><button onClick={unknown}>Opaque lifecycle</button><button onClick={spread}>Spread lifecycle</button><button onClick={injected}>Injected lifecycle</button><button onClick={shadow}>Shadowed lifecycle</button></>;
+  }`);
+  const actual = buildPortalActionInventory({ root: fixtureRoot });
+  for (const label of ['Opaque lifecycle','Spread lifecycle','Injected lifecycle','Shadowed lifecycle']) {
+    const action = actual.actions.find((item) => item.label === label);
+    assert.ok(action.traits.unresolvedCallbacks.length, label);
+    assert.equal(actionStateApplicability(action).reload.applicable, null, label);
+    assert.equal(action.traits.requests.some((request) => request.endpointShape === '/v1/overridden'), false, label);
+  }
+});
+
+test('object-destructured callbacks reject accessors, computed keys and reassigned parameters; duplicate properties use the last value', () => {
+  fixture('pages/settings.tsx', `export function SettingsPage({opaque}){
+    function lifecycle({load}){load();}
+    function reassigned({load}){load=opaque;load();}
+    function duplicate(){return lifecycle({load:()=>requestJson(config,session,'/v1/first',{method:'POST'}),load:()=>requestJson(config,session,'/v1/last',{method:'GET'})});}
+    return <><button onClick={duplicate}>Duplicate callback</button><button onClick={()=>lifecycle({get load(){return opaque}})}>Getter callback</button><button onClick={()=>lifecycle({['load']:opaque})}>Computed callback</button><button onClick={()=>reassigned({load:()=>requestJson(config,session,'/v1/replaced',{method:'POST'})})}>Reassigned callback</button></>;
+  }`);
+  const actual = buildPortalActionInventory({ root: fixtureRoot });
+  const duplicate = actual.actions.find((item) => item.label === 'Duplicate callback');
+  assert.deepEqual(duplicate.traits.requests.map(({endpointShape,method}) => ({endpointShape,method})), [{endpointShape:'/v1/last',method:'GET'}]);
+  assert.deepEqual(duplicate.traits.unresolvedCallbacks, []);
+  for (const label of ['Getter callback','Computed callback','Reassigned callback']) {
+    const action = actual.actions.find((item) => item.label === label);
+    assert.ok(action.traits.unresolvedCallbacks.length, label);
+    assert.equal(action.traits.requests.some((request) => request.endpointShape === '/v1/replaced'), false, label);
+  }
+});
+
+test('object-destructured callback defaults require known absence, missing callbacks do not borrow captured names, and arguments forward exactly', () => {
+  fixture('pages/settings.tsx', `export function SettingsPage({opaque}){
+    function optional({onSettled}){onSettled?.();}
+    function required({load}){load();}
+    function defaults({load=()=>requestJson(config,session,'/v1/fallback',{method:'GET'})}){load();}
+    function lifecycle({load,onCommit}){onCommit(load);}
+    function wrap(load){return lifecycle({load,onCommit:(load)=>{function omitted(load){load();}omitted();}});}
+    return <><button onClick={()=>optional({})}>Absent optional</button><button onClick={()=>required({})}>Absent required</button><button onClick={()=>defaults(opaque)}>Opaque default</button><button onClick={()=>wrap(()=>requestJson(config,session,'/v1/borrowed',{method:'POST'}))}>Captured name shadow</button><button onClick={()=>lifecycle({load:()=>requestJson(config,session,'/v1/forwarded',{method:'PATCH'}),onCommit:read=>read()})}>Forward argument</button></>;
+  }`);
+  const actual = buildPortalActionInventory({ root: fixtureRoot });
+  assert.deepEqual(actual.actions.find((item) => item.label === 'Absent optional').traits.unresolvedCallbacks, []);
+  for (const label of ['Absent required','Opaque default','Captured name shadow']) {
+    const action = actual.actions.find((item) => item.label === label);
+    assert.ok(action.traits.unresolvedCallbacks.length, label);
+    assert.deepEqual(action.traits.requests, [], label);
+  }
+  const forwarded = actual.actions.find((item) => item.label === 'Forward argument');
+  assert.deepEqual(forwarded.traits.unresolvedCallbacks, []);
+  assert.deepEqual(forwarded.traits.requests.map(({endpointShape,method}) => ({endpointShape,method})), [{endpointShape:'/v1/forwarded',method:'PATCH'}]);
+});
+
+test('object-destructured callback objects resolve lexical aliases but never replay mutated objects', () => {
+  fixture('pages/settings.tsx', `export function SettingsPage({opaque}){
+    function lifecycle({load}){load();}
+    function alias(){const callbacks={load:()=>requestJson(config,session,'/v1/alias',{method:'GET'})};const forwarded=callbacks;return lifecycle(forwarded);}
+    function mutated(){const changed={load:()=>requestJson(config,session,'/v1/stale',{method:'POST'})};changed.load=opaque;return lifecycle(changed);}
+    function aliasMutation(){const original={load:()=>requestJson(config,session,'/v1/stale-alias',{method:'POST'})};const changedAlias=original;changedAlias.load=opaque;return lifecycle(original);}
+    return <><button onClick={alias}>Aliased object</button><button onClick={mutated}>Mutated object</button><button onClick={aliasMutation}>Mutated alias</button></>;
+  }`);
+  const actual = buildPortalActionInventory({ root: fixtureRoot });
+  const alias = actual.actions.find((item) => item.label === 'Aliased object');
+  assert.deepEqual(alias.traits.unresolvedCallbacks, []);
+  assert.deepEqual(alias.traits.requests.map(({endpointShape,method}) => ({endpointShape,method})), [{endpointShape:'/v1/alias',method:'GET'}]);
+  for (const label of ['Mutated object','Mutated alias']) {
+    const mutated = actual.actions.find((item) => item.label === label);
+    assert.ok(mutated.traits.unresolvedCallbacks.length, label);
+    assert.deepEqual(mutated.traits.requests, [], label);
+  }
+});
+
 test('a navigating non-anchor action with unresolved callbacks stays blocking instead of N/A', () => {
   const states = actionStateApplicability({ kind: 'button', label: 'Refresh', handlers: {}, traits: { requests: [], navigation: true, unresolvedCallbacks: ['onRefresh'] } });
   for (const state of ['busy', 'invalid', 'cancel', 'error-retry', 'denial']) assert.equal(states[state].applicable, null, state);
@@ -143,6 +242,216 @@ test('unused nested callbacks and shadowed local names cannot introduce phantom 
   const action = actual.actions.find((item) => item.label === 'Read actual');
   assert.equal(action.traits.requests.some((request) => request.endpointShape === '/v1/not-invoked'), false);
   assert.equal(action.traits.requests.some((request) => request.method === 'POST'), false);
+});
+
+test('reading a closure value never replays its initializer, while invoking a retained callback retains its request', () => {
+  fixture('pages/settings.tsx', `import {useCallback} from 'react';
+    export function SettingsPage(){
+      const snapshot=requestJson(config,session,'/v1/render-only',{method:'POST'});
+      const [label,setLabel]=useState('');
+      const refresh=useCallback(()=>requestJson(config,session,'/v1/refresh-only',{method:'GET'}),[]);
+      return <><button onClick={()=>setLabel(snapshot.status)}>Read existing snapshot</button><button onClick={refresh}>Invoke retained refresh</button></>;
+    }`);
+  const actual = buildPortalActionInventory({ root: fixtureRoot });
+  const read = actual.actions.find((action) => action.label === 'Read existing snapshot');
+  assert.deepEqual(read.traits.requests, []);
+  assert.equal(read.traits.localChange, true);
+  const refresh = actual.actions.find((action) => action.label === 'Invoke retained refresh');
+  assert.deepEqual(refresh.traits.requests.map(({ endpointShape, method }) => ({ endpointShape, method })), [{ endpointShape: '/v1/refresh-only', method: 'GET' }]);
+});
+
+test('helper-local collection bindings resolve without suppressing an unresolved business callback', () => {
+  fixture('pages/settings.tsx', `export function SettingsPage({onRunSelectionChange}) {
+    function changeSelection(){const next=new Set(['first']);next.delete('first');onRunSelectionChange([...next]);}
+    return <button onClick={changeSelection}>Change selection</button>;
+  }`);
+  const action = buildPortalActionInventory({ root: fixtureRoot }).actions.find((item) => item.label === 'Change selection');
+  assert.deepEqual(action.traits.requests, []);
+  assert.deepEqual(action.traits.unresolvedCallbacks, ['onRunSelectionChange']);
+  assert.equal(actionStateApplicability(action).reload.applicable, null);
+});
+
+test('native collection returned by an exact helper remains local, unlike an opaque or asynchronous factory', () => {
+  fixture('pages/settings.tsx', `function params(input){const kept=new URLSearchParams(input);kept.set('mode','safe');return kept;}
+    async function asyncParams(){return new URLSearchParams();}
+    export function SettingsPage(){
+      function local(){const kept=params('');kept.delete('mode');}
+      function opaque(){const kept=opaqueFactory();kept.delete('mode');}
+      function asynchronous(){const kept=asyncParams();kept.delete('mode');}
+      return <><button onClick={local}>Returned native collection</button><button onClick={opaque}>Opaque collection</button><button onClick={asynchronous}>Async collection</button></>;
+    }`);
+  const actual = buildPortalActionInventory({ root: fixtureRoot });
+  assert.deepEqual(actual.actions.find((item) => item.label === 'Returned native collection').traits.unresolvedCallbacks, []);
+  for (const label of ['Opaque collection', 'Async collection']) assert.ok(actual.actions.find((item) => item.label === label).traits.unresolvedCallbacks.includes('kept.delete'), label);
+});
+
+test('returned callbacks and unshadowed builtin aliases resolve but opaque factories and aliases remain blocking', () => {
+  fixture('pages/settings.tsx', `import {useCallback} from 'react';
+    function createKey(){const prefix='key';return ()=>JSON.stringify([prefix]);}
+    function useOpen(){return useCallback((path)=>requestJson(config,session,path,{method:'GET'}),[]);}
+    export function SettingsPage({injected}) {
+      const key=createKey();const open=useOpen();const enc=encodeURIComponent;const unknown=injected;const opaque=unknownFactory();
+      return <><button onClick={()=>key()}>Pure returned callback</button><button onClick={()=>open('/v1/returned')}>Returned request callback</button><button onClick={()=>enc('value')}>Builtin alias</button><button onClick={()=>unknown()}>Unknown alias</button><button onClick={()=>opaque()}>Opaque factory</button></>;
+    }`);
+  const actual = buildPortalActionInventory({ root: fixtureRoot });
+  for (const label of ['Pure returned callback', 'Builtin alias']) assert.deepEqual(actual.actions.find((action) => action.label === label).traits.unresolvedCallbacks, [], label);
+  const open = actual.actions.find((action) => action.label === 'Returned request callback');
+  assert.deepEqual(open.traits.requests.map(({ endpointShape, method }) => ({ endpointShape, method })), [{ endpointShape: '/v1/returned', method: 'GET' }]);
+  assert.deepEqual(open.traits.unresolvedCallbacks, []);
+  for (const label of ['Unknown alias', 'Opaque factory']) assert.ok(actual.actions.find((action) => action.label === label).traits.unresolvedCallbacks.length, label);
+});
+
+test('shadowed builtin aliases and ambiguous returned callbacks never become proven local behavior', () => {
+  fixture('pages/settings.tsx', `import {decodeURIComponent} from 'opaque-package';
+    function choose(flag){if(flag)return ()=>requestJson(config,session,'/v1/one',{method:'POST'});return ()=>requestJson(config,session,'/v1/two',{method:'POST'});}
+    export function SettingsPage({encodeURIComponent}) {
+      const enc=encodeURIComponent;const dec=decodeURIComponent;const ambiguous=choose();
+      return <><button onClick={()=>enc('x')}>Shadowed parameter alias</button><button onClick={()=>dec('x')}>External import alias</button><button onClick={()=>ambiguous()}>Ambiguous factory</button></>;
+    }`);
+  const actual = buildPortalActionInventory({ root: fixtureRoot });
+  for (const label of ['Shadowed parameter alias', 'External import alias', 'Ambiguous factory']) {
+    const action = actual.actions.find((item) => item.label === label);
+    assert.ok(action.traits.unresolvedCallbacks.length, label);
+    assert.equal(actionStateApplicability(action).reload.applicable, null, label);
+  }
+});
+
+test('member callback invocation resolves exact object properties while an opaque retained reader remains blocking', () => {
+  fixture('pages/settings.tsx', `export function SettingsPage(){
+    const reader=opaqueReader();
+    const callbacks={refresh:(path)=>requestJson(config,session,path,{method:'GET'})};
+    return <><button onClick={()=>reader.refresh()}>Opaque reader refresh</button><button onClick={()=>callbacks.refresh('/v1/member')}>Exact member refresh</button><button onClick={callbacks.refresh}>Direct member refresh</button></>;
+  }`);
+  const actual = buildPortalActionInventory({ root: fixtureRoot });
+  const unknown = actual.actions.find((item) => item.label === 'Opaque reader refresh');
+  assert.deepEqual(unknown.traits.requests, []);
+  assert.deepEqual(unknown.traits.unresolvedCallbacks, ['reader.refresh']);
+  assert.equal(actionStateApplicability(unknown).reload.applicable, null);
+  const exact = actual.actions.find((item) => item.label === 'Exact member refresh');
+  assert.deepEqual(exact.traits.requests.map(({ endpointShape, method }) => ({ endpointShape, method })), [{ endpointShape: '/v1/member', method: 'GET' }]);
+  assert.deepEqual(exact.traits.unresolvedCallbacks, []);
+  assert.ok(actual.actions.find((item) => item.label === 'Direct member refresh').traits.requests.length);
+});
+
+test('a reassigned object callback and a helper parameter shadow cannot borrow unrelated declarations', () => {
+  fixture('pages/settings.tsx', `function send(){return requestJson(config,session,'/v1/not-the-parameter',{method:'POST'});}
+    export function SettingsPage(){
+      const callbacks={refresh:()=>{}};callbacks.refresh=externalRefresh;
+      function invoke(send){return send();}
+      return <><button onClick={()=>callbacks.refresh()}>Reassigned member</button><button onClick={()=>invoke(externalSend)}>Shadowed helper parameter</button></>;
+    }`);
+  const actual = buildPortalActionInventory({ root: fixtureRoot });
+  for (const label of ['Reassigned member', 'Shadowed helper parameter']) {
+    const action = actual.actions.find((item) => item.label === label);
+    assert.ok(action.traits.unresolvedCallbacks.length, label);
+    assert.equal(action.traits.requests.some((request) => request.endpointShape === '/v1/not-the-parameter'), false);
+    assert.equal(actionStateApplicability(action).reload.applicable, null, label);
+  }
+});
+
+test('post-request refresh permissions are provenance, not eligibility for an already completed mutation', () => {
+  fixture('pages/settings.tsx', `export function SettingsPage(){
+    function routeAllowed(){return staffSessionHasPermission(session,'staff:tenant:read');}
+    function refresh(){if(!routeAllowed())return;return requestJson(config,session,'/v1/refreshed',{method:'GET'});}
+    async function save(){await requestJson(config,session,'/v1/saved',{method:'POST'});refresh();if(staffSessionHasPermission(session,'soc:high_scale'))setMessage('staff');}
+    return <button onClick={save}>Save then refresh</button>;
+  }`);
+  const actual = buildPortalActionInventory({ root: fixtureRoot });
+  const action = actual.actions.find((item) => item.label === 'Save then refresh');
+  assert.deepEqual(action.traits.permissions, []);
+  assert.deepEqual(action.traits.authorizationGuards, []);
+  assert.equal(action.traits.authorizationUnresolved, false);
+  assert.deepEqual([...action.traits.referencedPermissions].sort(), ['soc:high_scale', 'staff:tenant:read']);
+  assert.ok(action.traits.requests.some((request) => request.endpointShape === '/v1/saved' && request.method === 'POST'));
+  const coverage = buildPortalActionCoverage({ inventory: actual });
+  assert.equal(coverage.cells.find((cell) => cell.action === action.id && cell.role === 'owner' && cell.route === 'settings' && cell.state === 'reload').applicable, true);
+});
+
+test('an indirect earlier request is ordered before refresh, but conditional request paths keep authorization uncertainty', () => {
+  fixture('pages/settings.tsx', `export function SettingsPage({flag}){
+    function persist(){return requestJson(config,session,'/v1/persist',{method:'POST'});}
+    function refresh(){if(!staffSessionHasPermission(session,'staff:tenant:read'))return;return requestJson(config,session,'/v1/refreshed',{method:'GET'});}
+    async function ordered(){await persist();refresh();}
+    async function conditional(){if(flag)await persist();refresh();}
+    return <><button onClick={ordered}>Ordered helper refresh</button><button onClick={conditional}>Conditional helper refresh</button></>;
+  }`);
+  const actual = buildPortalActionInventory({ root: fixtureRoot });
+  const ordered = actual.actions.find((action) => action.label === 'Ordered helper refresh');
+  assert.deepEqual(ordered.traits.permissions, []);
+  assert.equal(ordered.traits.authorizationUnresolved, false);
+  const conditional = actual.actions.find((action) => action.label === 'Conditional helper refresh');
+  assert.ok(conditional.traits.permissions.includes('staff:tenant:read'));
+  assert.equal(conditional.traits.authorizationUnresolved, true);
+  assert.deepEqual(conditional.traits.authorizationGuards, [], 'A guard reached on mixed pre/post-request paths is not blanket action eligibility.');
+});
+
+test('pre-request helper permission guards remain authoritative and partial unresolved eligibility stays blocking', () => {
+  fixture('pages/settings.tsx', `export function SettingsPage(){
+    function persist(){if(!sessionHasPermission(session,'tenant:write'))return;return requestJson(config,session,'/v1/guarded',{method:'PATCH'});}
+    function opaquePermission(){return Boolean(sessionHasPermission(session,'secret:write'));}
+    function partial(){if(!sessionHasPermission(session,'tenant:write'))return;if(!opaquePermission())return;return requestJson(config,session,'/v1/partial',{method:'POST'});}
+    return <><button onClick={()=>persist()}>Guarded persist</button><button onClick={partial}>Partially resolved guard</button></>;
+  }`);
+  const actual = buildPortalActionInventory({ root: fixtureRoot });
+  const guarded = actual.actions.find((action) => action.label === 'Guarded persist');
+  assert.deepEqual(guarded.traits.permissions, ['tenant:write']);
+  assert.equal(guarded.traits.authorizationUnresolved, false);
+  const partial = actual.actions.find((action) => action.label === 'Partially resolved guard');
+  assert.equal(partial.traits.authorizationUnresolved, true);
+  const coverage = buildPortalActionCoverage({ inventory: actual });
+  const cell = (action, role, state) => coverage.cells.find((item) => item.action === action.id && item.route === 'settings' && item.role === role && item.state === state);
+  assert.equal(cell(guarded, 'owner', 'reload').applicable, true);
+  assert.equal(cell(guarded, 'viewer', 'reload').applicable, false);
+  assert.equal(cell(guarded, 'viewer', 'denial').applicable, true);
+  assert.equal(cell(partial, 'owner', 'reload').applicable, null);
+  assert.equal(cell(partial, 'owner', 'denial').applicable, null);
+  assert.equal(cell(partial, 'viewer', 'denial').applicable, true);
+});
+
+test('an early exit combining non-authorization limits with a resolved permission preserves its inverted eligibility', () => {
+  fixture('pages/settings.tsx', `export function SettingsPage({pending,valid}){
+    const canWrite=sessionHasPermission(session,'tenant:write');
+    function save(){if(pending || !canWrite || !valid)return;return requestJson(config,session,'/v1/combined',{method:'POST'});}
+    return <button onClick={save}>Combined early exit</button>;
+  }`);
+  const actual = buildPortalActionInventory({ root: fixtureRoot });
+  const action = actual.actions.find((item) => item.label === 'Combined early exit');
+  assert.equal(action.traits.authorizationUnresolved, false);
+  const coverage = buildPortalActionCoverage({ inventory: actual });
+  assert.equal(coverage.cells.find((cell) => cell.action === action.id && cell.route === 'settings' && cell.role === 'owner' && cell.state === 'reload').applicable, true);
+  assert.equal(coverage.cells.find((cell) => cell.action === action.id && cell.route === 'settings' && cell.role === 'viewer' && cell.state === 'denial').applicable, true);
+});
+
+test('a known permission cannot excuse an unresolved same-permission expression or a dynamic permission guard', () => {
+  fixture('pages/settings.tsx', `export function SettingsPage({permissionName}){
+    function opaque(){return Boolean(sessionHasPermission(session,'tenant:write'));}
+    function save(){if(!sessionHasPermission(session,'tenant:write'))return;if(!opaque())return;return requestJson(config,session,'/v1/opaque',{method:'POST'});}
+    function dynamic(){if(!sessionHasPermission(session,permissionName))return;return requestJson(config,session,'/v1/dynamic',{method:'POST'});}
+    return <><button onClick={save}>Opaque same-permission guard</button><button onClick={dynamic}>Dynamic permission guard</button></>;
+  }`);
+  const actual = buildPortalActionInventory({ root: fixtureRoot });
+  const coverage = buildPortalActionCoverage({ inventory: actual });
+  for (const label of ['Opaque same-permission guard', 'Dynamic permission guard']) {
+    const action = actual.actions.find((item) => item.label === label);
+    assert.equal(action.traits.authorizationUnresolved, true, label);
+    for (const state of ['success', 'denial', 'reload']) assert.equal(coverage.cells.find((cell) => cell.action === action.id && cell.route === 'settings' && cell.role === 'owner' && cell.state === state).applicable, null, `${label}: ${state}`);
+  }
+});
+
+test('shipped scan confirmation retains its original identity and four request states without downstream route authorization poisoning', () => {
+  const actual = getInventory();
+  const confirmation = actual.actions.find((action) => action.id === 'apps/web/react/src/components/runs/validation-scan-launcher.tsx#ValidationScanLauncher:action-slot:64509adb68ff');
+  assert.ok(confirmation);
+  assert.equal(confirmation.traits.authorizationUnresolved, false);
+  assert.equal(confirmation.traits.permissions.includes('staff:tenant:read'), false);
+  assert.equal(confirmation.traits.permissions.includes('soc:high_scale'), false);
+  const coverage = buildPortalActionCoverage({ inventory: actual, publicAuth: null });
+  for (const state of ['cancel', 'busy', 'error-retry', 'reload']) {
+    const cell = coverage.cells.find((item) => item.action === confirmation.id && item.route === 'runs' && item.principal === 'customer' && item.role === 'owner' && item.dataset === 'baseline' && item.state === state);
+    assert.equal(cell.applicable, true, state);
+  }
+  assert.ok(coverage.unclassifiedStates.length, 'Other unresolved callback/authorization obligations remain blocking.');
+  assert.equal(reconcilePortalActionCoverage(coverage, []).complete, false, 'Classification is not executed behavioral evidence.');
 });
 
 test('permission expressions preserve OR alternatives, alternate polarity and owner-only early exits', () => {

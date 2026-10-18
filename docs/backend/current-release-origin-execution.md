@@ -2,6 +2,32 @@
 
 How a bound Host/SNI origin run is started, serialized, recovered, and finalized so the signed probe job carries ONLY the server-validated approved scope. Dev JSON and Postgres runtimes share the same pure helpers (`src/lib/probeJobs.mjs`, `src/lib/capabilityProbes.mjs`, `src/lib/checkDefinitionVersion.mjs`); the Postgres adapter (`src/persistence/postgres/validationServiceAdapters.mjs`) wires them over real repositories.
 
+## Origin associations and paired identity extension (2026-10-16)
+
+See [ADR-0032](../adr/0032-origin-associations-and-paired-identity.md) and the [research/evidence contract](../detection/24-origin-exposure.md). Optional persisted origin associations are a separate append-only source store, not execution authority. Their GET/import/collection routes cannot create targets, proofs, bindings or runs. Tenant opt-in is disabled by default; migration `0083_origin_clues.sql` adds the tenant-scoped tables and forced RLS. Unknown timestamps, incomplete sources and unavailable DNS questions remain explicit.
+
+The target **Overview** now presents source review → separate declaration/ownership/binding → reviewed bounded check. Import/collection require confirmation. Existing Origin relations show exact finalized binding/run/check evidence on either target, with current authority separate from historical validity. Archived relations retain inspectable evidence but cannot authorize new work. The Inspector remains the source of actual identity/baseline metadata; missing historical fields are not inferred.
+
+### Durable execution grant
+
+Both memory and PostgreSQL use `validateOriginBindingForExecution` immediately before reserving traffic. A signed scope is not perpetual authority: the active binding, both current undeleted/unarchived targets, both ownership states and exact target descriptors/Host/SNI/port/path must match. PostgreSQL locks the authoritative rows within its transaction. Origin-target jobs and protected-host `nfw.origin_lockdown.safe` jobs follow the same contract. New signed jobs carry immutable `origin_authority`; legacy jobs without the required authority fail closed rather than acquiring a new authorization snapshot during recovery.
+
+Finalized historical observations use the recorded binding/scope/authority, not the binding's current status. Historical evidence surviving revocation does not authorize execution. The exact current-state check also applies to paired identity jobs and both reviewed ownership proof references.
+
+Archive cancels queued/leased exact-bound work through existing cancellation machinery. All effective proof expiry/revocation/demotion denies later durable grants, including when the counterpart changed after signing or lease. A proactive queued-work sweep for every implicit proof invalidation is not implemented; no single positive ownership-transition hook covers that set. Local grant tests do not establish interruption of traffic already admitted before revocation.
+
+### Separately reviewed paired identity
+
+The existing entry-path comparison planner accepts `origin.identity_pair.head.v1` / `origin-identity-head-v1`, and the analogous GET IDs. Select **exactly one active origin entry path**, anchored on the protected target. The baseline is inside that same job; do not include an additional primary-route job. The UI provides explicit HEAD/GET modes and displays both targets, proof references, exact request scope and limits in the Start confirmation.
+
+The immutable `paired_plan` is included in the existing reviewed plan digest. Only the comparison service's server-internal reviewed context can authorize its start; ordinary direct run starts cannot fabricate it. Signed `constraints.origin_identity_pair` includes both destinations/proofs, binding, method/scenario, Host/SNI/port/path, comparison scope digest and aggregate limits. Worker preflight vets both destinations before either request and preserves public-IP pinning, cancellation, operation accounting and kill switches.
+
+Bounds: two HTTP requests, at most two DNS questions, no redirects/retries/assets, 5,000 ms total; GET reads at most 8,192 body bytes per leg / 16,384 total. HEAD remains bodyless. Both legs share the same job nonce, worker and exact scope. The existing fresh-comparable nonce predicate (at most 60 seconds) is unchanged. Content/certificate/title similarity alone supports only an association; generic/challenge/error/truncated or unhealthy responses cannot become nonce-confirmed application proof. TLS certificate trust/name evidence is recorded independently, not implied by successful transport.
+
+These checks remain E2 observation-only, with no positive readiness/lockdown assurance. A confirmed direct application path is not proof of bypassing a particular WAF rule or DDoS capacity. The ordinary `host_sni_bypass` profiles still send at most one HEAD. `nfw.origin_lockdown.safe` remains violation-only. Typed positive `declared_origin_lockdown` acceptance is not closed by this work.
+
+The remainder below describes the established one-HEAD path; paired jobs add the separately reviewed contract above rather than expanding that path silently.
+
 ## Run start — origin scope gate
 
 `startTestRun` (dev in `src/services/testRuns.mjs`, Postgres in `src/persistence/postgres/validationServiceAdapters.mjs`):
@@ -27,7 +53,7 @@ A request body or target metadata can never supply `origin_scope`; only the serv
 
 - Fails closed FIRST: a bound run — non-empty `origin_binding_id` — without a shape-valid approved scope snapshot in its provenance stamp throws `BoundRunScopeMissingError` (`code: 'bound_run_missing_approved_origin_scope'`) before any signing, job record, or dispatch. Target metadata (e.g. `protected_host`) or a caller probe profile can never stand in for a missing stored scope, and no dangerously "unbound" job is emitted from a bound legacy/recovery record. Genuinely unbound jobs (`origin_binding_id` absent) keep legacy behavior unchanged.
 - Merges catalog profile + request override + target metadata, then `bindProbeProfileDestinationsToTarget` pins socket destinations to the verified target.
-- `runBoundOriginScope(run, check)` reads ONLY `run.provenance_json.origin_scope` and only for a run carrying `origin_binding_id`. The snapshot is shape-validated (self-consistent host/sni, bounded port, safe path); anything malformed means legacy unbound handling.
+- `runBoundOriginScope(run, check)` reads ONLY `run.provenance_json.origin_scope` and only for a run carrying `origin_binding_id`. The snapshot is shape-validated (self-consistent host/sni, bounded port, safe path); a malformed bound snapshot fails closed at signed-job construction, never legacy unbound execution.
 - For a bound run the merged `protected_host` label is replaced with the approved scope host, and `constraints.origin_scope` carries the exact approved Host/SNI/port/path.
 - The signing payload covers `check_id, constraints (incl. origin_scope), id, nonce_hash, probe_profile, target, tenant_id, test_run_id` — so any tamper with the scope carrier, the profile label, or the target descriptor breaks `verifyProbeJobSignature`.
 - `target.value` remains the independently verified origin IP literal (the socket destination); the Host/SNI/port/path are application-layer labels only.

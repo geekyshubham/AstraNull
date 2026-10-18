@@ -32,8 +32,26 @@ describe('portal shell navigation semantics', () => {
   });
 
   it('shows the workspace name in the sidebar footer and keeps the tenant id as its tooltip', () => {
-    assert.match(shell, /<b title=\{tenantId\}>\{tenantName \|\| tenantId\}<\/b>/);
-    assert.match(shell, /<span>Staff session<\/span>/);
+    assert.match(shell, /<b className="sidebar-account-name" title=\{tenantId\}>\{tenantName \|\| tenantId\}<\/b>/);
+    assert.match(shell, /<span className="sidebar-account-name">Staff session<\/span>/);
+    assert.match(shell, /<div className="sidebar-account" title=\{accountTitle\}>/);
+  });
+
+  it('keeps every sidebar footer action named, including icon-only and collapsed states', () => {
+    const foot = shell.slice(shell.indexOf('<div className="sidebar-foot">'), shell.indexOf('</aside>'));
+    assert.match(foot, /onClick=\{logout\}\s*aria-label="Sign out"\s*title="Sign out"/);
+    assert.match(foot, /aria-label="Public site"\s*title="Public site"/);
+    assert.match(foot, /label=\{collapseLabel\}\s*className="sidebar-foot-btn sidebar-collapse"/);
+    assert.doesNotMatch(shell.slice(shell.indexOf('<div className="sidebar-head">'), shell.indexOf('<nav className="nav-scroll"')), /sidebar-collapse/);
+  });
+
+  it('paints the sidebar head, nav, and footer edge to edge instead of inside aside padding', () => {
+    const frame = styles.slice(styles.lastIndexOf('/* ── Sidebar frame'));
+    assert.match(frame, /\.sidebar,\s*\.sidebar-collapsed \.sidebar \{[^}]*padding: var\(--space-5\) 0 0;/);
+    assert.match(frame, /\.sidebar \.nav-scroll \{[^}]*padding-inline: var\(--sidebar-pad-x\);/);
+    assert.match(frame, /\.sidebar \.sidebar-foot \{[^}]*margin: 0;[^}]*border-top: 1px solid var\(--border-soft\);[^}]*padding: var\(--space-3\) var\(--sidebar-pad-x\)/);
+    assert.match(frame, /@media \(pointer: coarse\) \{[\s\S]*?\.sidebar-foot \[data-ui='button'\]\.sidebar-foot-btn \{\s*min-height: 44px;/);
+    assert.doesNotMatch(frame, /#[0-9a-f]{3,8}\b|rgba?\(/i);
   });
 
   it('highlights Targets while a run or the legacy runs list is open', () => {

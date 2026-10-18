@@ -33,7 +33,7 @@ export const WORKER_EXECUTED_KIND_BY_DECLARED_KIND = Object.freeze(
   Object.fromEntries([
     'http_head', 'tcp_connect', 'dns_resolve', 'metadata_marker', 'udp_probe',
     'quic_reachability', 'alert_webhook_ping', 'ops_readiness', 'ownership_challenge',
-    'tls_session', 'http2_settings', 'origin_leak_scan', 'host_sni_bypass',
+    'tls_session', 'http2_settings', 'origin_leak_scan', 'host_sni_bypass', 'origin_identity_pair',
     'port_scan_bounded', 'rate_limit_sequence', 'waf_enforcement_probe',
     'dnssec_posture', 'dns_open_recursion', 'dns_failover_posture', 'dns_axfr_leak',
     'tls_audit', 'cache_abuse_probe', 'api_surface_scan', 'cors_posture_probe',

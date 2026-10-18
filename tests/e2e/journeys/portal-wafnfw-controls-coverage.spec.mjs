@@ -58,8 +58,11 @@ test.describe('WAF/NFW truthful results, declarations and rule coverage (T8)', (
     await open(page, `target-detail?id=${TARGET}`);
     const efficacy = page.locator('.td-efficacy');
     await expect(efficacy.getByText('Managed rules enforced:')).toBeVisible();
-    await expect(efficacy.getByText('Custom canary rules enforced:')).toBeVisible();
+    await expect(efficacy.getByText('Custom canary rules enforced:')).toHaveCount(0);
     await expect(efficacy).toContainText('inconclusive');
+    await efficacy.getByText('How this is decided', { exact: true }).click();
+    await expect(efficacy).toContainText('Installed rule tokens and placements are not bound to these checks');
+    await expect(efficacy).toContainText('do not verify custom-rule action or attack-class coverage');
     await expect(page.locator('body')).not.toContainText(/attack classes/i);
   });
 
@@ -201,7 +204,11 @@ test.describe('WAF/NFW truthful results, declarations and rule coverage (T8)', (
     expect(replayCalls).toEqual([]);
     const replay = page.getByRole('region', { name: 'Re-check this verdict' });
     await replay.getByRole('button', { name: 'Re-check this verdict with current rules' }).click();
-    await expect(replay.getByRole('status')).toContainText('Unchanged');
+    // This historical custom-token run has no attested probe I/O; preserve its stored verdict, not its old projection.
+    await expect(replay.getByRole('status')).toContainText('Would now be Inconclusive');
+    await expect(replay.getByRole('status')).toContainText('stored as Protected');
+    await expect(replay.getByRole('status')).toContainText('no attested probe I/O');
+    await expect(replay.getByRole('status')).toContainText('The stored verdict is not changed');
     await expect(replay.getByRole('status')).toContainText('Grading rules changed — re-run to restore credit');
     expect(replayCalls).toHaveLength(1);
     await expectNoAxeViolations(page, '.vr');
@@ -235,11 +242,15 @@ test.describe('WAF/NFW truthful results, declarations and rule coverage (T8)', (
     await expectNoAxeViolations(page, '#cd-section-origin');
   });
 
-  test('a replay says whether stored responses were re-graded', async ({ page }) => {
+  test('a replay explains why historical stored responses cannot be re-graded', async ({ page }) => {
     await open(page, 'run-detail?id=run_wafnfw_7');
-    const regraded = page.getByRole('region', { name: 'Re-check this verdict' });
-    await regraded.getByRole('button', { name: 'Re-check this verdict with current rules' }).click();
-    await expect(regraded.getByRole('status')).toContainText('Re-graded with current signatures');
+    const oldFeatures = page.getByRole('region', { name: 'Re-check this verdict' });
+    await oldFeatures.getByRole('button', { name: 'Re-check this verdict with current rules' }).click();
+    await expect(oldFeatures.getByRole('status')).toContainText('Would now be Inconclusive');
+    await expect(oldFeatures.getByRole('status')).toContainText('stored as Gap found');
+    await expect(oldFeatures.getByRole('status')).toContainText('no attested probe I/O');
+    await expect(oldFeatures.getByRole('status')).toContainText('Only the verdict logic was re-applied');
+    await expect(oldFeatures.getByRole('status')).not.toContainText('Re-graded with current signatures');
 
     await open(page, 'run-detail?id=run_wafnfw_12');
     const logicOnly = page.getByRole('region', { name: 'Re-check this verdict' });

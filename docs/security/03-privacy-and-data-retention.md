@@ -1,5 +1,13 @@
 # Privacy and Data Retention
 
+## Current outside-in capture contract (2026-10-15)
+
+There are no customer agents or environments in the current product (ADR-0008); older references below are historical. `http-exchange.v1` adds bounded sanitized HTTP header entries and explicitly correlated metadata, not raw header/packet storage. Credential, cookie, authentication and unknown header values are withheld; Location userinfo/fragments/query values and credential-shaped URL paths are redacted. Binary/invalid UTF-8 and incomplete/truncated response samples are withheld rather than made readable through base64. Multipart/XML and form- or script-bearing HTML previews are also withheld because this capture path has no structure-aware sanitizer for them; ordinary small redirect HTML remains inspectable. Payload observations consume no additional response bytes. Raw public event ingestion remains prohibited.
+
+Mandatory capture redaction cannot be disabled by `redact_headers_by_default: false`, and `store_packet_payloads: true` does not authorize raw packet capture. These existing flags must not be advertised as a new safe-preview opt-in or as proof that historical previews were disabled. The capture contract enforces conservative metadata-only behavior for either value without mutating tenant settings. Events and vault records use existing metadata retention and tenant legal holds; no new independent capture store or retention policy is introduced.
+
+The implemented `DEFAULT_PRIVACY.metadata_retention_days` is **365 days**, not the historical suggested 90-day value below. This documentation correction does not change any tenant's configured retention.
+
 ## Data minimization
 
 AstraNull should collect the minimum evidence needed to prove readiness.
@@ -50,7 +58,7 @@ Snapshots and retention audit metadata include policy fields only—never custom
 
 ### Enforced metadata retention (implemented)
 
-Tenant `privacy_settings.metadata_retention_days` controls automatic purging of **tenant-owned metadata** in the dev store. The default is **90** days; valid values are clamped to **1–3650** days during dev-store migration and when tenants or environments patch privacy settings.
+Tenant `privacy_settings.metadata_retention_days` controls automatic purging of **tenant-owned metadata** in the dev store. The default is **365** days; valid values are clamped to **1–3650** days during dev-store migration and when tenants or environments patch privacy settings.
 
 When retention runs, the service removes records for **that tenant only** that are older than the retention window:
 
@@ -107,6 +115,22 @@ node scripts/evidence-snapshot-manifest.mjs --input staging/evidence-snapshot-ba
 Unit tests: `tests/unit/evidence-snapshot-manifest.test.mjs`.
 
 This utility is **manifest evidence only**. It does not upload to external object storage, does not perform KMS/HSM signing, and does not replace durable immutable archives or legal-hold enforcement in the runtime store.
+
+## Origin-clue lifecycle (2026-10-17)
+
+Origin source associations use the existing normalized `privacy_settings.metadata_retention_days` (default **365**, range **1–3650**) and existing `evidence_retention.legal_hold`; there is no separate origin retention setting. Tenant privacy PATCH and the explicit-tenant PostgreSQL retention runner include `originClues` / `origin_clues` and `originClueBatches` / `origin_clue_batches`. Clue age is `retrieved_at`, batch age is `created_at`, and the comparison is strictly older than the captured cutoff. Nullable/untrusted source observation time does not govern deletion. Dev rows with invalid/missing age fields are retained conservatively.
+
+New batches can copy older deduplicated clues. Expiry therefore removes expired clue rows and batch payloads, and replaces an affected newer batch's **entire** saved response with a payload-free terminal expiry marker. This clears copied items and source coverage without deleting its fresh clue children or breaking their same-tenant/target FK. The minimum replay/FK envelope remains until the batch itself expires and has no retained children. A replay of that retained key returns `410 origin_clue_response_expired`, never DNS collection or implicit reimport. Deduplication does not refresh the original clue retrieval time. Fully expired/deleted keys no longer provide replay; a separately authorized new collection/import is new work.
+
+`POST /v1/tenants/current/origin-clues/erase` provides **origin-source-only** erasure, using authenticated `tenant:write` (owner/admin plus token scope), explicit typed tenant confirmation and a bounded reason. Both preview and execute are permission-gated. It works with collection disabled and includes archived/deleted targets. Preview is read-only; execution deletes all tenant clue rows, then all tenant batches/markers/responses, atomically with a chained audit and returned audit entry ID. It does not delete targets, bindings, ownership, signed observations, findings, runs, reports, authorization artifacts, or governance/audit records. Target archival remains distinct from erasure.
+
+Legal hold blocks ordinary expiry, response scrubbing, and explicit erasure. Preview returns blocked counts without writes; held erasure returns `409 origin_clue_erasure_legal_hold` with zero deletions, blocked counts, and a retained `privacy.origin_clues_erasure_blocked` audit. Successful erasure, including an empty repeated request, records `privacy.origin_clues_erased`. Audit/summary data contains counts, policy and bounded authorization metadata, not clue/source/response bodies.
+
+Migration `0084` retains FORCE RLS and ordinary app UPDATE/DELETE rejection. Only a narrow `SECURITY DEFINER` lifecycle function owned by a dedicated `NOLOGIN`/`NOBYPASSRLS` role can remove rows or write the exact terminal marker. It pins `search_path`, schema-qualifies objects, has no PUBLIC execution or application-role membership, rechecks tenant context/current policy/legal hold, and validates an exact plan and audit inserted in the **same transaction** before mutation. Lifecycle audits reject UPDATE/DELETE, including attempts to erase an audit in the same transaction as the data. No caller-settable GUC bypass exists. Lock ordering is tenant advisory lock before tenant row lock. Role provisioning explicitly grants only execution of the lifecycle/plan functions.
+
+Authenticated service RBAC is the human authorization boundary: the shared application DB login already inserts audits for all product roles. The database enforces bounded, audited lifecycle consistency; it does not cryptographically authenticate a human role or defend against a fully compromised application fabricating a well-formed authorized audit. Dev operations stage privacy/rows/audit and persist by fsynced temporary-file replacement before publishing memory changes; generation fencing rejects an in-flight collection after a committed lifecycle/policy change. This remains a single-process developer store, not a multi-process transactional database or backup-erasure guarantee.
+
+See [ADR-0033](../adr/0033-origin-clue-lifecycle.md). Local tests and default-off status do not establish deployed retention, staging cadence/runbook acceptance, backup/archive erasure, strict catalog fault coverage, or operational/human signoff. Whole-tenant/governance destruction is not introduced.
 
 ## Production blockers (not yet implemented)
 

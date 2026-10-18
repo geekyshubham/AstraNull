@@ -1,0 +1,24 @@
+services:
+  fault-target:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: anl-fault-lab-target:local
+    container_name: anl-fault-lab-target
+    network_mode: none
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 768m
+    cpus: 1.0
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "/app/healthcheck.mjs"]
+      interval: 2s
+      timeout: 2s
+      retries: 5
+      start_period: 2s

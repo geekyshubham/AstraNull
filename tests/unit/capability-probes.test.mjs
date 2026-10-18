@@ -186,9 +186,9 @@ describe('capability probes P0/P1', () => {
       resolve6Fn: async () => ['2001:db8::1'],
       fetchFn: async () => ({ status: 200, headers: { get: () => null } }),
     });
-    // No x-backend-ip header means no edge_ip observation exists to corroborate the divergence
-    // against, so this stays an uncorroborated observation rather than a confirmed leak.
-    assert.equal(outcome.external_result, 'blocked');
+    // Without connected-peer telemetry DNS divergence is uncorroborated; a response
+    // header is never peer telemetry. Successful collection is not protection.
+    assert.equal(outcome.external_result, 'connected');
     assert.equal(outcome.metadata.leak_signals.includes('ipv6_present'), false);
     assert.ok(outcome.metadata.leak_signals.some((s) => s.startsWith('subdomain_origin_divergence:')));
     assert.deepEqual(outcome.metadata.corroborated_leak_signals, []);
@@ -202,7 +202,7 @@ describe('capability probes P0/P1', () => {
         return [];
       },
       resolve6Fn: async () => [],
-      fetchFn: async () => ({ status: 200, headers: { get: (name) => (name === 'x-backend-ip' ? '203.0.113.10' : null) } }),
+      fetchFn: async () => ({ status: 200, pinnedAddress: '203.0.113.10', headers: { get: () => null } }),
     });
     assert.equal(outcome.external_result, 'connected');
     assert.ok(outcome.metadata.corroborated_leak_signals.some((s) => s.startsWith('subdomain_origin_divergence:')));
@@ -214,7 +214,7 @@ describe('capability probes P0/P1', () => {
       resolve6Fn: async () => ['2001:db8::1'],
       fetchFn: async () => ({ status: 200, headers: { get: () => null } }),
     });
-    assert.equal(outcome.external_result, 'blocked');
+    assert.equal(outcome.external_result, 'connected');
     assert.deepEqual(outcome.metadata.leak_signals, []);
     assert.deepEqual(outcome.metadata.ipv6_addrs, ['2001:db8::1']);
   });
@@ -231,7 +231,7 @@ describe('capability probes P0/P1', () => {
       resolve6Fn: async () => [],
       fetchFn: async () => ({ status: 200, headers: { get: () => null } }),
     });
-    assert.equal(outcome.external_result, 'blocked');
+    assert.equal(outcome.external_result, 'connected');
     assert.deepEqual(outcome.metadata.leak_signals, []);
     assert.equal(outcome.metadata.subdomains_scanned.length, 1);
   });
@@ -242,7 +242,7 @@ describe('capability probes P0/P1', () => {
       resolve6Fn: async () => ['2001:db8::1'],
       fetchFn: async () => ({ status: 200, headers: { get: () => null } }),
     });
-    assert.equal(outcome.external_result, 'blocked');
+    assert.equal(outcome.external_result, 'connected');
     assert.ok(outcome.metadata.leak_signals.includes('ipv6_only_dns'));
     assert.deepEqual(outcome.metadata.corroborated_leak_signals, []);
   });
@@ -251,7 +251,7 @@ describe('capability probes P0/P1', () => {
     const outcome = await probeOriginLeakScan(job(), {
       resolve4Fn: async () => [],
       resolve6Fn: async () => ['2001:db8::1'],
-      fetchFn: async () => ({ status: 200, headers: { get: (name) => (name === 'x-backend-ip' ? '203.0.113.99' : null) } }),
+      fetchFn: async () => ({ status: 200, pinnedAddress: '203.0.113.99', headers: { get: () => null } }),
     });
     assert.equal(outcome.external_result, 'connected');
     assert.ok(outcome.metadata.corroborated_leak_signals.includes('ipv6_only_dns'));
@@ -984,7 +984,7 @@ describe('capability probes P0/P1', () => {
           return session;
         },
       });
-      assert.equal(outcome.external_result, 'error');
+      assert.equal(outcome.external_result, 'timeout');
       assert.equal(outcome.metadata.error_class, 'probe_job_deadline_exceeded');
       assert.equal(outcome.metadata.reset_accepted, null);
       assert.equal(outcome.requests_sent, 3);
@@ -1233,7 +1233,7 @@ describe('capability probes P0/P1', () => {
     assert.equal(outcome.external_result, 'connected');
   });
 
-  it('DNS posture probes return error for transient resolver failures', async () => {
+  it('DNS posture probes distinguish resolver timeouts from other transient failures', async () => {
     const transient = (code) => Object.assign(new Error(code), { code });
 
     const dnssec = await probeDnssecPosture(job({
@@ -1260,7 +1260,7 @@ describe('capability probes P0/P1', () => {
     }), {
       resolveNsFn: async () => { throw transient('ETIMEOUT'); },
     });
-    assert.equal(failover.external_result, 'error');
+    assert.equal(failover.external_result, 'timeout');
     assert.equal(failover.metadata.error_class, 'ETIMEOUT');
     assert.equal(failover.requests_sent, 1);
   });

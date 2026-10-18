@@ -1,0 +1,51 @@
+{
+  "schema": "astranull.efficacy-lab.v1",
+  "lab_id": "waf-none",
+  "networks": [
+    "anl-waf-none-net"
+  ],
+  "targets": [
+    {
+      "name": "plain-nginx-no-waf",
+      "address": "172.31.26.10",
+      "hostname": null,
+      "ports": [
+        {
+          "port": 80,
+          "protocol": "tcp",
+          "service": "http"
+        }
+      ],
+      "planted_condition": "nginx:1.27-alpine without WAF: returns 200 origin-ok for every path, no inspection or blocking",
+      "declarations": {},
+      "expectations": [
+        {
+          "check": "waf.sqli_managed_marker.safe",
+          "expected": "gap",
+          "why": "No WAF present; inert SQLi marker returns 200 origin-ok instead of being blocked"
+        },
+        {
+          "check": "waf.xss_managed_marker.safe",
+          "expected": "gap",
+          "why": "No WAF present; inert XSS marker returns 200 origin-ok instead of being blocked"
+        },
+        {
+          "check": "waf.path_traversal_managed_marker.safe",
+          "expected": "gap",
+          "why": "No WAF present; inert path traversal marker returns 200 origin-ok instead of being blocked"
+        },
+        {
+          "check": "waf.fingerprint.safe",
+          "expected": "inconclusive_expected",
+          "why": "waf.fingerprint.safe uses observation-only probe kind waf_fingerprint_observation; correlation logic in correlation.mjs returns inconclusive because one ordinary GET cannot establish WAF presence or blocking"
+        }
+      ]
+    }
+  ],
+  "verification": [
+    "curl from throwaway container on anl-waf-none-net: GET http://172.31.26.10/ returns 200 origin-ok",
+    "curl from throwaway container on anl-waf-none-net: GET with SQLi marker returns 200 origin-ok",
+    "curl from throwaway container on anl-waf-none-net: GET with XSS marker returns 200 origin-ok",
+    "curl from throwaway container on anl-waf-none-net: GET with path traversal marker returns 200 origin-ok"
+  ]
+}

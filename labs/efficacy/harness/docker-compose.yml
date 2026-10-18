@@ -1,0 +1,20 @@
+services:
+  network-holder:
+    image: alpine:3.20
+    container_name: anl-harness-holder
+    restart: unless-stopped
+    command: ["sleep", "infinity"]
+    cpus: 0.1
+    mem_limit: 64m
+    networks:
+      anl-harness-net:
+        ipv4_address: 172.31.10.2
+
+networks:
+  anl-harness-net:
+    name: anl-harness-net
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.31.10.0/24

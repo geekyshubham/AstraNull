@@ -55,12 +55,13 @@ function raceRun(overrides = {}) {
 
 const PROBE_EVENT = {
   id: 'evt_probe',
+  tenant_id: RACE_CTX.tenantId,
   test_run_id: 'run_1',
   signal_type: 'probe_result',
   producer_kind: 'signed_probe',
   nonce_hash: 'nh_1',
   timestamp: FIXED_NOW.toISOString(),
-  metadata: { external_result: 'connected', profile_kind: 'dns_axfr_leak',
+  metadata: { external_result: 'connected', profile_kind: 'dns_axfr_leak', axfr_leak: true,
     observation_only: false, readiness_conclusion: true,
     safety_attestation: { probe_requests_sent: 3, destination_resolver_attempts: 0, requests_sent: 3, total_operations: 3 } },
 };
@@ -112,6 +113,7 @@ function buildRaceRepositories(shared, { withObservation, runOverrides = {} }) {
     id: `evt_probe_${activeRun.id}`,
     test_run_id: activeRun.id,
     nonce_hash: activeRun.correlation?.nonce_hash,
+    metadata: { ...PROBE_EVENT.metadata, external_result: activeRun.probe_external_result },
   };
   const validationEvidence = {};
   for (const method of VALIDATION_EVIDENCE_REPOSITORY_METHODS) {

@@ -20,7 +20,7 @@ const OWNER_PASSWORD = 'c'.repeat(64);
 const SCHEDULER_PASSWORD = 'd'.repeat(64);
 const WORKER_PASSWORD = 'e'.repeat(64);
 
-function fakePool({ existingRoles = [], failOn = null, rollbackFails = false } = {}) {
+function fakePool({ existingRoles = [], failOn = null, rollbackFails = false, lifecycleFunctions = false } = {}) {
   const calls = [];
   const releases = [];
   let connectCount = 0;
@@ -29,6 +29,7 @@ function fakePool({ existingRoles = [], failOn = null, rollbackFails = false } =
       calls.push({ text, params });
       if (text === 'ROLLBACK' && rollbackFails) throw new Error('rollback connection failure');
       if (failOn?.test(text)) throw new Error('injected grant failure');
+      if (text.startsWith('SELECT to_regprocedure')) return { rows: [{ function_oid: lifecycleFunctions ? params[0] : null }] };
       if (text.startsWith('SELECT 1 FROM pg_roles')) {
         return { rows: existingRoles.includes(params[0]) ? [{ '?column?': 1 }] : [] };
       }
@@ -58,6 +59,15 @@ describe('Postgres purpose-specific role provisioning', () => {
     assert.ok(statements.some((text) => /GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES/.test(text)));
     assert.equal(statements.at(-1), 'COMMIT');
     assert.deepEqual(db.releases, [undefined]);
+  });
+
+  it('grants only lifecycle function execution when 0084 exists, without role membership', async () => {
+    const db = fakePool({ lifecycleFunctions: true });
+    await provisionPostgresAppRole(db, { password: APP_PASSWORD });
+    const statements = db.calls.map((call) => call.text);
+    assert.equal(statements.filter((text) => text.startsWith('GRANT EXECUTE ON FUNCTION public.astranull_')).length, 2);
+    assert.equal(statements.some((text) => /^GRANT astranull_origin_lifecycle/.test(text)), false);
+    assert.equal(statements.at(-1), 'COMMIT');
   });
 
   it('provisions astranull_backup with BYPASSRLS and reset SELECT-only object ACLs', async () => {

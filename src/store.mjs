@@ -1,4 +1,5 @@
-import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync, existsSync, renameSync, unlinkSync, openSync, closeSync, fsyncSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { CHECK_CATALOG } from './contracts/checks.mjs';
 import { normalizePrivacySettings } from './lib/privacySettings.mjs';
@@ -86,6 +87,8 @@ function emptyStore() {
     wafRuleRecommendations: [],
     discoveryEntities: [],
     discoveryCandidates: [],
+    originClues: [],
+    originClueBatches: [],
     supplyChainRisks: [],
     wafActionItems: [],
     wafOffensiveRequests: [],
@@ -218,7 +221,19 @@ export function writeDevStoreToDisk(target) {
   const dataDir = resolveDataDir();
   const dataFile = resolveDataFile();
   mkdirSync(dataDir, { recursive: true });
-  writeFileSync(dataFile, JSON.stringify(target, null, 2), 'utf8');
+  const temporary = `${dataFile}.${process.pid}.${randomUUID()}.tmp`;
+  let descriptor;
+  try {
+    descriptor = openSync(temporary, 'wx', 0o600);
+    writeFileSync(descriptor, JSON.stringify(target, null, 2), 'utf8');
+    fsyncSync(descriptor);
+    closeSync(descriptor);
+    descriptor = undefined;
+    renameSync(temporary, dataFile);
+  } finally {
+    if (descriptor !== undefined) closeSync(descriptor);
+    try { unlinkSync(temporary); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  }
 }
 
 function loadStore() {
@@ -242,6 +257,25 @@ function loadStore() {
 export function persistStore() {
   if (devStorePersistenceDisabled()) return;
   writeDevStoreToDisk(getStore());
+}
+
+// Lifecycle fences are process-local, tied to the actual store instance (including test resets).
+const lifecycleGenerations = new WeakMap();
+export function tenantLifecycleGeneration(tenantId) {
+  return lifecycleGenerations.get(getStore())?.get(tenantId) ?? 0;
+}
+export function advanceTenantLifecycleGeneration(tenantId) {
+  const current = getStore();
+  if (!lifecycleGenerations.has(current)) lifecycleGenerations.set(current, new Map());
+  const generations = lifecycleGenerations.get(current);
+  generations.set(tenantId, (generations.get(tenantId) ?? 0) + 1);
+}
+
+/** Persist a fully staged snapshot before publishing any mutation to the singleton. */
+export function commitDevStoreChanges(changes) {
+  const current = getStore();
+  writeDevStoreToDisk({ ...current, ...changes });
+  Object.assign(current, changes);
 }
 
 export function tenantFilter(items, tenantId) {

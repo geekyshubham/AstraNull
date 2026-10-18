@@ -137,6 +137,8 @@ export function deriveBindingScope(protectedTarget, requested = {}) {
   } else if (path == null && declaredPaths.length > 1) {
     return scopeError('path_unspecified', 400);
   }
+  if (declaredPorts.length && port != null && !declaredPorts.includes(port)) return scopeError('scope_mismatch', 409, { field: 'port' });
+  if (declaredPaths.length && path != null && !declaredPaths.includes(path)) return scopeError('scope_mismatch', 409, { field: 'path' });
   return { host, sni, port, path };
 }
 
@@ -155,6 +157,22 @@ export function currentOriginProof(records, tenantId, targetId) {
   };
   const verification = effectiveTargetVerifications(store, tenantId, [targetId]).get(targetId);
   return ownershipProofFromStates({ targetState: verification?.state ?? null });
+}
+
+export function originTargetDescriptor(target) {
+  if (!target) return null;
+  return { id: target.id, kind: target.kind, value: target.value,
+    port: target.port ?? null, protocol: target.protocol ?? null };
+}
+
+export function originBindingAuthority(binding, originTarget, protectedTarget) {
+  return { binding_id: binding.id, origin_target: originTargetDescriptor(originTarget),
+    protected_target: originTargetDescriptor(protectedTarget) };
+}
+
+export function exactOriginScope(left, right) {
+  return Boolean(left && right && ['host', 'sni', 'port', 'path'].every((key) =>
+    (left[key] ?? null) === (right[key] ?? null)));
 }
 
 function originLockdownRefusal(check, error, status, message, extra = {}) {
@@ -184,7 +202,8 @@ export function resolveOriginLockdownBinding({
       'More than one active origin binding protects this target; archive the extra bindings first.');
   }
   const binding = active[0];
-  const originTarget = (records?.targets ?? []).find((row) => row && row.id === binding.origin_target_id && !row.deleted_at);
+  const originTarget = (records?.targets ?? []).find((row) => row && row.id === binding.origin_target_id
+    && row.tenant_id === tid && !row.deleted_at && !row.archived_at);
   const literal = originTarget ? targetLiteralIpAddress(originTarget) : null;
   if (!literal) {
     return originLockdownRefusal(check, 'origin_target_not_verified_address', 400,
@@ -195,7 +214,9 @@ export function resolveOriginLockdownBinding({
     return originLockdownRefusal(check, 'origin_destination_not_allowed', 400,
       'The declared origin IP is not a publicly routable probe destination.');
   }
-  const protectedTarget = (records?.targets ?? []).find((row) => row && row.id === target?.id && !row.deleted_at) ?? target;
+  const protectedTarget = (records?.targets ?? []).find((row) => row && row.id === target?.id
+    && row.tenant_id === tid && !row.deleted_at && !row.archived_at);
+  if (!protectedTarget) return originLockdownRefusal(check, 'unknown_target', 404, 'The protected target is unavailable.');
   const scope = scopeFn(protectedTarget, { port: binding.port ?? undefined, path: binding.path ?? undefined });
   if (scope.error || scope.host !== binding.host || scope.sni !== binding.sni
     || (scope.port ?? null) !== (binding.port ?? null) || (scope.path ?? null) !== (binding.path ?? null)) {
@@ -207,9 +228,15 @@ export function resolveOriginLockdownBinding({
     return originLockdownRefusal(check, 'ownership_not_verified', 409,
       'The declared origin target is not verified.', { ownership_state: proof.state ?? null, proof: 'origin' });
   }
+  const protectedProof = proofFn(records, tid, protectedTarget.id);
+  if (!protectedProof.verified) {
+    return originLockdownRefusal(check, 'ownership_not_verified', 409,
+      'The protected target is not verified.', { ownership_state: protectedProof.state ?? null, proof: 'protected' });
+  }
   return {
     ok: true,
     binding_id: binding.id,
+    authority: originBindingAuthority(binding, originTarget, protectedTarget),
     address,
     host: scope.host,
     sni: scope.sni,

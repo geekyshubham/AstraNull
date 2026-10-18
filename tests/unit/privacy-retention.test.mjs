@@ -214,6 +214,7 @@ describe('metadata privacy retention', () => {
       evidenceVault: 0,
       reports: 0,
       notificationEvents: 0,
+      originClues: 0, originClueBatches: 0, originClueResponses: 0,
     });
     assert.equal(getStore().events.length, 4);
     const holdAudit = getStore().auditLog.find((e) => e.action === 'privacy.retention_legal_hold');
@@ -223,6 +224,7 @@ describe('metadata privacy retention', () => {
       evidenceVault: 1,
       reports: 0,
       notificationEvents: 1,
+      originClues: 0, originClueBatches: 0, originClueResponses: 0,
     });
     assert.ok(holdAudit.metadata.policy_snapshot);
   });

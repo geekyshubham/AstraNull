@@ -91,9 +91,11 @@ function loginDestinationWithIntent(candidate: string | undefined, reason: 'sess
 export default function App() {
   const [route, setRoute] = useState<RouteId>(() => getRouteFromLocation());
   const [path, setPath] = useState(() => window.location.pathname);
+  const [search, setSearch] = useState(() => window.location.search);
   const [config, setConfig] = useState<PortalConfig | null>(null);
   const [session, setSession] = useState<Session | null>(() => loadSession());
   const [data, setData] = useState<PortalData>(EMPTY_PORTAL_DATA);
+  const [dataSessionIdentity, setDataSessionIdentity] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [hydratingRoute, setHydratingRoute] = useState<RouteId | null>(null);
   const bootStarted = useRef(false);
@@ -102,6 +104,9 @@ export default function App() {
   payloadCommitGate.current.activate(route);
 
   const activeSession = useMemo(() => session ?? {}, [session]);
+  const scopedData = dataSessionIdentity === sessionIdentity(sessionForRoute(activeSession, route))
+    ? data
+    : { ...data, deploymentFeatures: null };
   const navScope = navScopeKey(session);
 
   // Saved list return state belongs to one tenant, user and role; drop every other scope.
@@ -131,7 +136,10 @@ export default function App() {
           force: options.force,
           shouldCommitCache: isCurrent
         }),
-      onCommit: (payload) => setData(payload),
+      onCommit: (payload) => {
+        setData(payload);
+        setDataSessionIdentity(sessionIdentity(scopedSession));
+      },
       onError: (error) => setData((current) => ({
         ...current,
         loaded: true,
@@ -159,6 +167,7 @@ export default function App() {
     if (dest.startsWith('/') && !dest.startsWith('//')) {
       window.history.replaceState(null, '', dest);
       setPath(window.location.pathname);
+      setSearch(window.location.search);
       return;
     }
     window.location.replace(dest);
@@ -188,6 +197,7 @@ export default function App() {
         if (dest.startsWith('/') && !dest.startsWith('//')) {
           history.replaceState(null, '', dest);
           setPath(window.location.pathname);
+          setSearch(window.location.search);
         } else {
           window.location.replace(dest);
           return;
@@ -245,6 +255,7 @@ export default function App() {
       if (routeAllowedFor(accessSession, nextRoute) && lastHydratedRoute.current !== nextRoute) setHydratingRoute(nextRoute);
       setRoute(nextRoute);
       setPath(window.location.pathname);
+      setSearch(window.location.search);
     }
     window.addEventListener('hashchange', onHashChange);
     window.addEventListener('popstate', onHashChange);
@@ -267,6 +278,7 @@ export default function App() {
         if (currentFull !== href) {
           window.history.pushState(null, '', href);
           setPath(window.location.pathname);
+          setSearch(window.location.search);
           setRoute(getRouteFromLocation());
         }
       }
@@ -336,19 +348,20 @@ export default function App() {
 
   if (loading || !config) return <LoadingScreen />;
 
-  if (path === '/' || path === '/landing.html') return <PublicLandingPage config={config} />;
-  if (path === '/login' || path === '/login.html') return <LoginPage config={config} />;
-  if (path === '/signup' || path === '/signup.html') return <SignupPage config={config} />;
-  if (path === '/signup-status') return <SignupStatusPage config={config} />;
-  if (path === '/set-password') return <SetPasswordPage config={config} />;
-  if (path === '/internal/admin/login' || path === '/staff-login.html') return <StaffLoginPage config={config} />;
+  const publicPageKey = `${path}${search}`;
+  if (path === '/' || path === '/landing.html') return <PublicLandingPage key={publicPageKey} config={config} />;
+  if (path === '/login' || path === '/login.html') return <LoginPage key={publicPageKey} config={config} />;
+  if (path === '/signup' || path === '/signup.html') return <SignupPage key={publicPageKey} config={config} />;
+  if (path === '/signup-status') return <SignupStatusPage key={publicPageKey} config={config} />;
+  if (path === '/set-password') return <SetPasswordPage key={publicPageKey} config={config} />;
+  if (path === '/internal/admin/login' || path === '/staff-login.html') return <StaffLoginPage key={publicPageKey} config={config} />;
 
   return (
     <ConfirmModalProvider>
     <AppShell
       route={route}
       session={activeSession}
-      data={data}
+      data={scopedData}
       onRouteChange={handleRouteChange}
       onRoleChange={handleRoleChange}
       onRefresh={() => void handleRefresh()}
@@ -357,7 +370,7 @@ export default function App() {
       {routeAllowed ? (
         <RouteView
           route={route}
-          data={data}
+          data={scopedData}
           config={config}
           session={activeSession}
           onRefresh={handleRefresh}
@@ -374,7 +387,7 @@ export default function App() {
       )}
     </AppShell>
     {session ? (
-      <EvidenceInspectorHost config={config} session={activeSession} data={data} locationKey={`${path}|${route}`} />
+      <EvidenceInspectorHost config={config} session={activeSession} data={scopedData} locationKey={`${path}|${route}`} />
     ) : null}
     </ConfirmModalProvider>
   );

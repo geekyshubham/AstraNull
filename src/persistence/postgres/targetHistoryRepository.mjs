@@ -3,7 +3,7 @@
  * Current-pointer updates use astranull_observation_order_before, the same
  * (observed_at, source_completed_at, id) order as the dev store.
  */
-import { withTenantContext } from './tenantContext.mjs';
+import { runWithTenantClient, withTenantContext } from './tenantContext.mjs';
 
 const EXACT_TIME = `to_char(%s AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`;
 
@@ -263,13 +263,39 @@ export function createTargetHistoryRepository(pool) {
       });
     },
 
-    async loadBindingContext(ctx, targetIds) {
+    async listBindingEvidence(ctx, bindingId) {
       return withTenantContext(pool, ctx.tenantId, async (client) => {
+        const { rows } = await client.query(`SELECT observation.*,
+          ${exact('observation.observed_at')} AS observed_at,
+          ${exact('observation.source_completed_at')} AS source_completed_at,
+          ${exact('observation.created_at')} AS created_at, to_jsonb(run) AS binding_run
+          FROM origin_bindings binding JOIN target_observations observation
+            ON observation.tenant_id = binding.tenant_id AND observation.origin_binding_id = binding.id
+          JOIN test_runs run ON run.tenant_id = observation.tenant_id AND run.id = observation.test_run_id
+          WHERE binding.tenant_id = $1 AND binding.id = $2 AND observation.family = 'origin_hosting'
+            AND observation.producer_kind = 'signed_probe' AND observation.attempt_class = 'successful'
+            AND run.target_id = observation.target_id AND run.check_id = observation.check_id
+            AND (run.origin_binding_id = binding.id OR run.provenance_json->'origin_lockdown'->>'binding_id' = binding.id)
+            AND COALESCE(run.provenance_json->'origin_scope', run.provenance_json->'origin_lockdown')->>'host' = binding.host
+            AND COALESCE(run.provenance_json->'origin_scope', run.provenance_json->'origin_lockdown')->>'sni' = binding.sni
+            AND (COALESCE(run.provenance_json->'origin_scope', run.provenance_json->'origin_lockdown')->>'port') IS NOT DISTINCT FROM binding.port::text
+            AND (COALESCE(run.provenance_json->'origin_scope', run.provenance_json->'origin_lockdown')->>'path') IS NOT DISTINCT FROM binding.path
+          ORDER BY observation.observed_at DESC, observation.source_completed_at DESC NULLS LAST, observation.id COLLATE "C" DESC
+          LIMIT 100`, [ctx.tenantId, bindingId]);
+        return { observations: rows.map(mapObservation), runs: rows.map((row) => row.binding_run) };
+      });
+    },
+
+    async loadBindingContext(ctx, targetIds, options = {}) {
+      return runWithTenantClient(pool, ctx.tenantId, options.client, async (client) => {
         const targets = await client.query(
-          `SELECT id, tenant_id, target_group_id, kind, value, port, deleted_at, declaration_json, normalized_value,
-                  ${exact('created_at')} AS created_at
-           FROM targets
-           WHERE tenant_id = $1 AND id = ANY($2::text[]) AND deleted_at IS NULL`,
+          `SELECT t.id, t.tenant_id, t.target_group_id, t.kind, t.value, t.port, t.protocol, t.deleted_at, t.declaration_json, t.normalized_value, t.metadata_json AS metadata,
+                  ${exact('t.created_at')} AS created_at
+           FROM targets t JOIN target_groups tg ON tg.tenant_id = t.tenant_id AND tg.id = t.target_group_id
+           WHERE t.tenant_id = $1 AND t.deleted_at IS NULL AND tg.deleted_at IS NULL AND tg.archived_at IS NULL
+             AND (t.id = ANY($2::text[]) OR EXISTS (SELECT 1 FROM targets child
+               WHERE child.tenant_id = t.tenant_id AND child.id = ANY($2::text[]) AND child.target_group_id = t.target_group_id
+                 AND child.metadata_json->'tags' ? ('subdomain-of:' || t.id)))`,
           [ctx.tenantId, targetIds],
         );
         const verifications = await client.query(
@@ -277,16 +303,14 @@ export function createTargetHistoryRepository(pool) {
                   ${exact('transitioned_at')} AS transitioned_at, transitioned_by
            FROM target_verifications
            WHERE tenant_id = $1 AND target_id = ANY($2::text[])`,
-          [ctx.tenantId, targetIds],
+          [ctx.tenantId, targets.rows.map((row) => row.id)],
         );
         const connectors = await client.query(
-          `SELECT id, tenant_id, provider, status, secret_id FROM waf_connectors WHERE tenant_id = $1`,
+          `SELECT * FROM waf_connectors WHERE tenant_id = $1`,
           [ctx.tenantId],
         );
         const snapshots = await client.query(
-          `SELECT id, tenant_id, connector_id, provider, snapshot_kind, resource_ref_hash, summary_json,
-                  evidence_source, observed_at
-           FROM waf_connector_snapshots WHERE tenant_id = $1`,
+          `SELECT * FROM waf_connector_snapshots WHERE tenant_id = $1`,
           [ctx.tenantId],
         );
         return {
@@ -341,6 +365,7 @@ export function createTargetHistoryRepository(pool) {
 
     async archiveBinding(ctx, id, patch, auditEntry, audit) {
       return withTenantContext(pool, ctx.tenantId, async (client) => {
+        await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [ctx.tenantId]);
         const updated = await client.query(
           `UPDATE origin_bindings
            SET status = 'archived', archived_at = $3::timestamptz, archived_by = $4
@@ -352,7 +377,24 @@ export function createTargetHistoryRepository(pool) {
         const row = updated.rows[0];
         if (!row) return null;
         const mapped = { ...row, created_at: row.created_at_exact, archived_at: row.archived_at_exact };
-        if (auditEntry && audit?.appendAuditEvent) await audit.appendAuditEvent(auditEntry, { client });
+        const cancelled = await client.query(`UPDATE test_runs SET status = 'cancelled', completed_at = $3::timestamptz,
+          summary_json = COALESCE(summary_json, '{}'::jsonb) || jsonb_build_object('cancellation',
+            jsonb_build_object('reason', 'Origin binding archived', 'source', 'origin_binding', 'by', $4::text))
+          WHERE tenant_id = $1 AND status IN ('planned', 'running', 'collecting')
+            AND (origin_binding_id = $2 OR provenance_json->'origin_lockdown'->>'binding_id' = $2)
+          RETURNING id`, [ctx.tenantId, id, patch.archived_at, patch.archived_by]);
+        const cancelledIds = cancelled.rows.map((run) => run.id);
+        if (cancelledIds.length) await client.query(`UPDATE probe_jobs SET status = 'cancelled', completed_at = $3::timestamptz
+          WHERE tenant_id = $1 AND test_run_id = ANY($2::text[]) AND status IN ('pending', 'leased')`,
+        [ctx.tenantId, cancelledIds, patch.archived_at]);
+        if (auditEntry && audit?.appendAuditEvent) {
+          await audit.appendAuditEvent({ ...auditEntry, metadata: { ...auditEntry.metadata, cancelled_test_run_ids: cancelledIds } }, { client });
+          for (const runId of cancelledIds) await audit.appendAuditEvent({
+            tenant_id: ctx.tenantId, actor_user_id: patch.archived_by, actor_role: ctx.role,
+            action: 'test_run.cancelled', resource_type: 'test_run', resource_id: runId,
+            metadata: { reason: 'Origin binding archived', source: 'origin_binding', origin_binding_id: id },
+          }, { client });
+        }
         return mapped;
       });
     },

@@ -1,0 +1,16 @@
+{
+  "schema": "astranull.connect-fault-lab.v1",
+  "image": "sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20",
+  "image_reference_at_preflight": "node:24-bookworm-slim",
+  "node_version": "v24.21.0",
+  "network": "none",
+  "cpus": 1,
+  "memory_bytes": 268435456,
+  "pids_limit": 32,
+  "runtime_seconds": 20,
+  "scratch_bytes": 16777216,
+  "capabilities": ["NET_ADMIN", "NET_RAW"],
+  "required_tools": ["node", "timeout", "iptables", "tcpdump"],
+  "fault_scope": "exact_owned_container_loopback_endpoint_only",
+  "missing_prerequisites_are": "blocking_not_skipped_or_covered"
+}

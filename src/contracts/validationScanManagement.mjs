@@ -513,6 +513,7 @@ export function projectScanStep({ step, check, target, run, verdict, events = []
           verdict: verdict.verdict,
           confidence: verdict.confidence,
           explanation: verdict.explanation,
+          evidence_ids: Array.isArray(verdict.evidence_ids) ? [...verdict.evidence_ids] : [],
           severity: verdict.severity ?? null,
           placement_confidence: verdict.placement_confidence?.level ?? null,
           ...((verdict.explanation_reason ?? verdict.placement_confidence?.explanation_reason) != null

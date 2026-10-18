@@ -1,7 +1,7 @@
-import { audit } from '../audit.mjs';
+import { buildAuditRecord } from '../audit.mjs';
 import { DEFAULT_PRIVACY, normalizePrivacySettings } from '../lib/privacySettings.mjs';
 import { enforceMetadataRetentionForTenant } from './privacyRetention.mjs';
-import { getStore, persistStore } from '../store.mjs';
+import { commitDevStoreChanges, getStore } from '../store.mjs';
 
 export function getCurrentTenant(ctx) {
   return getStore().tenants.find((t) => t.id === ctx.tenantId) ?? null;
@@ -10,29 +10,20 @@ export function getCurrentTenant(ctx) {
 export function patchCurrentTenant(ctx, body) {
   const tenant = getCurrentTenant(ctx);
   if (!tenant) return null;
-  if (body.name) tenant.name = body.name;
-  const privacyPatched = Boolean(body.privacy_settings);
-  if (privacyPatched) {
-    tenant.privacy_settings = normalizePrivacySettings({
-      ...tenant.privacy_settings,
-      ...body.privacy_settings,
-    });
+  const updated = { ...tenant, ...(body.name ? { name: body.name } : {}), updated_at: new Date().toISOString() };
+  if (body.privacy_settings) updated.privacy_settings = normalizePrivacySettings({ ...tenant.privacy_settings, ...body.privacy_settings });
+  const event = { tenant_id: ctx.tenantId, actor_user_id: ctx.userId, actor_role: ctx.role,
+    action: 'tenant.updated', resource_type: 'tenant', resource_id: tenant.id,
+    metadata: { fields: Object.keys(body) } };
+  if (body.privacy_settings) {
+    enforceMetadataRetentionForTenant(ctx.tenantId, ctx, { tenantUpdate: updated, auditEvents: [event] });
+  } else {
+    const store = getStore();
+    const prior = [...store.auditLog].reverse().find((row) => row.entry_hash) ?? null;
+    commitDevStoreChanges({ tenants: store.tenants.map((row) => row.id === tenant.id ? updated : row),
+      auditLog: [...store.auditLog, buildAuditRecord(event, prior)] });
   }
-  tenant.updated_at = new Date().toISOString();
-  audit({
-    tenant_id: ctx.tenantId,
-    actor_user_id: ctx.userId,
-    actor_role: ctx.role,
-    action: 'tenant.updated',
-    resource_type: 'tenant',
-    resource_id: tenant.id,
-    metadata: { fields: Object.keys(body) },
-  });
-  if (privacyPatched) {
-    enforceMetadataRetentionForTenant(ctx.tenantId, { userId: ctx.userId, role: ctx.role });
-  }
-  persistStore();
-  return tenant;
+  return getCurrentTenant(ctx);
 }
 
 export { DEFAULT_PRIVACY };

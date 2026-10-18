@@ -426,27 +426,28 @@ export function createValidationEvidenceRepository(pool) {
       if (!Number.isFinite(at.getTime())) throw new TypeError('Invalid readiness cutoff.');
       return withTenantContext(pool, ctx.tenantId, async (client) => {
         // One statement snapshot across all inputs; presentation feed limits never affect assurance.
+        // These outputs go straight to the driver, without binary-JSON construction or operators.
         const { rows } = await client.query(`SELECT
-          (SELECT COALESCE(jsonb_agg(g), '[]'::jsonb) FROM
+          (SELECT COALESCE(json_agg(g), '[]'::json) FROM
             (SELECT id, tenant_id, expected_behavior_default, safety_policy, declaration_json, created_at
              FROM target_groups WHERE tenant_id = $1 AND deleted_at IS NULL AND archived_at IS NULL
                AND created_at <= $2::timestamptz) g) AS groups,
-          (SELECT COALESCE(jsonb_agg(t), '[]'::jsonb) FROM
+          (SELECT COALESCE(json_agg(t), '[]'::json) FROM
             (SELECT t.id, t.tenant_id, t.target_group_id, t.kind, t.value, t.expected_behavior,
                     t.protocol, t.port, t.declaration_json, t.created_at
              FROM targets t JOIN target_groups g ON g.tenant_id = t.tenant_id AND g.id = t.target_group_id
              WHERE t.tenant_id = $1 AND t.deleted_at IS NULL AND g.deleted_at IS NULL AND g.archived_at IS NULL
                AND t.created_at <= $2::timestamptz AND g.created_at <= $2::timestamptz) t) AS targets,
-          (SELECT COALESCE(jsonb_agg(r ORDER BY r.created_at, r.id), '[]'::jsonb) FROM
+          (SELECT COALESCE(json_agg(r ORDER BY r.created_at, r.id), '[]'::json) FROM
             (SELECT ${TEST_RUN_COLUMNS} FROM test_runs WHERE tenant_id = $1 AND created_at <= $2::timestamptz) r) AS runs,
-          (SELECT COALESCE(jsonb_agg(v), '[]'::jsonb) FROM
+          (SELECT COALESCE(json_agg(v), '[]'::json) FROM
             (SELECT ${VERDICT_COLUMNS} FROM verdicts WHERE tenant_id = $1 AND created_at <= $2::timestamptz) v) AS verdicts,
-          (SELECT COALESCE(jsonb_agg(e), '[]'::jsonb) FROM
+          (SELECT COALESCE(json_agg(e), '[]'::json) FROM
             (SELECT ${EVENT_COLUMNS} FROM events WHERE tenant_id = $1 AND timestamp <= $2::timestamptz
               AND ingested_at <= $2::timestamptz AND signal_type <> 'probe_activity') e) AS events,
-          (SELECT COALESCE(jsonb_agg(e), '[]'::jsonb) FROM
+          (SELECT COALESCE(json_agg(e), '[]'::json) FROM
             (SELECT ${EVIDENCE_COLUMNS} FROM evidence_vault WHERE tenant_id = $1 AND created_at <= $2::timestamptz) e) AS evidence,
-          (SELECT COALESCE(jsonb_agg(f), '[]'::jsonb) FROM
+          (SELECT COALESCE(json_agg(f), '[]'::json) FROM
             (SELECT tenant_id, target_id, status, severity, COUNT(*)::int AS count, MAX(created_at) AS created_at,
                     BOOL_AND(
                       status = 'accepted_risk'
@@ -459,7 +460,7 @@ export function createValidationEvidenceRepository(pool) {
                (status = 'accepted_risk' AND (risk_acceptance->>'review_at') IS NOT NULL
                  AND (risk_acceptance->>'review_at')::timestamptz <= $2::timestamptz)
             ) f) AS findings,
-          (SELECT COALESCE(jsonb_agg(p), '[]'::jsonb) FROM
+          (SELECT COALESCE(json_agg(p), '[]'::json) FROM
             (SELECT id, tenant_id, target_group_id, target_id, check_id, expected_verdict, safe_windows,
               enabled, state, schedule_revision, safety_policy_snapshot, created_at, updated_at
              FROM test_policies WHERE tenant_id = $1 AND created_at <= $2::timestamptz) p) AS policies`,
@@ -2109,12 +2110,13 @@ export function createValidationEvidenceRepository(pool) {
         let originBindingId = spec.origin_binding_id ?? null;
         if (originBindingId) {
           const bindingRes = await client.query(
-            `SELECT id, tenant_id, origin_target_id, status, created_at
+            `SELECT id, tenant_id, origin_target_id, protected_target_id, status, created_at
              FROM origin_bindings WHERE tenant_id = $1 AND id = $2`,
             [ctx.tenantId, originBindingId],
           );
           const row = bindingRes.rows[0] ?? null;
-          if (!row || row.status !== 'active' || row.origin_target_id !== target.id) {
+          if (!row || (row.origin_target_id !== target.id && !(row.protected_target_id === target.id
+            && (spec.families ?? []).every((family) => family.check_id === 'nfw.origin_lockdown.safe')))) {
             if (spec.require_binding) return { skipped: 'binding_target_mismatch', rows: [] };
             originBindingId = null;
           } else {

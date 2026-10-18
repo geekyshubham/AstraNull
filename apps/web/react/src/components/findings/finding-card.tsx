@@ -34,8 +34,11 @@ export function FindingCard({
   const state = findingStatus(finding);
   const verdict = getString(finding, ['verdict'], '');
   const checkId = getString(finding, ['check_id', 'check'], '');
-  const check = checks.find((entry) => getString(entry, ['check_id', 'id']) === checkId);
+  const check = checkId ? checks.find((entry) => getString(entry, ['check_id', 'id']) === checkId) : undefined;
   const checkLabel = checkId ? plainCheckName(getString(check ?? {}, ['name', 'title'], checkId)) : '';
+  const missingControlSource = [finding.missing_control, check?.missing_control]
+    .find((value) => value && typeof value === 'object' && !Array.isArray(value)) as DataItem | undefined;
+  const missingControl = missingControlSource ? getString(missingControlSource, ['control_label'], '') : '';
 
   const openedAt = finding.created_at ?? finding.opened_at;
   const href = id ? buildDetailHref('finding-detail', id) : '#findings';
@@ -46,7 +49,7 @@ export function FindingCard({
       href={href}
       data-focus-key={id ? `finding-${id}` : undefined}
       aria-current={active ? 'true' : undefined}
-      aria-label={`${onOpen ? 'View evidence for finding' : 'Open finding'} ${title}, ${formatSeverityLabel(severity)}, ${state}`}
+      aria-label={`${onOpen ? 'View evidence for finding' : 'Open finding'} ${title}, ${formatSeverityLabel(severity)}, ${state}${missingControl ? `, missing ${missingControl}` : ''}`}
       onClick={(event) => {
         if (!id || !onOpen) return;
         event.preventDefault();
@@ -58,6 +61,7 @@ export function FindingCard({
         {verdict ? <Badge tone={verdictTone(verdict)} title={`Recorded verdict: ${plainVerdictLabel(verdict)}`}>{plainVerdictLabel(verdict)}</Badge> : null}
       </span>
       <span className="fc-meta mono" title={id}>{id || 'No finding ID'}</span>
+      {missingControl ? <span className="fc-missing"><span className="fc-key">Missing:</span> {missingControl}</span> : null}
       <span className="fc-facets">
         {checkLabel ? <span><span className="fc-key">Check:</span> {checkLabel}</span> : null}
         {checkLabel ? <span className="fc-sep" aria-hidden="true">·</span> : null}

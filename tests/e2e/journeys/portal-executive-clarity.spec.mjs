@@ -193,7 +193,9 @@ test.describe('portal executive clarity', () => {
 
     await page.getByRole('tab', { name: /^Validate/ }).click();
     const checks = page.getByRole('region', { name: 'Checks for this target' });
-    await expect(checks).toContainText(/\d+ checks in the catalog\. \d+ are runnable on this target, including observation checks\./);
+    await expect(checks).toContainText(/\d+ checks in the catalog\. \d+ are eligible for selection on this target, including observation checks\./);
+    await expect(checks).toContainText('Availability is separate from recorded results.');
+    await expect(checks).toContainText('The server re-checks authorization before starting.');
     await expect(checks.getByRole('button', { name: /^Review (?:and run )?all \d+$/ })).toBeVisible();
 
     // A recorded run of a declaration-only (E1) check never reads as live traffic.

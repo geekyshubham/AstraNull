@@ -31,6 +31,7 @@ import { enforcementFromGraded, postureFromEnforcement } from '../../src/lib/vec
 import { runWafClassMarkerProbe } from '../../src/lib/vectorProbes/wafClassProbes.mjs';
 import { runRateLimitCanaryProbe } from '../../src/lib/vectorProbes/rateLimitCanaryProbes.mjs';
 import { correlateExternalOnlyVerdict } from '../../src/services/correlation.mjs';
+import { buildTargetRuleCoverage } from '../../src/services/ruleCoverage.mjs';
 import { createValidationPlan, executeValidationPlan } from '../../src/services/wafOrchestrator.mjs';
 import { loadRuntimeConfig } from '../../src/config.mjs';
 import { getStore, resetStoreForTests } from '../../src/store.mjs';
@@ -253,13 +254,13 @@ describe('D7 AXFR derives its result across every nameserver', () => {
   });
 
   it('correlation: protected only when enforced, exposed on any leak, otherwise inconclusive', () => {
-    assert.equal(correlate('dns_axfr_leak', { enforcement: 'enforced' }, { externalResult: 'blocked' }).verdict, 'protected');
+    assert.equal(correlate('dns_axfr_leak', { enforcement: 'enforced' }, { externalResult: 'blocked' }).verdict, 'inconclusive');
     assert.equal(correlate('dns_axfr_leak', { enforcement: 'unknown' }, { externalResult: 'blocked' }).verdict, 'inconclusive');
     assert.equal(correlate('dns_axfr_leak', {}, { externalResult: 'blocked' }).verdict, 'inconclusive');
     const leak = correlate('dns_axfr_leak', {
       enforcement: 'not_enforced',
       nameserver_results: [{ nameserver: 'ns1', queried: true, axfr_refused: true }, { nameserver: 'ns2', queried: true, axfr_leak: true }],
-    }, { externalResult: 'blocked' });
+    }, { externalResult: 'connected' });
     assert.equal(leak.verdict, 'exposed');
     assert.equal(leak.createsFinding, true);
   });
@@ -389,7 +390,7 @@ describe('D10 catalog copy matches what correlation concludes', () => {
     assert.match(check.verdict_logic, /exposed/);
     assert.match(check.verdict_logic, /inconclusive/);
     assert.doesNotMatch(`${check.description} ${check.verdict_logic} ${check.explanation_template}`, /declared-disallowed|No protection, exposure/i);
-    assert.equal(check.version, '1.1.0');
+    assert.equal(check.version, '1.2.0');
   });
   it('forbidden TCP port and every runnable reflect./amp. reflector check are violation/exposure-only, never protected', () => {
     const forbidden = getCheckById('l3.forbidden_tcp_port.safe');
@@ -515,10 +516,30 @@ describe('D12 reflector exposure is direct evidence, not a firewall violation', 
 
 describe('D14 rule coverage is honest about canaries and unrunnable checks', () => {
   const categories = Object.fromEntries(catalogRuleCoverage().categories.map((row) => [row.id, row]));
-  it('custom-canary-only categories are partial with the canary reason', () => {
-    for (const id of ['request_smuggling', 'ssrf_xxe_jndi', 'deserialization', 'file_upload', 'ssti']) {
-      assert.equal(categories[id].assurance, 'partial', id);
+  it('unbound custom-canary categories are observations with an unavailable-setup reason', () => {
+    for (const id of ['custom_canary', 'request_smuggling', 'ssrf_xxe_jndi', 'deserialization', 'file_upload', 'ssti']) {
+      assert.equal(categories[id].assurance, 'observation', id);
       assert.equal(categories[id].assurance_reason, CUSTOM_CANARY_ONLY_REASON, id);
+    }
+    assert.match(CUSTOM_CANARY_ONLY_REASON, /setup is not available/i);
+    assert.doesNotMatch(categories.custom_canary.description, /proves/i);
+  });
+  it('retains historical custom verdicts without counting them as current rule protection', () => {
+    const nowMs = Date.parse('2026-10-15T12:00:00Z');
+    const checkId = 'waf.request_smuggling_marker.safe';
+    for (const verdict of ['protected', 'exposed']) {
+      const recorded = { verdict, evidence_ids: ['ev_historical'] };
+      const original = structuredClone(recorded);
+      const result = buildTargetRuleCoverage({
+        targetId: 'tgt_coverage', declarations: {}, nowMs, env: {},
+        runs: [{ id: 'run_historical', check_id: checkId, started_at: '2026-10-15T11:00:00Z', completed_at: '2026-10-15T11:01:00Z' }],
+        verdictForRun: () => recorded,
+      });
+      const category = result.categories.find((row) => row.id === 'request_smuggling');
+      assert.equal(category.status, 'inconclusive');
+      assert.equal(category.checks[0].status, 'inconclusive');
+      assert.equal(category.checks[0].verdict, verdict);
+      assert.deepEqual(recorded, original);
     }
   });
   it('a category whose only probe can never run is not_assessable with a reason', () => {

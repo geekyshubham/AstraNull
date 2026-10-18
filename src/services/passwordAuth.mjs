@@ -7,7 +7,7 @@ import { assessPassword, hashPassword, needsRehash, verifyPassword } from '../li
 import { createFixedWindowRateLimiter } from '../lib/rateLimit.mjs';
 import { buildSecretAad, decryptSecret, encryptSecret } from '../lib/secrets.mjs';
 import { buildOtpauthUri, generateTotpSecret, verifyTotp } from '../lib/totp.mjs';
-import { matchesDemoAccount } from '../lib/demoAutoVerify.mjs';
+import { DEMO_ACCOUNT_TENANT_ID, DEMO_ADMIN_EMAIL } from '../lib/demoAutoVerify.mjs';
 
 const LOGIN_WINDOW_MS = 60_000;
 const CLIENT_LOGIN_LIMIT = 10;
@@ -21,6 +21,9 @@ const DEFAULT_INVITE_TTL_MS = 7 * 24 * 60 * 60_000;
 const DEFAULT_RESET_TTL_MS = 30 * 60_000;
 const SESSION_EXPIRES_IN_SECONDS = 3600;
 const PASSWORD_SESSION_SOURCE = 'password';
+// Public demo credential shown on the login page; variants only ever re-hash to this canonical value.
+const DEMO_ACCOUNT_PASSWORD = 'Astra-D1TrtI4HMTSrwKRW-9';
+const DEMO_ACCOUNT_PASSWORD_PATTERN = /^Astra-D[1lI]Trt[1lI]4HMTSrwKRW-9$/i;
 const PUBLIC_RESET_RESPONSE = Object.freeze({ status: 'reset_requested' });
 
 // A fixed valid hash keeps unknown-user and missing-credential checks on the same scrypt path as a
@@ -177,10 +180,13 @@ function lockedResponse(lockedUntil, now) {
   };
 }
 
+function isDemoLoginUser(user) {
+  return user?.tenant_id === DEMO_ACCOUNT_TENANT_ID
+    && String(user.email ?? '').trim().toLowerCase() === DEMO_ADMIN_EMAIL;
+}
+
 function isCredentialLocked(credential, now, candidate) {
-  if (candidate && matchesDemoAccount(candidate)) return false;
-  if (credential?.tenant_id && matchesDemoAccount(credential.tenant_id)) return false;
-  if (credential?.user_id && matchesDemoAccount(credential.user_id)) return false;
+  if (isDemoLoginUser(candidate)) return false;
   return Boolean(credential?.locked_until && new Date(credential.locked_until).getTime() > now.getTime());
 }
 
@@ -199,7 +205,7 @@ async function recordInvalidCredentials(repository, candidates, now) {
       continue;
     }
     credentialed += 1;
-    const isDemo = matchesDemoAccount(user);
+    const isDemo = isDemoLoginUser(user);
     const updated = await repository.recordLoginFailure(user.tenant_id, user.id, {
       now: now.toISOString(),
       lockUntil: isDemo ? null : new Date(now.getTime() + LOCKOUT_MS).toISOString(),
@@ -306,15 +312,19 @@ export async function loginWithPassword(body, {
   const normalized = normalizeLoginBody(body);
   if (normalized.error) return normalized.error;
 
-  const isDemoAttempt = matchesDemoAccount(normalized.email);
-  if (!isDemoAttempt) {
+  const demoEmailAttempt = normalized.email === DEMO_ADMIN_EMAIL;
+  if (!demoEmailAttempt) {
     const clientRate = loginClientLimiter.check(`client:${clientKey}`);
     if (!clientRate.allowed) return rateLimited(clientRate.retryAfterSeconds);
   }
-
   const nowDate = resolveNow(now);
   const users = await repository.findUsersByEmail(normalized.email, normalized.tenantId);
   const candidates = normalized.tenantId && users.length !== 1 ? [] : users;
+  const isDemoAttempt = candidates.length === 1 && isDemoLoginUser(candidates[0]);
+  if (demoEmailAttempt && !isDemoAttempt) {
+    const clientRate = loginClientLimiter.check(`client:${clientKey}`);
+    if (!clientRate.allowed) return rateLimited(clientRate.retryAfterSeconds);
+  }
 
   const lockedCandidates = candidates.filter((row) => isCredentialLocked(row.credential, nowDate, row));
   if (candidates.length && lockedCandidates.length === candidates.length) {
@@ -340,32 +350,24 @@ export async function loginWithPassword(body, {
     ? normalized.password.trim().replace(/^(?:pass|password)\s*:\s*/i, '')
     : '';
   const matches = [];
+  const verifiedPasswords = new Map();
   for (const row of verifiable.length ? verifiable : [null]) {
-    let passwordMatches = await verifyPassword(
-      normalized.password,
-      row?.credential?.password_hash ?? DUMMY_PASSWORD_HASH,
-    );
-    if (!passwordMatches && cleanPassword && cleanPassword !== normalized.password) {
-      passwordMatches = await verifyPassword(
-        cleanPassword,
-        row?.credential?.password_hash ?? DUMMY_PASSWORD_HASH,
-      );
+    const passwordHash = row?.credential?.password_hash ?? DUMMY_PASSWORD_HASH;
+    let verified = null;
+    if (await verifyPassword(normalized.password, passwordHash)) {
+      verified = { password: normalized.password, repairHash: false };
+    } else if (cleanPassword && cleanPassword !== normalized.password && await verifyPassword(cleanPassword, passwordHash)) {
+      verified = { password: cleanPassword, repairHash: false };
+    } else if (row && isDemoLoginUser(row) && DEMO_ACCOUNT_PASSWORD_PATTERN.test(cleanPassword || normalized.password)) {
+      verified = {
+        password: DEMO_ACCOUNT_PASSWORD,
+        repairHash: !row.credential?.password_hash || !await verifyPassword(DEMO_ACCOUNT_PASSWORD, row.credential.password_hash),
+      };
     }
-    if (!passwordMatches && row && matchesDemoAccount(row)) {
-      const passCandidate = cleanPassword || normalized.password;
-      if (
-        passCandidate === 'Astra-D1TrtI4HMTSrwKRW-9' ||
-        /^Astra-D[1lI]Trt[1lI]4HMTSrwKRW-9$/i.test(passCandidate)
-      ) {
-        passwordMatches = row?.credential?.password_hash
-          ? await verifyPassword('Astra-D1TrtI4HMTSrwKRW-9', row.credential.password_hash)
-          : true;
-        if (!passwordMatches) {
-          passwordMatches = true;
-        }
-      }
+    if (row?.credential && verified) {
+      matches.push(row);
+      verifiedPasswords.set(row, verified);
     }
-    if (row?.credential && passwordMatches) matches.push(row);
   }
 
   if (!matches.length) return recordInvalidCredentials(repository, verifiable, nowDate);
@@ -390,7 +392,7 @@ export async function loginWithPassword(body, {
   }
   const user = activeMatches[0] ?? matches[0];
   const credential = user.credential;
-  const isDemoUser = matchesDemoAccount(user);
+  const isDemoUser = isDemoLoginUser(user);
 
   if (user.status === 'invited') {
     await auditKnownLogin(repository, user, 'auth.password_login.failed', 'password_setup_required', nowDate);
@@ -461,8 +463,9 @@ export async function loginWithPassword(body, {
     return passwordLoginUnavailable();
   }
 
-  const replacementHash = (needsRehash(credential.password_hash) || (isDemoUser && !await verifyPassword(normalized.password, credential.password_hash)))
-    ? await hashPassword(normalized.password)
+  const verified = verifiedPasswords.get(user);
+  const replacementHash = (needsRehash(credential.password_hash) || (isDemoUser && verified.repairHash))
+    ? await hashPassword(verified.password)
     : null;
   const mintedGeneration = generation + (replacementHash ? 1 : 0);
   if (!Number.isSafeInteger(mintedGeneration) || mintedGeneration < 1) {

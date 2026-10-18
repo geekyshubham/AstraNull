@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { installPortalBrowserResources } from './portal-browser-resources.mjs';
 
 /** Install before navigation. API-failure tests may allow HTTP responses, never JS failures. */
 export async function collectPortalBrowserFailures(page, baseUrl, { allowResponse = () => false } = {}) {
@@ -72,6 +73,7 @@ export async function assertPortalInitialLoad(page, baseUrl, { hash = 'dashboard
   const diagnostics = await collectPortalBrowserFailures(page, baseUrl);
   onDiagnostics(diagnostics);
   try {
+    await installPortalBrowserResources(page);
     await page.goto(`${baseUrl}/app#${hash}`, { waitUntil: 'networkidle', timeout });
     diagnostics.assertClean();
     await page.locator('#portal-main').waitFor({ state: 'visible', timeout });
