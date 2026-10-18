@@ -388,6 +388,75 @@ export async function requestJson(
   return requestWithHeaders(path, buildApiHeaders(config, session), options);
 }
 
+/** Stream a reviewed discovery request; a stalled connection fails instead of spinning forever. */
+export async function requestDiscoveryStream(
+  config: PortalConfig,
+  session: Session,
+  path: string,
+  options: { signal: AbortSignal; onProgress: (progress: Record<string, unknown>) => void },
+) {
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  options.signal.addEventListener('abort', abort, { once: true });
+  if (options.signal.aborted) abort();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let timedOut = false;
+  const resetIdle = () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => { timedOut = true; controller.abort(); }, 45_000);
+  };
+  const failure = (payload: Record<string, unknown>, status = 502) => Object.assign(
+    new Error(friendlyHttpError(path, status, payload)), { payload, status },
+  );
+  resetIdle();
+  try {
+    const response = await fetchWithRateLimitRetry(path, {
+      method: 'POST', headers: { ...buildApiHeaders(config, session), accept: 'text/event-stream' },
+      body: '{}', signal: controller.signal,
+    });
+    if (!response.ok || !response.headers.get('content-type')?.includes('text/event-stream')) {
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) { handleAuthFailure(response.status, payload); throw failure(payload, response.status); }
+      return payload;
+    }
+    const reader = response.body?.getReader();
+    if (!reader) throw failure({ error: 'subdomain_source_unreachable' });
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let result: Record<string, unknown> | undefined;
+    const consume = (frame: string) => {
+      const data = frame.split(/\r?\n/).filter(line => line.startsWith('data:')).map(line => line.slice(5).trim()).join('\n');
+      if (!data) return;
+      const item = JSON.parse(data);
+      if (item.type === 'progress') options.onProgress(item.progress);
+      else if (item.type === 'result') result = item.payload;
+      else if (item.type === 'error') throw failure(item.payload ?? {}, Number(item.payload?.status) || 502);
+    };
+    try {
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        resetIdle();
+        buffer += decoder.decode(value, { stream: true });
+        const frames = buffer.split(/\r?\n\r?\n/);
+        buffer = frames.pop() ?? '';
+        frames.forEach(consume);
+      }
+      buffer += decoder.decode();
+      if (buffer.trim()) consume(buffer);
+    } finally { reader.releaseLock(); }
+    if (!result) throw failure({ error: 'subdomain_source_unreachable' });
+    return result;
+  } catch (error) {
+    if (timedOut) throw failure({ error: 'subdomain_source_unreachable' });
+    throw error;
+  } finally {
+    clearTimeout(timer);
+    options.signal.removeEventListener('abort', abort);
+    controller.abort();
+  }
+}
+
 export async function requestSocJson(
   config: PortalConfig,
   session: Session,

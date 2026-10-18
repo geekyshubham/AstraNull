@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Network, RefreshCw } from 'lucide-react';
-import { requestJson } from '../../lib/api';
+import { requestDiscoveryStream, requestJson } from '../../lib/api';
 import { apiErrorMessage } from '../../lib/error-messages';
 import { buildDetailHref } from '../../lib/route-params';
 import { formatDate } from '../../lib/utils';
@@ -30,6 +30,7 @@ const NOT_CONFIGURED_FALLBACK = 'Subdomain discovery is unavailable. You can dec
 function subdomainSourceErrorMessage(code: string, label: string): string {
   const source = label || 'The passive source';
   switch (code) {
+    case 'subdomain_discovery_cancelled': return 'Discovery stopped. Hostnames already declared remain available.';
     case 'subdomain_source_not_configured': return `${NOT_CONFIGURED_FALLBACK} No hosts were added.`;
     case 'subdomain_source_unreachable': return `${source} could not be reached, so no hosts were added. Try again later.`;
     case 'subdomain_source_failed': return `${source} returned an error, so no hosts were added. Try again in a few minutes, or declare child hostnames manually.`;
@@ -62,11 +63,17 @@ export function TargetSubdomains({ target, config, session, canWrite, canStart }
   const [filter, setFilter] = useState('');
   const [refresh, setRefresh] = useState(0);
   const [busy, setBusy] = useState(false);
+  const [runningAction, setRunningAction] = useState<'enumerate' | 'detect' | null>(null);
+  const [progress, setProgress] = useState<DataItem>({});
   const [review, setReview] = useState<'enumerate' | 'detect' | null>(null);
   const [pending, setPending] = useState<string[]>([]);
   const mutation = useRef<AbortController | null>(null);
 
-  useEffect(() => () => mutation.current?.abort(), []);
+  useEffect(() => {
+    setBusy(false); setRunningAction(null); setProgress({}); setReview(null);
+    setError(''); setMessage(''); setPending([]); setInventory(null);
+    return () => { mutation.current?.abort(); mutation.current = null; };
+  }, [targetId]);
   useEffect(() => {
     if (parentId || target.kind !== 'fqdn') return undefined;
     const controller = new AbortController();
@@ -77,7 +84,6 @@ export function TargetSubdomains({ target, config, session, canWrite, canStart }
         const result = await requestJson(config, session, path, { signal: controller.signal });
         if (controller.signal.aborted) return;
         setInventory(record(result));
-        setError('');
         const observed = new Set(rows(result.items).map((row) => text(row.latest_detection_run_id)));
         const remaining = pending.filter((id) => !observed.has(id));
         if (remaining.length && Date.now() < deadline) timer = window.setTimeout(() => void load(), 3000);
@@ -108,10 +114,19 @@ export function TargetSubdomains({ target, config, session, canWrite, canStart }
     const controller = new AbortController();
     mutation.current = controller;
     setBusy(true); setError(''); setMessage('');
+    setRunningAction(action); setProgress({ phase: 'preparing' }); setReview(null);
+    let currentPhase = 'preparing';
     try {
-      const result = await requestJson(config, session, `${path}/${action}`, {
-        method: 'POST', body: action === 'detect' ? { scope: 'unchecked' } : {}, signal: controller.signal,
-      });
+      const result = action === 'enumerate'
+        ? await requestDiscoveryStream(config, session, `${path}/${action}`, {
+          signal: controller.signal, onProgress: value => {
+            currentPhase = text(value.phase) || currentPhase;
+            setProgress(previous => ({ ...previous, ...value }));
+          },
+        })
+        : await requestJson(config, session, `${path}/${action}`, {
+          method: 'POST', body: { scope: 'unchecked' }, signal: controller.signal,
+        });
       if (controller.signal.aborted) return;
       if (action === 'enumerate') {
         setMessage(enumerateSummary(record(result), text(result.source_label) || sourceLabel, text(target.value)));
@@ -127,12 +142,22 @@ export function TargetSubdomains({ target, config, session, canWrite, canStart }
       const code = text(payload.error);
       const label = SOURCE_LABELS[text(payload.source)] || sourceLabel;
       const known = action === 'enumerate' ? subdomainSourceErrorMessage(code, label) : '';
-      setError(known || apiErrorMessage(failure, 'The subdomain action could not be completed.'));
+      setError(action === 'enumerate' && currentPhase === 'declaring'
+        ? 'Discovery could not finish. Hostnames already declared remain available. Refresh to read the latest inventory.'
+        : known || apiErrorMessage(failure, 'The subdomain action could not be completed.'));
       setReview(null);
+      if (currentPhase === 'declaring') setRefresh(value => value + 1);
       if (code === 'subdomain_source_not_configured') setRefresh((value) => value + 1);
     } finally {
-      if (!controller.signal.aborted) setBusy(false);
+      if (!controller.signal.aborted) { setBusy(false); setRunningAction(null); }
     }
+  }
+
+  function stopDiscovery() {
+    mutation.current?.abort();
+    setBusy(false); setRunningAction(null); setReview(null);
+    setMessage('Discovery stopped. Hostnames already declared remain available.');
+    setRefresh(value => value + 1);
   }
 
   const columns: TableColumn<DataItem>[] = [
@@ -156,13 +181,19 @@ export function TargetSubdomains({ target, config, session, canWrite, canStart }
   return <section className="td-section" aria-labelledby="subdomain-title">
     <header className="td-section-head"><div><h2 id="subdomain-title">Subdomains</h2><p>Review declared and imported hosts under this domain. Provider fingerprints do not establish WAF effectiveness.</p></div>
       <div className="td-actions">
-        <Button variant="secondary" disabled={busy} onClick={() => setRefresh((value) => value + 1)}><RefreshCw size={16} aria-hidden="true" />Refresh</Button>
+        <Button variant="secondary" disabled={busy} onClick={() => { setError(''); setRefresh((value) => value + 1); }}><RefreshCw size={16} aria-hidden="true" />Refresh</Button>
         {canWrite ? <Button variant="secondary" disabled={!inventory || !sourceConfigured || busy} onClick={() => setReview('enumerate')}>Discover and add subdomains</Button> : null}
         {canStart ? <Button disabled={!canDetect || busy || pending.length > 0} onClick={() => setReview('detect')}>Detect unchecked hosts</Button> : null}
       </div>
     </header>
     {error ? <p role="alert" className="text-danger">{error}</p> : null}
     {message ? <p role="status">{message}</p> : null}
+    {busy && runningAction === 'enumerate' ? <div>
+      <p role="status">{progress.phase === 'declaring'
+        ? `Declaring hostnames: ${Number(progress.completed) || 0} of ${Number(progress.total) || 0}.`
+        : `Discovering hostnames under ${text(target.value)}. ${Number(progress.records) > 0 ? `${Number(progress.records)} source records read.` : 'Waiting for source results.'}`}</p>
+      <Button variant="secondary" onClick={stopDiscovery}>Stop discovery</Button>
+    </div> : null}
     {pending.length ? <p role="status">Following {pending.length} queued observations. Detection results will appear per host.</p> : null}
     {inventory && !sourceConfigured ? <p role="note">{NOT_CONFIGURED[text(source.reason)] ?? NOT_CONFIGURED_FALLBACK} Declared subdomains and existing observations are still available.</p> : null}
     {inventory && sourceConfigured && sourceLabel ? <p className="td-muted">Discovery source: {sourceLabel}. Only hostnames strictly under {text(target.value)} are imported.</p> : null}
@@ -180,8 +211,7 @@ export function TargetSubdomains({ target, config, session, canWrite, canStart }
       title={review === 'enumerate' ? 'Discover and declare subdomains?' : 'Start subdomain provider detection?'}
       confirmLabel={review === 'enumerate' ? 'Discover and add' : 'Start bounded detection'}
       description={review === 'enumerate'
-        ? <><p>{sourceLabel || 'The configured passive source'} will return a bounded list of hostnames strictly under {text(target.value)}. No traffic is sent to those hosts by this lookup. Newly found hostnames become declared child targets. Initial WAF/CDN detection is queued automatically and runs after ownership and safety requirements are met. Each child opens the full target workspace for further checks.</p>
-          {busy ? <p role="status">Querying {sourceLabel || 'the passive source'} for hostnames under {text(target.value)}. This can take up to a minute.</p> : null}</>
+        ? <p>{sourceLabel || 'The configured passive source'} will look for hostnames strictly under {text(target.value)}. No traffic is sent to those hosts by this lookup. Newly found hostnames become declared child targets. Initial WAF/CDN detection is queued automatically and runs after ownership and safety requirements are met. You can follow progress and stop discovery from this page.</p>
         : <p>Queues a bounded batch of unchecked child targets. Each fingerprint observation uses its own ownership, signed-worker, rate and safety checks. Provider detection does not test enforcement or capacity.</p>}
     />
   </section>;

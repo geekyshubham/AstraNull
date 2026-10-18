@@ -106,7 +106,7 @@ function pageUrl(domain, cursor) {
   return url;
 }
 
-async function fetchPage(url, { apiKey, fetchFn, timeoutMs }) {
+async function fetchPage(url, { apiKey, fetchFn, timeoutMs, signal }) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -114,7 +114,7 @@ async function fetchPage(url, { apiKey, fetchFn, timeoutMs }) {
       method: 'GET',
       headers: { accept: 'application/json', 'x-apikey': apiKey },
       redirect: 'manual',
-      signal: controller.signal,
+      signal: signal ? AbortSignal.any([controller.signal, signal]) : controller.signal,
     });
     if (response.status !== 200) return response;
     try {
@@ -125,6 +125,7 @@ async function fetchPage(url, { apiKey, fetchFn, timeoutMs }) {
       throw new SubdomainSourceError('subdomain_source_unreachable', 'VirusTotal did not respond within the time limit.');
     }
   } catch (error) {
+    if (signal?.aborted) throw new SubdomainSourceError('subdomain_discovery_cancelled', 'Subdomain discovery was stopped.', 499);
     if (error instanceof SubdomainSourceError) throw error;
     throw new SubdomainSourceError('subdomain_source_unreachable', 'VirusTotal did not respond within the time limit.');
   } finally {
@@ -167,12 +168,13 @@ export async function fetchVirusTotalSubdomains(parentHostname, options = {}) {
   const maxPages = Math.ceil(maxResults / VIRUSTOTAL_PAGE_SIZE);
 
   while (true) {
+    if (options.signal?.aborted) throw new SubdomainSourceError('subdomain_discovery_cancelled', 'Subdomain discovery was stopped.', 499);
     if (pages > 0 && (options.now ?? Date.now)() >= deadline) {
       stopReason = 'deadline';
       break;
     }
     const response = await fetchPage(pageUrl(parent, cursor), { apiKey, fetchFn,
-      timeoutMs: Math.min(timeoutMs, Math.max(1, deadline - (options.now ?? Date.now)())) });
+      timeoutMs: Math.min(timeoutMs, Math.max(1, deadline - (options.now ?? Date.now)())), signal: options.signal });
     if (response.status !== 200) {
       const error = sourceErrorForStatus(response.status);
       if (!error) break;
@@ -195,6 +197,7 @@ export async function fetchVirusTotalSubdomains(parentHostname, options = {}) {
       if (hostname) found.add(hostname);
       if (found.size >= maxResults) break;
     }
+    options.onProgress?.({ phase: 'fetching', pages, records: found.size, reported_total: reported });
     if (found.size >= maxResults) {
       stopReason = 'max_results';
       break;
@@ -224,8 +227,9 @@ export async function fetchVirusTotalUiSubdomains(parentHostname, options = {}) 
     domain: lower(parentHostname).replace(/\.$/, ''),
     maxResults,
     proxyUrl: options.proxyUrl,
-  }, { pythonExecutable: options.pythonExecutable });
+  }, { pythonExecutable: options.pythonExecutable, signal: options.signal, onProgress: options.onProgress });
   const errors = {
+    subdomain_discovery_cancelled: ['Subdomain discovery was stopped.', 499],
     subdomain_source_not_configured: ['VirusTotal UI transport or proxy is not configured for this deployment.', 503],
     subdomain_source_auth_failed: ['VirusTotal rejected the UI request.', 502],
     subdomain_source_rate_limited: ['VirusTotal rate limit reached. Try again in a minute.', 429],
@@ -348,7 +352,7 @@ export async function fetchCertificateTransparencySubdomains(parentHostname, opt
       method: 'GET',
       headers: { accept: 'application/json' },
       redirect: 'manual',
-      signal: controller.signal,
+      signal: options.signal ? AbortSignal.any([controller.signal, options.signal]) : controller.signal,
     });
     if (response.status !== 200) {
       await response.body?.cancel?.().catch(() => {});
@@ -359,6 +363,7 @@ export async function fetchCertificateTransparencySubdomains(parentHostname, opt
     }
     body = await readCappedText(response, maxBytes);
   } catch (error) {
+    if (options.signal?.aborted) throw new SubdomainSourceError('subdomain_discovery_cancelled', 'Subdomain discovery was stopped.', 499);
     if (error instanceof SubdomainSourceError) throw error;
     throw new SubdomainSourceError('subdomain_source_unreachable', `${label} did not respond within ${Math.round(timeoutMs / 1000)} seconds.`);
   } finally {
@@ -400,7 +405,8 @@ export async function fetchCertificateTransparencySubdomains(parentHostname, opt
 }
 
 /** Enumerate through the deployment's resolved source; never calls a source that is not configured. */
-export async function fetchSubdomainsFromSource(parentHostname, config = {}, { fetchFn, runUiFn } = {}) {
+export async function fetchSubdomainsFromSource(parentHostname, config = {}, { fetchFn, runUiFn, signal, onProgress } = {}) {
+  if (signal?.aborted) throw new SubdomainSourceError('subdomain_discovery_cancelled', 'Subdomain discovery was stopped.', 499);
   if (config?.configured !== true) throw subdomainSourceNotConfiguredError(config?.reason);
   if (config.source === SUBDOMAIN_SOURCE_VIRUSTOTAL_UI) {
     return fetchVirusTotalUiSubdomains(parentHostname, {
@@ -408,15 +414,19 @@ export async function fetchSubdomainsFromSource(parentHostname, config = {}, { f
       proxyUrl: config.proxyUrl,
       pythonExecutable: config.pythonExecutable,
       runUiFn,
+      signal,
+      onProgress,
     });
   }
   if (config.source === SUBDOMAIN_SOURCE_CT) {
-    return fetchCertificateTransparencySubdomains(parentHostname, { fetchFn, maxResults: config.maxResults });
+    return fetchCertificateTransparencySubdomains(parentHostname, { fetchFn, maxResults: config.maxResults, signal });
   }
   return fetchVirusTotalSubdomains(parentHostname, {
     apiKey: config.virusTotalApiKey,
     maxResults: config.maxResults,
     fetchFn,
+    signal,
+    onProgress,
   });
 }
 

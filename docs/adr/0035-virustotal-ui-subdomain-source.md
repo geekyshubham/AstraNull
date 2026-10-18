@@ -38,9 +38,10 @@ It fetches every offset page through the finite `meta.count`, with no 200/1,000-
 no 45-second overall deadline. The old `ASTRANULL_SUBDOMAIN_MAX_RESULTS` setting applies only to
 the optional official API / Certificate Transparency sources; even existing deployments set to
 200 read all UI-source pages. Only eight requests/futures are in flight at a time, rather than
-allocating a future for every page. The helper retains the script's 60-second request timeout,
-five bounded attempts, exponential backoff starting at 15 seconds, and final sequential retry
-of failed pages. Responses remain capped at 2 MiB per page; redirects are never followed.
+allocating a future for every page. The standalone helper retains the supplied script's defaults. The web adapter uses 10-second
+per-request timeouts, three attempts and backoff starting at one second, with a final sequential
+recovery pass for transient failures. A CAPTCHA-required response stops immediately; authentication
+failures on later pages stop scheduling more pages and preserve collected results as incomplete. Responses remain capped at 2 MiB per page; redirects are never followed.
 
 The Node transport streams the helper output without the former 47-second process kill or
 2 MiB aggregate output limit. Imported inventory reads all keyset pages instead of stopping
@@ -70,3 +71,29 @@ across two pages and imported/displayed all 53 valid strict descendants (the ape
 The sets matched exactly and `truncated` was false. Automated API coverage also imports and
 lists 2,401 hosts, proving both former caps are gone; Python coverage checks full pagination,
 parallelism, sequential page recovery, and requests continuing beyond 45 seconds.
+
+
+## Discovery progress and cancellation (2026-10-18)
+
+The portal opts into `Accept: text/event-stream` on the existing reviewed POST. It closes the
+confirmation dialog immediately and shows source-record / declaration counts with Stop discovery.
+The response sends `data: {"type":"progress","progress":{...}}` frames, followed by exactly one
+`result` or `error` frame with `payload` while the client stays connected. Permission/body failures before streaming retain ordinary
+HTTP JSON errors; source/target errors after headers carry their status in the error payload.
+Legacy JSON callers retain the existing response contract.
+The SSE content type follows [Caddy's immediate-flush behavior](https://caddyserver.com/docs/caddyfile/directives/reverse_proxy#streaming)
+so progress can reach the browser as it is written.
+
+Disconnect, Stop discovery and route unmount abort the helper and stop subsequent declarations.
+Already committed hosts remain, with a cancelled partial enumeration audit; there is no rollback
+of child targets or their independently queued initial observations. Source/helper and client
+stream inactivity have 45-second watchdogs, refreshed by real progress. These are idle limits,
+not a total runtime or page-count cap. A connection that stalls during declaration reports that
+already declared hosts remain available. The portal no longer claims a bounded result list or
+completion within a minute, and operational source/proxy details remain internal.
+
+Regression coverage checks terminal CAPTCHA rejection, child-process termination, stalled helper
+and stream handling, immediate progress before source completion, cancellation during declaration,
+and desktop/mobile import. A live request for the reported domain now ends promptly with the
+source rejection instead of waiting through minutes of retries; successful inventory cannot be
+claimed while the upstream requires human validation.

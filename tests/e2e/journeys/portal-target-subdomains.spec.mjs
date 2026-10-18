@@ -6,12 +6,18 @@ import { PORTAL_BASELINE_IDS } from '../../fixtures/portal-baseline/seed.mjs';
 
 let sourceCalls = 0;
 let sourceError = '';
+let holdDiscovery = false;
 test.beforeEach(async () => {
   sourceError = '';
+  holdDiscovery = false;
   await startPortalPlaywrightServer({
     env: { ASTRANULL_VIRUSTOTAL_API_KEY: '', ASTRANULL_SUBDOMAIN_SOURCE: 'virustotal_ui' },
-    services: { subdomainUiRun: async ({ domain }) => {
+    services: { subdomainUiRun: async ({ domain }, { signal, onProgress }) => {
       sourceCalls += 1;
+      if (holdDiscovery) {
+        onProgress({ phase: 'fetching', pages: 1, records: 40 });
+        return new Promise(resolve => signal.addEventListener('abort', () => resolve({ error: 'subdomain_discovery_cancelled' }), { once: true }));
+      }
       return sourceError ? { error: sourceError }
         : { hostnames: [`api.${domain}`], pages: 1, reported_total: 1, truncated: false, stop_reason: null };
     } },
@@ -80,3 +86,32 @@ test('source failures show a neutral message without proxy, quota or credential 
   await expect(panel).not.toContainText(/rate limit|quota|proxy|API key|ASTRANULL_/i);
   await expect(page.getByRole('dialog')).toHaveCount(0);
 });
+
+for (const outcome of ['stop', 'idle']) {
+  test(`discovery shows progress, closes its dialog and handles ${outcome}`, async ({ page }) => {
+    holdDiscovery = true;
+    await page.setViewportSize({ width: outcome === 'stop' ? 1440 : 375, height: 1000 });
+    if (outcome === 'idle') await page.clock.install();
+    await injectPortalDevHeadersSession(page, { mode: 'dev-headers', principal: 'customer',
+      tenant_id: PORTAL_BASELINE_IDS.tenantId, user_id: 'usr_admin', role: 'admin' });
+    await gotoPortalRoute(page, `target-detail?id=${PORTAL_BASELINE_IDS.targetId}&tab=subdomains`, getPortalPlaywrightBaseUrl());
+    await waitForPortalRouteSettled(page);
+    const panel = page.locator('#td-panel-subdomains');
+    await panel.getByRole('button', { name: 'Discover and add subdomains' }).click();
+    await expect(page.getByRole('dialog')).not.toContainText('bounded list');
+    await page.getByRole('dialog').getByRole('button', { name: 'Discover and add', exact: true }).click();
+    await expect(page.getByRole('dialog')).toHaveCount(0);
+    await expect(panel.getByRole('status')).toContainText('40 source records read');
+    await expect(panel).not.toContainText('up to a minute');
+    await page.screenshot({ path: `/tmp/astranull-discovery-progress-${outcome}.png`, fullPage: true });
+    if (outcome === 'stop') {
+      await panel.getByRole('button', { name: 'Stop discovery' }).click();
+      await expect(panel.getByRole('status')).toContainText('Discovery stopped');
+    } else {
+      await page.clock.fastForward(46_000);
+      await expect(panel.getByRole('alert')).toContainText('no hosts were added');
+    }
+    await expect(panel.getByRole('button', { name: 'Stop discovery' })).toHaveCount(0);
+    await expect(panel.getByRole('button', { name: 'Discover and add subdomains' })).toBeEnabled();
+  });
+}

@@ -3549,11 +3549,39 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
     if (!deps) return respondPostgresRouteNotWired(res);
     const targetId = decodeURIComponent(targetSubdomainsMatch[1]);
     const body = action === null ? null : await readJsonBody(req, runtimeConfig.maxJsonBodyBytes);
+    if (res.destroyed) return;
+    const controller = new AbortController();
+    const disconnect = () => { if (!res.writableEnded) controller.abort(); };
+    if (action === 'enumerate') res.once('close', disconnect);
+    if (action === 'enumerate' && req.headers.accept?.includes('text/event-stream')) {
+      res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache, no-transform' });
+      res.flushHeaders();
+      const send = (type, payload) => {
+        if (!res.destroyed) res.write(`data: ${JSON.stringify({ type, ...payload })}\n\n`);
+      };
+      send('progress', { progress: { phase: 'preparing' } });
+      try {
+        const result = await subdomains.enumerateTargetSubdomains(ctx, targetId, {
+          ...deps, signal: controller.signal, onProgress: (progress) => send('progress', { progress }),
+        });
+        if (result?.error || result?.notWired) send('error', { payload: result });
+        else send('result', { payload: result });
+      } catch (error) {
+        logError(`subdomain discovery failed: ${redactDatabaseUrlInMessage(error?.stack ?? error, env)}`);
+        send('error', { payload: { error: 'subdomain_source_failed', status: 502 } });
+      } finally {
+        res.off('close', disconnect);
+        if (!res.destroyed) res.end();
+      }
+      return;
+    }
     const result = action === null
       ? await subdomains.listTargetSubdomains(ctx, targetId, deps)
       : action === 'enumerate'
-        ? await subdomains.enumerateTargetSubdomains(ctx, targetId, deps)
+        ? await subdomains.enumerateTargetSubdomains(ctx, targetId, { ...deps, signal: controller.signal })
         : await subdomains.detectTargetSubdomains(ctx, targetId, body, deps);
+    res.off('close', disconnect);
+    if (res.destroyed) return;
     if (result?.notWired) return respondPostgresRouteNotWired(res);
     if (result?.error) return json(res, result.status ?? 400, result);
     return json(res, action === null ? 200 : 202, result);

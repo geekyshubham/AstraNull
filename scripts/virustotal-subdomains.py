@@ -7,6 +7,7 @@ import random
 import re
 import sys
 import time
+import threading
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from urllib.parse import urlencode, urlsplit
 
@@ -51,10 +52,11 @@ def page_url(domain, offset):
     })
 
 
-def fetch_page(domain, offset, proxy, deadline, get, now, sleep, retries, base_delay):
+def fetch_page(domain, offset, proxy, deadline, get, now, sleep, retries, base_delay,
+               request_timeout=60, progress=lambda event: None):
     last = "subdomain_source_unreachable"
     for attempt in range(retries):
-        remaining = deadline - now() if deadline is not None else 60
+        remaining = deadline - now() if deadline is not None else request_timeout
         if remaining <= 0:
             raise SourceError(last)
         chunks, size, too_large = [], 0, False
@@ -69,8 +71,9 @@ def fetch_page(domain, offset, proxy, deadline, get, now, sleep, retries, base_d
             return len(chunk)
 
         try:
+            progress({"phase": "fetching"})
             response = get(page_url(domain, offset), headers=build_headers(),
-                           impersonate="chrome", timeout=min(60, remaining),
+                           impersonate="chrome", timeout=min(request_timeout, remaining),
                            proxies={"http": proxy, "https": proxy},
                            allow_redirects=False, content_callback=receive)
         except Exception:
@@ -91,6 +94,14 @@ def fetch_page(domain, offset, proxy, deadline, get, now, sleep, retries, base_d
                     raise SourceError("subdomain_source_failed") from None
             if status == 404:
                 return {"data": []}
+            if status in (403, 429):
+                try:
+                    error = json.loads(b"".join(chunks)).get("error", {})
+                except (ValueError, AttributeError):
+                    error = {}
+                # A challenge needs human validation; repeating it cannot complete this lookup.
+                if isinstance(error, dict) and error.get("code") == "RecaptchaRequiredError":
+                    raise SourceError("subdomain_source_auth_failed")
             last = ("subdomain_source_rate_limited" if status == 429 else
                     "subdomain_source_auth_failed" if status in (401, 403) else
                     "subdomain_source_failed")
@@ -105,7 +116,7 @@ def fetch_page(domain, offset, proxy, deadline, get, now, sleep, retries, base_d
     raise SourceError(last)
 
 
-def enumerate_subdomains(config, get, now=time.monotonic, sleep=time.sleep):
+def enumerate_subdomains(config, get, now=time.monotonic, sleep=time.sleep, progress=lambda event: None):
     domain = str(config.get("domain", "")).lower().rstrip(".")
     if not re.fullmatch(r"(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9-]{2,63}", domain):
         raise SourceError("subdomain_source_failed")
@@ -122,9 +133,11 @@ def enumerate_subdomains(config, get, now=time.monotonic, sleep=time.sleep):
     workers = max(1, min(8, int(config.get("workers", 8))))
     retries = max(1, min(5, int(config.get("retries", 5))))
     base_delay = max(0, float(config.get("baseDelay", 15)))
+    request_timeout = max(0.001, min(60, float(config.get("requestTimeoutMs", 60000)) / 1000))
 
     def page(offset):
-        return fetch_page(domain, offset, proxy, deadline, get, now, sleep, retries, base_delay)
+        return fetch_page(domain, offset, proxy, deadline, get, now, sleep, retries, base_delay,
+                          request_timeout, progress)
 
     def ids(payload):
         return [item["id"].rstrip(".") for item in payload["data"]
@@ -137,6 +150,7 @@ def enumerate_subdomains(config, get, now=time.monotonic, sleep=time.sleep):
     if type(reported) is not int or reported < 0:
         reported = None
     pages, stop_reason = 1, None
+    progress({"phase": "fetching", "pages": pages, "records": len(found), "reported_total": reported})
     offsets = range(0)
     if len(first["data"]) == PAGE_SIZE:
         if reported is None:
@@ -152,6 +166,7 @@ def enumerate_subdomains(config, get, now=time.monotonic, sleep=time.sleep):
             pending = {}
             remaining_offsets = iter(offsets)
             failed = []
+            source_blocked = False
 
             def submit_next():
                 offset = next(remaining_offsets, None)
@@ -162,6 +177,7 @@ def enumerate_subdomains(config, get, now=time.monotonic, sleep=time.sleep):
                 nonlocal pages, stop_reason
                 found.update(ids(payload))
                 pages += 1
+                progress({"phase": "fetching", "pages": pages, "records": len(found), "reported_total": reported})
                 if len(payload["data"]) < min(PAGE_SIZE, reported - offset):
                     stop_reason = stop_reason or "incomplete_source"
 
@@ -173,11 +189,18 @@ def enumerate_subdomains(config, get, now=time.monotonic, sleep=time.sleep):
                     offset = pending.pop(future)
                     try:
                         collect(future.result(), offset)
-                    except SourceError:
-                        failed.append(offset)
+                    except SourceError as error:
+                        if error.code == "subdomain_source_auth_failed":
+                            source_blocked = True
+                            remaining_offsets = iter(())
+                            stop_reason = "auth_failed"
+                        else:
+                            failed.append(offset)
                     submit_next()
             # Same final sequential recovery pass as the supplied script.
             for offset in sorted(failed):
+                if source_blocked:
+                    break
                 if deadline is None:
                     sleep(1)
                 try:
@@ -197,7 +220,14 @@ def main():
             from curl_cffi import requests
         except ImportError:
             raise SourceError("subdomain_source_not_configured") from None
-        result = enumerate_subdomains(config, requests.get)
+        lock = threading.Lock()
+
+        def progress(event):
+            if config.get("progress"):
+                with lock:
+                    print(json.dumps({"type": "progress", "progress": event}), flush=True)
+
+        result = enumerate_subdomains(config, requests.get, progress=progress)
     except SourceError as error:
         result = {"error": error.code}
     except Exception:

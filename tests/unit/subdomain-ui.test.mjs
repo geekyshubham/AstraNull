@@ -1,9 +1,13 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
+import { mkdtempSync, writeFileSync, unlinkSync, rmdirSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { test } from 'node:test';
 import { fetchSubdomainsFromSource, fetchVirusTotalUiSubdomains } from '../../src/lib/subdomainEnumeration.mjs';
 import { runVirusTotalUiSubdomains } from '../../src/lib/virusTotalUiSubdomains.mjs';
 import { loadRuntimeConfig } from '../../src/config.mjs';
+import { enumerateTargetSubdomains } from '../../src/services/subdomains.mjs';
 
 test('VirusTotal UI transport pagination, proxy, retries, partial results and limits (Python)', () => {
   execFileSync('python3', ['tests/unit/virustotal_subdomains_test.py'], {
@@ -65,4 +69,52 @@ test('UI source retains all normalized hosts beyond the old 1000 result ceiling 
   } });
   assert.equal(result.hostnames.length, 2401);
   assert.equal(result.truncated, false);
+});
+
+test('helper inactivity is bounded and cancellation terminates the child process', { timeout: 5000 }, async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'astranull-subdomain-child-'));
+  const executable = join(directory, 'python');
+  try {
+    writeFileSync(executable, `#!/usr/bin/env node
+process.stdin.resume();
+setInterval(() => {}, 10000);
+`, { mode: 0o700 });
+    const idle = await runVirusTotalUiSubdomains({ domain: 'example.com' }, { pythonExecutable: executable, idleTimeoutMs: 500 });
+    assert.equal(idle.error, 'subdomain_source_unreachable');
+    writeFileSync(executable, `#!/usr/bin/env node
+process.stdin.resume();
+console.log(JSON.stringify({type:'progress',progress:{phase:'fetching',pid:process.pid}}));
+setInterval(() => {}, 10000);
+`, { mode: 0o700 });
+    const controller = new AbortController();
+    let pid;
+    const cancelled = await runVirusTotalUiSubdomains({ domain: 'example.com' }, {
+      pythonExecutable: executable, signal: controller.signal,
+      onProgress: progress => { pid = progress.pid; controller.abort(); },
+    });
+    assert.equal(cancelled.error, 'subdomain_discovery_cancelled');
+    assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' });
+  } finally { unlinkSync(executable); rmdirSync(directory); }
+});
+
+test('cancelling during declaration preserves committed hosts and audits the partial outcome', async () => {
+  const controller = new AbortController();
+  const parent = { id: 'parent', tenant_id: 'tenant', target_group_id: 'group', kind: 'fqdn', value: 'example.com' };
+  let created = 0; let audit;
+  const result = await enumerateTargetSubdomains({ tenantId: 'tenant', userId: 'user', role: 'admin' }, parent.id, {
+    readTarget: async () => parent,
+    readCohort: async () => ({ items: [parent] }),
+    config: { configured: true, source: 'virustotal_ui' },
+    runUiFn: async () => ({ hostnames: ['a.example.com', 'b.example.com', 'c.example.com'], pages: 1,
+      reported_total: 3, truncated: false, stop_reason: null }),
+    createTarget: async () => { created += 1; controller.abort(); return { id: 'child', target_group_id: 'group' }; },
+    recordAudit: async entry => { audit = entry; }, signal: controller.signal,
+  });
+  assert.equal(created, 1);
+  assert.equal(result.created.length, 1);
+  assert.equal(result.already_declared, 0);
+  assert.equal(result.truncated, true);
+  assert.equal(result.stop_reason, 'cancelled');
+  assert.equal(audit.metadata.cancelled, true);
+  assert.equal(audit.metadata.created_count, 1);
 });

@@ -70,6 +70,50 @@ class EnumerationTests(unittest.TestCase):
         self.assertEqual(sleeps, [1, 2])
         self.assertEqual(len(set(calls)), 3)
 
+    def test_captcha_challenge_is_terminal_without_retries_or_sleeps(self):
+        calls, sleeps = [], []
+
+        def get(url, **kwargs):
+            calls.append(url)
+            return response(429, {"error": {"code": "RecaptchaRequiredError", "message": "challenge"}}, kwargs)
+
+        with self.assertRaises(vt.SourceError) as raised:
+            vt.enumerate_subdomains({"domain": "redwave.checkred.net"}, get, sleep=sleeps.append)
+        self.assertEqual(raised.exception.code, "subdomain_source_auth_failed")
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(sleeps, [])
+
+    def test_product_per_page_timeouts_and_progress_do_not_truncate_full_fetch(self):
+        events, timeouts = [], []
+
+        def get(url, **kwargs):
+            timeouts.append(kwargs["timeout"])
+            offset = offset_of(url)
+            return response(200, {"data": [{"id": f"h{i}.example.com"} for i in range(offset, offset + 40)],
+                                  "meta": {"count": 80}}, kwargs)
+
+        result = vt.enumerate_subdomains({"domain": "example.com", "requestTimeoutMs": 10000}, get, progress=events.append)
+        self.assertEqual(timeouts, [10, 10])
+        self.assertEqual(result["pages"], 2)
+        self.assertTrue(any(e.get("records") == 80 for e in events))
+        self.assertFalse(result["truncated"])
+
+    def test_challenge_on_later_page_stops_scheduling_and_preserves_collected_records(self):
+        calls = []
+
+        def get(url, **kwargs):
+            offset = offset_of(url)
+            calls.append(offset)
+            if offset:
+                return response(429, {"error": {"code": "RecaptchaRequiredError"}}, kwargs)
+            return response(200, {"data": [{"id": f"h{i}.example.com"} for i in range(40)], "meta": {"count": 400}}, kwargs)
+
+        result = vt.enumerate_subdomains({"domain": "example.com", "workers": 1}, get)
+        self.assertEqual(calls, [0, 40])
+        self.assertEqual(len(result["hostnames"]), 40)
+        self.assertEqual(result["stop_reason"], "auth_failed")
+        self.assertTrue(result["truncated"])
+
     def test_partial_failure_preserves_successful_pages(self):
         def get(url, **kwargs):
             if offset_of(url):

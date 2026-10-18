@@ -150,7 +150,10 @@ export async function enumerateTargetSubdomains(ctx, parentTargetId, deps) {
 
   let discovered;
   try {
-    discovered = await fetchSubdomainsFromSource(parentHost, deps.config, { fetchFn: deps.fetchFn, runUiFn: deps.runUiFn });
+    deps.onProgress?.({ phase: 'fetching' });
+    discovered = await fetchSubdomainsFromSource(parentHost, deps.config, {
+      fetchFn: deps.fetchFn, runUiFn: deps.runUiFn, signal: deps.signal, onProgress: deps.onProgress,
+    });
   } catch (error) {
     if (error instanceof SubdomainSourceError) {
       return fail(error.code, error.status, { message: error.message, source: deps.config?.source ?? null });
@@ -162,14 +165,19 @@ export async function enumerateTargetSubdomains(ctx, parentTargetId, deps) {
   const tag = subdomainParentTag(parent.id);
   const created = [];
   const failed = [];
+  let processed = 0;
+  deps.onProgress?.({ phase: 'declaring', completed: processed, total: discovered.hostnames.length });
   for (const hostname of discovered.hostnames) {
-    if (existing.has(hostname)) continue;
+    if (deps.signal?.aborted) break;
+    if (existing.has(hostname)) { processed += 1; continue; }
     const result = await deps.createTarget(ctx, {
       kind: 'fqdn',
       value: hostname,
       target_group_id: parent.target_group_id,
       tags: [tag],
     });
+    processed += 1;
+    deps.onProgress?.({ phase: 'declaring', completed: processed, total: discovered.hostnames.length });
     if (result?.error === 'target_exists') continue;
     if (!result || result.error) {
       failed.push({ hostname, reason: result?.error ?? 'target_create_failed' });
@@ -180,6 +188,9 @@ export async function enumerateTargetSubdomains(ctx, parentTargetId, deps) {
   }
 
   const detection = { queued: [], skipped: [], deferred: created.length };
+  const cancelled = deps.signal?.aborted === true;
+  const truncated = discovered.truncated || cancelled;
+  const stopReason = cancelled ? 'cancelled' : discovered.stop_reason;
 
   await deps.recordAudit({
     tenant_id: ctx.tenantId,
@@ -196,8 +207,9 @@ export async function enumerateTargetSubdomains(ctx, parentTargetId, deps) {
       created_target_ids: created.map((row) => row.target_id).slice(0, 200),
       failed_count: failed.length,
       detection_queued_count: detection.queued.length,
-      truncated: discovered.truncated,
-      stop_reason: discovered.stop_reason,
+      truncated,
+      stop_reason: stopReason,
+      cancelled,
     },
   });
 
@@ -207,9 +219,9 @@ export async function enumerateTargetSubdomains(ctx, parentTargetId, deps) {
     source_label: SUBDOMAIN_SOURCE_LABELS[discovered.source] ?? null,
     found: discovered.hostnames.length,
     reported_total: discovered.reported_total,
-    truncated: discovered.truncated,
-    stop_reason: discovered.stop_reason,
-    already_declared: discovered.hostnames.length - created.length - failed.length,
+    truncated,
+    stop_reason: stopReason,
+    already_declared: processed - created.length - failed.length,
     created,
     failed,
     detection,

@@ -12,10 +12,78 @@ before(async () => {
   server = createServer({
     env: { NODE_ENV: 'test', ASTRANULL_AUTH_MODE: 'dev-headers', ASTRANULL_WAF_POSTURE_ENABLED: '1',
       ASTRANULL_SUBDOMAIN_PROXY_URL: 'http://user:private-credential@proxy:10000' },
-    services: { subdomainUiRun: async (input) => { sourceCalls.push(input); return uiResult(input.domain); } },
+    services: { subdomainUiRun: async (input, options) => { sourceCalls.push(input); return uiResult(input.domain, options); } },
   });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   baseUrl = `http://127.0.0.1:${server.address().port}`;
+});
+
+test('stream starts before source completion and reports declaration progress and final result', async () => {
+  let release;
+  let started;
+  const sourceStarted = new Promise(resolve => { started = resolve; });
+  uiResult = (domain, options) => {
+    options.onProgress({ phase: 'fetching', pages: 1, records: 40 });
+    started();
+    return new Promise(resolve => { release = () => resolve({ hostnames: [`stream.${domain}`], pages: 1,
+      reported_total: 1, truncated: false, stop_reason: null }); });
+  };
+  const response = await fetch(`${baseUrl}/v1/targets/tgt_1/subdomains/enumerate`, {
+    method: 'POST', headers: { ...demoHeaders('admin'), accept: 'text/event-stream', 'content-type': 'application/json' }, body: '{}',
+  });
+  assert.equal(response.status, 200);
+  assert.match(response.headers.get('content-type'), /text\/event-stream/);
+  const reader = response.body.getReader();
+  const first = await reader.read();
+  let content = new TextDecoder().decode(first.value);
+  assert.match(content, /preparing/);
+  await sourceStarted;
+  release();
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    content += new TextDecoder().decode(value);
+  }
+  reader.releaseLock();
+  const events = content.trim().split('\n\n').map(frame => JSON.parse(frame.slice(6)));
+  assert.ok(events.some(event => event.progress?.records === 40));
+  assert.ok(events.some(event => event.progress?.phase === 'declaring'));
+  const result = events.find(event => event.type === 'result');
+  assert.equal(result.payload.created.length, 1);
+});
+
+test('disconnecting a discovery stream cancels the source and creates no child targets', { timeout: 3000 }, async () => {
+  let started; let aborted;
+  const sourceStarted = new Promise(resolve => { started = resolve; });
+  const sourceAborted = new Promise(resolve => { aborted = resolve; });
+  uiResult = (_domain, options) => new Promise(resolve => {
+    options.signal.addEventListener('abort', () => {
+      aborted(); resolve({ error: 'subdomain_discovery_cancelled' });
+    }, { once: true });
+    started();
+  });
+  const before = getStore().targets.length;
+  const controller = new AbortController();
+  const response = await fetch(`${baseUrl}/v1/targets/tgt_1/subdomains/enumerate`, {
+    method: 'POST', headers: { ...demoHeaders('admin'), accept: 'text/event-stream', 'content-type': 'application/json' },
+    body: '{}', signal: controller.signal,
+  });
+  await sourceStarted;
+  controller.abort();
+  await sourceAborted;
+  await response.body.cancel().catch(() => {});
+  assert.equal(getStore().targets.length, before);
+});
+
+test('a rejected stream ends with an error event instead of a success or an endless connection', async () => {
+  uiResult = () => ({ error: 'subdomain_source_auth_failed' });
+  const response = await fetch(`${baseUrl}/v1/targets/tgt_1/subdomains/enumerate`, {
+    method: 'POST', headers: { ...demoHeaders('admin'), accept: 'text/event-stream', 'content-type': 'application/json' }, body: '{}',
+  });
+  const content = await response.text();
+  assert.match(content, /"type":"error"/);
+  assert.match(content, /subdomain_source_auth_failed/);
+  assert.doesNotMatch(content, /"type":"result"/);
 });
 after(async () => closeServer(server));
 beforeEach(() => {
