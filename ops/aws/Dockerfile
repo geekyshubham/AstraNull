@@ -16,6 +16,8 @@ COPY scripts/requirements-subdomains.txt /tmp/requirements-subdomains.txt
 RUN apk add --no-cache python3 py3-pip libstdc++ \
   && python3 -m venv /opt/astranull-subdomains \
   && /opt/astranull-subdomains/bin/pip install --no-cache-dir -r /tmp/requirements-subdomains.txt \
+  && /opt/astranull-subdomains/bin/pip uninstall --yes pip \
+  && apk del py3-pip \
   && rm /tmp/requirements-subdomains.txt
 # npm is only needed to install; it is removed so its bundled dependencies never ship
 # in the runtime image (nothing at runtime invokes npm/npx/yarn).

@@ -28,6 +28,9 @@ python3 -m venv .data/subdomains-venv
 npm run dev:api
 ```
 
+Control-plane images remove the venv and system pip installers after installing curl-cffi.
+This removes their vulnerable vendored packaging dependencies without changing the runtime transport.
+
 ## Bounds and errors
 
 Amended 2026-10-18: the default UI source follows the supplied script's full-fetch behavior.
