@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
 import { requestJson } from '../lib/api';
 import { familyCoverageBuckets, inventoryUnits } from '../lib/domain-checks.mjs';
+import { computeSubdomainGrouping } from '../lib/subdomain-grouping';
 import { useOpenInspector } from '../components/evidence/use-inspector';
 import {
   Activity,
@@ -574,9 +575,15 @@ export function DashboardPage({
   }, [sampleComplete, rowTotals]);
   const countsLoading = openOverview.total === null && openOverview.state === 'loading';
   const countsUnavailable = openOverview.total === null && openOverview.state === 'error';
-  const units = inventoryUnits(data.targets);
+  // Subdomains are grouped under their parent domain, so the scope counts below report
+  // only top-level domains rather than every discovered subdomain (display-only).
+  const subdomainGrouping = computeSubdomainGrouping(data.targets);
+  const isTopLevelTarget = (target: DataItem) => !subdomainGrouping.hiddenIds.has(getString(target, ['id'], ''));
+  const isTopLevelRow = (row: { id: string }) => !subdomainGrouping.hiddenIds.has(row.id);
+  const topLevelTargetList = data.targets.filter(isTopLevelTarget);
+  const units = inventoryUnits(topLevelTargetList);
   const recentRuns = resolveRecentRuns(data, 6);
-  const postureRows = buildTargetPostureRows(data, 6, { openFindings: sampleRows, openCounts });
+  const postureRows = buildTargetPostureRows(data, undefined, { openFindings: sampleRows, openCounts }).filter(isTopLevelRow).slice(0, 6);
   const findingSteps = buildNextSteps(data, openOverview.priority, countsUnavailable || (openOverview.state === 'error' && openOverview.priority.length === 0));
   const severity = openOverview.severity && openOverview.total !== null
     ? { critical: openOverview.severity.critical, high: openOverview.severity.high, other: openOverview.severity.medium + openOverview.severity.low + openOverview.severity.unrecorded, total: openOverview.total }
@@ -590,13 +597,13 @@ export function DashboardPage({
   const serverHosts = finiteCount(serverUnits?.normalized_hosts);
   const loadedIsWholeScope = serverRecords === null || data.targets.length === serverRecords;
   const serverVerified = useVerifiedTargetTotal(config, session, !targetsUnavailable && !loadedIsWholeScope, coverageReload);
-  const declaredTargets = serverRecords ?? data.targets.length;
-  const distinctHosts = serverHosts ?? units.distinctHosts;
-  const verifiedTargets: number | null = loadedIsWholeScope ? data.targets.filter(isTargetVerified).length : serverVerified;
+  const declaredTargets = loadedIsWholeScope ? topLevelTargetList.length : (serverRecords ?? data.targets.length);
+  const distinctHosts = loadedIsWholeScope ? units.distinctHosts : (serverHosts ?? units.distinctHosts);
+  const verifiedTargets: number | null = loadedIsWholeScope ? topLevelTargetList.filter(isTargetVerified).length : serverVerified;
   const verifiedShare = declaredTargets > 0 && verifiedTargets !== null ? Math.round((verifiedTargets / declaredTargets) * 100) : null;
 
   // Evidence coverage: declared targets with at least one evidence-backed verdict.
-  const allPostureRows = buildTargetPostureRows(data, undefined, { openFindings: sampleRows, openCounts });
+  const allPostureRows = buildTargetPostureRows(data, undefined, { openFindings: sampleRows, openCounts }).filter(isTopLevelRow);
   const targetsWithEvidence = new Set(
     allPostureRows.filter((row) => row.verdictStatus !== 'none').map((row) => row.id)
   ).size;

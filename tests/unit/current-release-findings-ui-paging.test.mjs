@@ -217,9 +217,9 @@ describe('target detail load errors: missing, denied and failed stay distinct', 
 describe('dashboard: authoritative declared scope and width-aware layout', () => {
   const dashboardCss = read('pages/dashboard-page.css');
 
-  it('counts declared targets and hostnames from the server units, not the loaded rows', () => {
+  it('counts top-level domains when the whole scope is loaded, else the server units (not subdomain-inflated loaded rows)', () => {
     assert.match(dashboard, /const serverRecords = finiteCount\(serverUnits\?\.target_records\);/);
-    assert.match(dashboard, /const declaredTargets = serverRecords \?\? data\.targets\.length;/);
+    assert.match(dashboard, /const declaredTargets = loadedIsWholeScope \? topLevelTargetList\.length : \(serverRecords \?\? data\.targets\.length\);/);
     assert.match(dashboard, /const loadedIsWholeScope = serverRecords === null \|\| data\.targets\.length === serverRecords;/);
     assert.match(dashboard, /`\/v1\/targets\?verification_state=\$\{state\}&unit=target&limit=1`/);
   });

@@ -20,6 +20,7 @@ import {
   isDemoAutoVerifyTenant,
 } from '../../lib/demoAutoVerify.mjs';
 import { csvImportRejected, validateTargetImportRows } from '../../lib/targetCsvImport.mjs';
+import { hostnameOf, isStrictSubdomain } from '../../lib/subdomainEnumeration.mjs';
 import {
   isCurrentProviderDnsOwnershipProof,
   isProviderVerifiedDnsEvidence,
@@ -1704,51 +1705,82 @@ export function createCoreCatalogRepository(pool, options = {}) {
         );
         if (!groupResult.rows[0]) return null;
         const targetResult = await client.query(
-          `SELECT id FROM targets
+          `SELECT id, value, normalized_value, kind FROM targets
            WHERE id = $1 AND tenant_id = $2 AND target_group_id = $3 AND deleted_at IS NULL
            FOR UPDATE`,
           [targetId, ctx.tenantId, groupId],
         );
         if (!targetResult.rows[0]) return null;
-        if (await hasActiveRunForTarget(client, ctx.tenantId, groupId, targetId)) {
-          return { error: 'target_active_run', status: 409 };
+
+        // Discovered subdomains are grouped under this domain in the console, so removing the
+        // parent removes them too: every fqdn in the same group strictly under the parent host.
+        const parentHost = hostnameOf(targetResult.rows[0]);
+        const candidates = parentHost
+          ? await client.query(
+              `SELECT id, value, normalized_value FROM targets
+               WHERE tenant_id = $1 AND target_group_id = $2 AND deleted_at IS NULL
+                 AND id <> $3 AND lower(kind) = 'fqdn'
+               FOR UPDATE`,
+              [ctx.tenantId, groupId, targetId],
+            )
+          : { rows: [] };
+        const childIds = candidates.rows
+          .filter((row) => isStrictSubdomain(hostnameOf(row), parentHost))
+          .map((row) => row.id);
+        const archiveIds = [targetId, ...childIds];
+        for (const id of archiveIds) {
+          if (await hasActiveRunForTarget(client, ctx.tenantId, groupId, id)) {
+            return { error: 'target_active_run', status: 409 };
+          }
         }
 
         const { rows } = await client.query(
           `UPDATE targets
            SET deleted_at = $4::timestamptz, deleted_by = $5
-           WHERE id = $1 AND tenant_id = $2 AND target_group_id = $3 AND deleted_at IS NULL
+           WHERE id = ANY($1::text[]) AND tenant_id = $2 AND target_group_id = $3 AND deleted_at IS NULL
            RETURNING id`,
-          [targetId, ctx.tenantId, groupId, now, deletedBy],
+          [archiveIds, ctx.tenantId, groupId, now, deletedBy],
         );
         if (!rows[0]) return null;
+        const pausedByTarget = new Map();
         const pausedPolicies = await client.query(
           `UPDATE test_policies
            SET state = 'paused', enabled = FALSE, next_run_at = NULL,
                lease_token = NULL, lease_owner = NULL, lease_expires_at = NULL,
                schedule_revision = schedule_revision + 1,
                updated_at = $4::timestamptz
-           WHERE tenant_id = $1 AND target_group_id = $2 AND target_id = $3
+           WHERE tenant_id = $1 AND target_group_id = $2 AND target_id = ANY($3::text[])
              AND archived_at IS NULL
-           RETURNING id`,
-          [ctx.tenantId, groupId, targetId, now],
+           RETURNING id, target_id`,
+          [ctx.tenantId, groupId, archiveIds, now],
         );
-        const pausedPolicyIds = pausedPolicies.rows.map((policy) => policy.id);
-        await appendMutationAudit(auditRepository, client, ctx, {
-          action: 'target.archived', resource_type: 'target', resource_id: targetId,
-          metadata: {
-            target_group_id: groupId,
-            changed_fields: ['deleted_at', 'deleted_by'],
-            paused_policy_ids: pausedPolicyIds,
-          },
-        }, now);
+        for (const policy of pausedPolicies.rows) {
+          const list = pausedByTarget.get(policy.target_id) ?? [];
+          list.push(policy.id);
+          pausedByTarget.set(policy.target_id, list);
+        }
+        for (const id of archiveIds) {
+          await appendMutationAudit(auditRepository, client, ctx, {
+            action: 'target.archived', resource_type: 'target', resource_id: id,
+            metadata: {
+              target_group_id: groupId,
+              changed_fields: ['deleted_at', 'deleted_by'],
+              paused_policy_ids: pausedByTarget.get(id) ?? [],
+              ...(id === targetId
+                ? (childIds.length ? { cascaded_subdomain_ids: childIds } : {})
+                : { cascaded_from_target_id: targetId }),
+            },
+          }, now);
+        }
         return {
           deleted: true,
           archived: true,
           id: targetId,
           deleted_at: now,
           deleted_by: deletedBy,
-          paused_policy_count: pausedPolicyIds.length,
+          paused_policy_count: pausedPolicies.rows.length,
+          cascaded_subdomain_count: childIds.length,
+          cascaded_subdomain_ids: childIds,
         };
       });
     },

@@ -35,6 +35,7 @@ import { canStartRun } from '../lib/run-permissions.mjs';
 import { useDesignVariant } from '../lib/design-variant';
 import { VariantSwitch } from '../components/ui/variant-switch';
 import { TargetsRefinedInventory, type TargetRowModel } from './refined/targets-refined';
+import { computeSubdomainGrouping } from '../lib/subdomain-grouping';
 
 const TARGETS_PAGE_STYLES = `
 .targets-page .targets-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden; background: var(--border-soft); gap: 1px; }
@@ -301,9 +302,14 @@ export function TargetsPage({
     [targets]
   );
 
+  const subdomainGrouping = useMemo(() => computeSubdomainGrouping(targets), [targets]);
+  // Top-level domains only; discovered subdomains are grouped under their parent and never counted here.
+  const topLevelList = useMemo(() => targets.filter((item) => !subdomainGrouping.hiddenIds.has(getString(item, ['id'], ''))), [targets, subdomainGrouping]);
+
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase();
     return targets.filter((item) => {
+      if (subdomainGrouping.hiddenIds.has(getString(item, ['id'], ''))) return false;
       const state = verificationState(item).toLowerCase();
       if (verificationFilter === 'verified' && !isVerified(state)) return false;
       if (verificationFilter === 'unverified' && isVerified(state)) return false;
@@ -317,7 +323,7 @@ export function TargetsPage({
         sourceLabel(item)
       ].some((value) => value.toLowerCase().includes(needle));
     });
-  }, [targets, query, verificationFilter, kindFilter, tagFilter]);
+  }, [targets, query, verificationFilter, kindFilter, tagFilter, subdomainGrouping]);
 
   useEffect(() => {
     if (showAdd) kindSelectRef.current?.focus();
@@ -340,9 +346,9 @@ export function TargetsPage({
   const addKindOption = TARGET_KIND_OPTIONS.find((option) => option.value === addKind) ?? TARGET_KIND_OPTIONS[0];
   const addBehaviorOption = EXPECTED_BEHAVIOR_OPTIONS.find((option) => option.value === addBehavior) ?? EXPECTED_BEHAVIOR_OPTIONS[0];
 
-  const verifiedCount = targets.filter((item) => isVerified(verificationState(item))).length;
-  const unverifiedCount = targets.length - verifiedCount;
-  const units = useMemo(() => inventoryUnits(targets), [targets]);
+  const verifiedCount = topLevelList.filter((item) => isVerified(verificationState(item))).length;
+  const unverifiedCount = topLevelList.length - verifiedCount;
+  const units = useMemo(() => inventoryUnits(topLevelList), [topLevelList]);
   const filtersActive = Boolean(query.trim()) || verificationFilter !== 'all' || kindFilter !== 'all' || tagFilter !== 'all';
 
   function clearCohort() {
@@ -454,10 +460,14 @@ export function TargetsPage({
     const targetId = getString(item, ['id'], '');
     const value = getString(item, ['value'], targetId);
     if (!targetId) return;
+    const childCount = subdomainGrouping.childCount.get(targetId) ?? 0;
+    const childClause = childCount > 0
+      ? ` This also removes the ${childCount} ${childCount === 1 ? 'subdomain' : 'subdomains'} grouped under it.`
+      : '';
     if (!await confirm({
       title: 'Remove declared target',
-      description: `Remove ${value} from declared scope? Existing evidence is retained. Active runs must finish or be cancelled first.`,
-      confirmLabel: 'Remove target'
+      description: `Remove ${value} from declared scope?${childClause} Existing evidence is retained. Active runs must finish or be cancelled first.`,
+      confirmLabel: childCount > 0 ? 'Remove domain and subdomains' : 'Remove target'
     })) return;
     setBusy(`remove-${targetId}`);
     setMessage('');
@@ -493,7 +503,8 @@ export function TargetsPage({
       rawSource: getString(item, ['source'], 'manual'),
       createdAt: item.created_at ?? null,
       lastRecorded: item.last_validation_at ?? item.last_validated_at ?? (result?.completedAt || null),
-      lastResult: result
+      lastResult: result,
+      subdomainCount: subdomainGrouping.childCount.get(id) ?? 0
     };
   }
 
@@ -517,6 +528,11 @@ export function TargetsPage({
               <strong title={value}>{value}</strong>
               <span>{formatTargetKind(getString(item, ['kind'], ''), getString(item, ['value'], ''))}</span>
             </a>
+            {subdomainGrouping.childCount.get(id) ? (
+              <Badge tone="muted" title={`${subdomainGrouping.childCount.get(id)} subdomains are grouped under this domain; open it to review them`}>
+                {subdomainGrouping.childCount.get(id)} {subdomainGrouping.childCount.get(id) === 1 ? 'subdomain' : 'subdomains'}
+              </Badge>
+            ) : null}
           </span>
         );
       }
@@ -710,7 +726,7 @@ export function TargetsPage({
           loaded={data.loaded}
           loadError={data.loadErrors.targets}
           onRetry={() => void onRefresh()}
-          totalCount={targets.length}
+          totalCount={topLevelList.length}
           rows={filtered.map(describeTarget)}
           units={units}
           verifiedCount={verifiedCount}
@@ -743,7 +759,7 @@ export function TargetsPage({
       {!cohort && variant !== 'refined' ? (
       <Card>
         <CardHeader>
-          <div><CardTitle>Target inventory</CardTitle><CardDescription>{formatNumber(filtered.length)} of {formatNumber(targets.length)} loaded target records. Open a target for its profile and checks; Verify ownership opens its own DNS record.</CardDescription></div>
+          <div><CardTitle>Target inventory</CardTitle><CardDescription>{formatNumber(filtered.length)} of {formatNumber(topLevelList.length)} top-level {topLevelList.length === 1 ? 'domain' : 'domains'}. Discovered subdomains are grouped under their parent; open a domain to review them. Verify ownership opens its own DNS record.</CardDescription></div>
         </CardHeader>
         <CardContent>
           <div className="targets-toolbar">

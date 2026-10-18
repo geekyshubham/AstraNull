@@ -48,6 +48,7 @@ export type TargetRowModel = {
   createdAt: unknown;
   lastRecorded: unknown;
   lastResult: ReturnType<typeof latestRunVerdict>;
+  subdomainCount: number;
 };
 
 export interface TargetsRefinedInventoryProps {
@@ -353,6 +354,7 @@ export function TargetsRefinedInventory(props: TargetsRefinedInventoryProps) {
               </a>
               <span className="rf-target-meta">
                 <span className="rf-kind">{row.kindLabel}</span>
+                {row.subdomainCount > 0 ? <Badge tone="muted" title={`${row.subdomainCount} subdomains are grouped under this domain; open it to review them`}>{`${row.subdomainCount} ${row.subdomainCount === 1 ? 'subdomain' : 'subdomains'}`}</Badge> : null}
                 <span>{`From ${row.source.replace(/_/g, ' ')}`}</span>
                 {row.createdAt ? <><span aria-hidden="true">·</span><span title={formatDate(row.createdAt)}>{`Added ${shortDate(row.createdAt)}`}</span></> : null}
               </span>

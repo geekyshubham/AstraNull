@@ -135,6 +135,27 @@ describe('target group service CRUD', () => {
     assert.equal(pausedPolicy.schedule_revision, 2);
   });
 
+  it('cascades deletion of a parent domain to its subdomain children only', () => {
+    const group = createTargetGroup(ctx, { name: 'Cascade' });
+    const parent = addTarget(ctx, group.id, { value: 'example.com' });
+    const child = addTarget(ctx, group.id, { value: 'api.example.com' });
+    const grandchild = addTarget(ctx, group.id, { value: 'deep.api.example.com' });
+    const unrelated = addTarget(ctx, group.id, { value: 'other.com' });
+    const lookalike = addTarget(ctx, group.id, { value: 'example.com.evil.com' });
+
+    const deleted = deleteTarget(ctx, group.id, parent.id);
+    assert.equal(deleted.deleted, true);
+    assert.equal(deleted.cascaded_subdomain_count, 2);
+    assert.deepEqual([...deleted.cascaded_subdomain_ids].sort(), [child.id, grandchild.id].sort());
+
+    const archived = (id) => Boolean(getStore().targets.find((row) => row.id === id)?.deleted_at);
+    assert.equal(archived(parent.id), true);
+    assert.equal(archived(child.id), true);
+    assert.equal(archived(grandchild.id), true);
+    assert.equal(archived(unrelated.id), false);
+    assert.equal(archived(lookalike.id), false);
+  });
+
   it('persists optional onboard metadata (agent_id binding, notes) on add', () => {
     const group = createTargetGroup(ctx, { name: 'Onboard metadata' });
 

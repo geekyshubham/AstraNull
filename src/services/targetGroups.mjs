@@ -1,5 +1,6 @@
 import { audit } from '../audit.mjs';
 import { queueInitialEdgeDetection } from '../lib/initialEdgeDetection.mjs';
+import { hostnameOf, isStrictSubdomain } from '../lib/subdomainEnumeration.mjs';
 import {
   normalizeTargetInput,
   targetDedupeKey,
@@ -905,40 +906,65 @@ export function deleteTarget(ctx, groupId, targetId) {
       && !isArchivedTarget(candidate),
   );
   if (!target) return null;
-  if (activeRunForTarget(ctx.tenantId, groupId, targetId)) return { error: 'target_active_run', status: 409 };
+
+  // Discovered subdomains are grouped under this domain in the console, so removing the parent
+  // removes them too: archive every fqdn in the same group whose hostname is strictly under it.
+  const parentHost = hostnameOf(target);
+  const children = parentHost
+    ? getStore().targets.filter(
+        (candidate) => candidate.target_group_id === groupId
+          && candidate.tenant_id === ctx.tenantId
+          && candidate.id !== targetId
+          && !isArchivedTarget(candidate)
+          && String(candidate.kind ?? '').toLowerCase() === 'fqdn'
+          && isStrictSubdomain(hostnameOf(candidate), parentHost),
+      )
+    : [];
+  const toArchive = [target, ...children];
+  for (const entry of toArchive) {
+    if (activeRunForTarget(ctx.tenantId, groupId, entry.id)) return { error: 'target_active_run', status: 409 };
+  }
 
   const now = new Date().toISOString();
-  const pausedPolicyIds = [];
-  for (const policy of getStore().testPolicies ?? []) {
-    if (policy.tenant_id !== ctx.tenantId
-      || policy.target_group_id !== groupId
-      || policy.target_id !== targetId
-      || policy.archived_at) continue;
-    policy.state = 'paused';
-    policy.enabled = false;
-    policy.next_run_at = null;
-    policy.lease_token = null;
-    policy.lease_owner = null;
-    policy.lease_expires_at = null;
-    policy.schedule_revision = Number(policy.schedule_revision ?? 0) + 1;
-    policy.updated_at = now;
-    pausedPolicyIds.push(policy.id);
+  const childIds = children.map((child) => child.id);
+  let pausedPolicyCount = 0;
+  for (const entry of toArchive) {
+    const pausedPolicyIds = [];
+    for (const policy of getStore().testPolicies ?? []) {
+      if (policy.tenant_id !== ctx.tenantId
+        || policy.target_group_id !== groupId
+        || policy.target_id !== entry.id
+        || policy.archived_at) continue;
+      policy.state = 'paused';
+      policy.enabled = false;
+      policy.next_run_at = null;
+      policy.lease_token = null;
+      policy.lease_owner = null;
+      policy.lease_expires_at = null;
+      policy.schedule_revision = Number(policy.schedule_revision ?? 0) + 1;
+      policy.updated_at = now;
+      pausedPolicyIds.push(policy.id);
+    }
+    entry.deleted_at = now;
+    entry.deleted_by = ctx.userId;
+    audit({
+      tenant_id: ctx.tenantId,
+      actor_user_id: ctx.userId,
+      actor_role: ctx.role,
+      action: 'target.archived',
+      resource_type: 'target',
+      resource_id: entry.id,
+      metadata: {
+        target_group_id: groupId,
+        changed_fields: ['deleted_at', 'deleted_by'],
+        paused_policy_ids: pausedPolicyIds,
+        ...(entry.id === targetId
+          ? (childIds.length ? { cascaded_subdomain_ids: childIds } : {})
+          : { cascaded_from_target_id: targetId }),
+      },
+    });
+    pausedPolicyCount += pausedPolicyIds.length;
   }
-  target.deleted_at = now;
-  target.deleted_by = ctx.userId;
-  audit({
-    tenant_id: ctx.tenantId,
-    actor_user_id: ctx.userId,
-    actor_role: ctx.role,
-    action: 'target.archived',
-    resource_type: 'target',
-    resource_id: targetId,
-    metadata: {
-      target_group_id: groupId,
-      changed_fields: ['deleted_at', 'deleted_by'],
-      paused_policy_ids: pausedPolicyIds,
-    },
-  });
   persistStore();
   return {
     deleted: true,
@@ -946,7 +972,9 @@ export function deleteTarget(ctx, groupId, targetId) {
     id: targetId,
     deleted_at: now,
     deleted_by: ctx.userId,
-    paused_policy_count: pausedPolicyIds.length,
+    paused_policy_count: pausedPolicyCount,
+    cascaded_subdomain_count: childIds.length,
+    cascaded_subdomain_ids: childIds,
   };
 }
 
