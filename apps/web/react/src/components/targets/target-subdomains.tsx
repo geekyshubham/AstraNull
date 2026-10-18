@@ -19,7 +19,7 @@ const OBSERVATIONS: Record<string, string> = {
   waf_detected: 'WAF fingerprint observed', cdn_only: 'CDN observed', no_edge_detected: 'No edge fingerprint matched',
   inconclusive: 'Inconclusive', not_checked: 'Not checked',
 };
-const SOURCE_LABELS: Record<string, string> = { virustotal: 'VirusTotal', virustotal_ui: 'VirusTotal', crtsh: 'Certificate Transparency logs (crt.sh)' };
+const SOURCE_LABELS: Record<string, string> = { virustotal: 'Passive DNS', virustotal_ui: 'Passive DNS', crtsh: 'Certificate Transparency logs (crt.sh)' };
 const NOT_CONFIGURED: Record<string, string> = {
   disabled: 'Subdomain discovery is unavailable. You can declare child hostnames manually.',
   virustotal_api_key_missing: 'Subdomain discovery is unavailable. You can declare child hostnames manually.',

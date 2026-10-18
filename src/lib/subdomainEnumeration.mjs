@@ -16,9 +16,9 @@ export const SUBDOMAIN_SOURCE_CT = 'crtsh';
 export const SUBDOMAIN_SOURCE_VIRUSTOTAL_UI = 'virustotal_ui';
 export const SUBDOMAIN_SOURCE = SUBDOMAIN_SOURCE_VIRUSTOTAL;
 export const SUBDOMAIN_SOURCE_LABELS = Object.freeze({
-  [SUBDOMAIN_SOURCE_VIRUSTOTAL]: 'VirusTotal',
+  [SUBDOMAIN_SOURCE_VIRUSTOTAL]: 'Passive DNS',
   [SUBDOMAIN_SOURCE_CT]: 'Certificate Transparency logs (crt.sh)',
-  [SUBDOMAIN_SOURCE_VIRUSTOTAL_UI]: 'VirusTotal',
+  [SUBDOMAIN_SOURCE_VIRUSTOTAL_UI]: 'Passive DNS',
 });
 export const SUBDOMAIN_FINGERPRINT_CHECK_ID = 'waf.fingerprint.safe';
 
