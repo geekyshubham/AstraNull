@@ -41,8 +41,10 @@ jobs:
 
       - name: Repository scan (dependencies, misconfiguration, secrets)
         run: |
+          # Synthetic efficacy-lab containers and the connect-fault fixture run as root on purpose and are never shipped; DS-0002 stays enforced on every ops/ image.
           trivy fs --scanners vuln,misconfig,secret --severity HIGH,CRITICAL \
-            --exit-code 1 --no-progress .
+            --exit-code 1 --no-progress \
+            --skip-dirs labs/efficacy/envs --skip-files tests/fixtures/connect-fault-lab/Dockerfile .
 
       - name: Shipped image scans (AWS control plane, Kubernetes worker)
         run: |
