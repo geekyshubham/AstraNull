@@ -11,8 +11,7 @@ spec = importlib.util.spec_from_file_location("vt", Path(__file__).resolve().par
 vt = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(vt)
 
-# The script ships with no baked-in proxy; the operator supplies one via ASTRANULL_SUBDOMAIN_PROXY_URL.
-# Tests inject a dummy default so the transport cases exercise a configured proxy.
+# Keep the operator's real proxy out of test traffic and assertion output.
 vt.DEFAULT_PROXY = "http://proxy.test:10000"
 
 
@@ -77,7 +76,7 @@ class EnumerationTests(unittest.TestCase):
                 return response(429, {}, kwargs)
             return response(200, {"data": [{"id": f"h{i}.example.com"} for i in range(40)], "meta": {"count": 80}}, kwargs)
 
-        result = vt.enumerate_subdomains({"domain": "example.com", "retries": 1}, get)
+        result = vt.enumerate_subdomains({"domain": "example.com", "retries": 1}, get, sleep=lambda _: None)
         self.assertEqual(len(result["hostnames"]), 40)
         self.assertTrue(result["truncated"])
         self.assertEqual(result["stop_reason"], "rate_limited")
@@ -113,15 +112,63 @@ class EnumerationTests(unittest.TestCase):
         with self.assertRaises(vt.SourceError):
             vt.enumerate_subdomains({"domain": "example.com", "proxyUrl": "file:///secret"}, lambda **kwargs: None)
 
-    def test_absent_proxy_is_not_configured_rather_than_a_baked_in_credential(self):
+    def test_invalid_proxy_fails_before_any_network_request(self):
         saved = vt.DEFAULT_PROXY
-        vt.DEFAULT_PROXY = ""
+        vt.DEFAULT_PROXY = "invalid"
         try:
             with self.assertRaises(vt.SourceError) as raised:
                 vt.enumerate_subdomains({"domain": "example.com"}, lambda url, **kwargs: response(200, {}, kwargs))
             self.assertEqual(raised.exception.code, "subdomain_source_not_configured")
         finally:
             vt.DEFAULT_PROXY = saved
+
+    def test_default_reads_every_page_beyond_old_1000_result_ceiling(self):
+        calls = []
+
+        def get(url, **kwargs):
+            offset = offset_of(url)
+            calls.append(offset)
+            return response(200, {"data": [{"id": f"h{i}.example.com"}
+                                           for i in range(offset, min(offset + 40, 1245))],
+                                  "meta": {"count": 1245}}, kwargs)
+
+        result = vt.enumerate_subdomains({"domain": "example.com"}, get)
+        self.assertEqual(result["pages"], 32)
+        self.assertEqual(len(result["hostnames"]), 1245)
+        self.assertEqual(sorted(calls), list(range(0, 1245, 40)))
+        self.assertFalse(result["truncated"])
+
+    def test_failed_parallel_page_is_recovered_sequentially(self):
+        attempts = {}
+
+        def get(url, **kwargs):
+            offset = offset_of(url)
+            attempts[offset] = attempts.get(offset, 0) + 1
+            if offset == 40 and attempts[offset] == 1:
+                return response(429, {}, kwargs)
+            return response(200, {"data": [{"id": f"h{i}.example.com"} for i in range(offset, offset + 40)],
+                                  "meta": {"count": 80}}, kwargs)
+
+        result = vt.enumerate_subdomains({"domain": "example.com", "retries": 1}, get, sleep=lambda _: None)
+        self.assertEqual(attempts[40], 2)
+        self.assertEqual(len(result["hostnames"]), 80)
+        self.assertFalse(result["truncated"])
+
+    def test_default_does_not_have_a_45_second_global_deadline(self):
+        elapsed = [0]
+        timeouts = []
+
+        def get(url, **kwargs):
+            timeouts.append(kwargs["timeout"])
+            elapsed[0] += 50
+            offset = offset_of(url)
+            return response(200, {"data": [{"id": f"h{i}.example.com"} for i in range(offset, offset + 40)],
+                                  "meta": {"count": 80}}, kwargs)
+
+        result = vt.enumerate_subdomains({"domain": "example.com"}, get, now=lambda: elapsed[0])
+        self.assertEqual(result["pages"], 2)
+        self.assertEqual(timeouts, [60, 60])
+        self.assertFalse(result["truncated"])
 
     def test_network_error_and_deadline_do_not_retry_without_budget(self):
         calls, sleeps = [], []

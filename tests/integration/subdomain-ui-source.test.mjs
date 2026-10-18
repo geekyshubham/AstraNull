@@ -38,7 +38,7 @@ test('default keyless UI source imports bounded descendants and audits partial r
   assert.equal(imported.json.truncated, true);
   assert.equal(imported.json.stop_reason, 'rate_limited');
   assert.equal(sourceCalls[0].proxyUrl, 'http://user:private-credential@proxy:10000');
-  assert.equal(sourceCalls[0].maxResults, 200);
+  assert.equal(sourceCalls[0].maxResults, 0);
   const audit = getStore().auditLog.find((row) => row.action === 'target.subdomains_enumerated');
   assert.equal(audit.metadata.source, 'virustotal_ui');
   assert.equal(audit.metadata.stop_reason, 'rate_limited');
@@ -60,4 +60,20 @@ test('UI source honors write permission and imports nothing on first-page errors
     assert.equal(failed.json.source, 'virustotal_ui');
     assert.equal(getStore().targets.length, before);
   }
+});
+
+test('imports and lists every host beyond both the old 1000 import cap and 2000 inventory cap', async () => {
+  uiResult = (domain) => ({ hostnames: Array.from({ length: 2401 }, (_, i) => `full-${i}.${domain}`),
+    pages: 61, reported_total: 2401, truncated: false, stop_reason: null });
+  const imported = await request(baseUrl, 'POST', '/v1/targets/tgt_1/subdomains/enumerate', {
+    headers: demoHeaders('admin'), body: {},
+  });
+  assert.equal(imported.status, 202);
+  assert.equal(imported.json.found, 2401);
+  assert.equal(imported.json.created.length, 2401);
+  assert.equal(imported.json.truncated, false);
+  const listed = await request(baseUrl, 'GET', '/v1/targets/tgt_1/subdomains', { headers: demoHeaders('viewer') });
+  assert.equal(listed.status, 200);
+  for (const row of imported.json.created) assert.ok(listed.json.items.some((item) => item.target_id === row.target_id));
+  assert.equal(listed.json.meta.truncated, false);
 });

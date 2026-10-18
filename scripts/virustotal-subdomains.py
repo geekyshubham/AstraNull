@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bounded VirusTotal UI enumeration. Private JSON input/output for the control plane."""
+"""VirusTotal UI enumeration. Private JSON input/output for the control plane."""
 import base64
 import json
 import os
@@ -7,11 +7,11 @@ import random
 import re
 import sys
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from urllib.parse import urlencode, urlsplit
 
-# Operator supplies the egress proxy via ASTRANULL_SUBDOMAIN_PROXY_URL (config.proxyUrl); never hardcode a credential.
-DEFAULT_PROXY = os.environ.get("ASTRANULL_SUBDOMAIN_PROXY_URL", "")
+# Operator-supplied default; runtime configuration can override it. Never log this value.
+DEFAULT_PROXY = "http://spg2uldu0s:_vRC0ixnxOvchh4P40@dc.decodo.com:10000"
 PAGE_SIZE = 40
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 
@@ -54,7 +54,7 @@ def page_url(domain, offset):
 def fetch_page(domain, offset, proxy, deadline, get, now, sleep, retries, base_delay):
     last = "subdomain_source_unreachable"
     for attempt in range(retries):
-        remaining = deadline - now()
+        remaining = deadline - now() if deadline is not None else 60
         if remaining <= 0:
             raise SourceError(last)
         chunks, size, too_large = [], 0, False
@@ -70,7 +70,7 @@ def fetch_page(domain, offset, proxy, deadline, get, now, sleep, retries, base_d
 
         try:
             response = get(page_url(domain, offset), headers=build_headers(),
-                           impersonate="chrome", timeout=min(15, remaining),
+                           impersonate="chrome", timeout=min(60, remaining),
                            proxies={"http": proxy, "https": proxy},
                            allow_redirects=False, content_callback=receive)
         except Exception:
@@ -99,7 +99,7 @@ def fetch_page(domain, offset, proxy, deadline, get, now, sleep, retries, base_d
         if attempt + 1 == retries:
             break
         delay = base_delay * (2 ** attempt)
-        if delay >= deadline - now():
+        if deadline is not None and delay >= deadline - now():
             break
         sleep(delay)
     raise SourceError(last)
@@ -109,15 +109,16 @@ def enumerate_subdomains(config, get, now=time.monotonic, sleep=time.sleep):
     domain = str(config.get("domain", "")).lower().rstrip(".")
     if not re.fullmatch(r"(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9-]{2,63}", domain):
         raise SourceError("subdomain_source_failed")
-    proxy = config.get("proxyUrl") or DEFAULT_PROXY
+    proxy = config.get("proxyUrl") or os.environ.get("ASTRANULL_SUBDOMAIN_PROXY_URL") or DEFAULT_PROXY
     try:
         parsed = urlsplit(proxy)
         if parsed.scheme not in ("http", "https") or not parsed.hostname or not parsed.port:
             raise ValueError("invalid proxy")
     except ValueError:
         raise SourceError("subdomain_source_not_configured") from None
-    max_results = max(1, min(1000, int(config.get("maxResults", 200))))
-    deadline = now() + max(0.001, min(45, float(config.get("deadlineMs", 45000)) / 1000))
+    # Match the supplied script's --max-pages=0: read the whole finite source by default.
+    max_results = max(0, int(config.get("maxResults", 0)))
+    deadline = now() + float(config["deadlineMs"]) / 1000 if config.get("deadlineMs") else None
     workers = max(1, min(8, int(config.get("workers", 8))))
     retries = max(1, min(5, int(config.get("retries", 5))))
     base_delay = max(0, float(config.get("baseDelay", 15)))
@@ -136,29 +137,54 @@ def enumerate_subdomains(config, get, now=time.monotonic, sleep=time.sleep):
     if type(reported) is not int or reported < 0:
         reported = None
     pages, stop_reason = 1, None
-    offsets = []
+    offsets = range(0)
     if len(first["data"]) == PAGE_SIZE:
         if reported is None:
             stop_reason = "unknown_total"
         else:
-            offsets = list(range(PAGE_SIZE, min(reported, max_results), PAGE_SIZE))
+            offsets = range(PAGE_SIZE, min(reported, max_results) if max_results else reported, PAGE_SIZE)
     elif reported is not None and reported > len(first["data"]):
         stop_reason = "incomplete_source"
 
     if offsets:
         with ThreadPoolExecutor(max_workers=workers) as pool:
-            # The queue contains at most 24 pages; no unbounded future or traffic generation.
-            futures = {pool.submit(page, offset): offset for offset in offsets}
-            for future in as_completed(futures):
+            # Keep only eight pending futures even when the source has thousands of pages.
+            pending = {}
+            remaining_offsets = iter(offsets)
+            failed = []
+
+            def submit_next():
+                offset = next(remaining_offsets, None)
+                if offset is not None:
+                    pending[pool.submit(page, offset)] = offset
+
+            def collect(payload, offset):
+                nonlocal pages, stop_reason
+                found.update(ids(payload))
+                pages += 1
+                if len(payload["data"]) < min(PAGE_SIZE, reported - offset):
+                    stop_reason = stop_reason or "incomplete_source"
+
+            for _ in range(workers):
+                submit_next()
+            while pending:
+                completed, _ = wait(pending, return_when=FIRST_COMPLETED)
+                for future in completed:
+                    offset = pending.pop(future)
+                    try:
+                        collect(future.result(), offset)
+                    except SourceError:
+                        failed.append(offset)
+                    submit_next()
+            # Same final sequential recovery pass as the supplied script.
+            for offset in sorted(failed):
+                if deadline is None:
+                    sleep(1)
                 try:
-                    payload = future.result()
-                    found.update(ids(payload))
-                    pages += 1
-                    if len(payload["data"]) < min(PAGE_SIZE, reported - futures[future]):
-                        stop_reason = stop_reason or "incomplete_source"
+                    collect(page(offset), offset)
                 except SourceError as error:
                     stop_reason = stop_reason or error.code.removeprefix("subdomain_source_")
-    if stop_reason is None and reported is not None and reported > max_results:
+    if stop_reason is None and max_results and reported is not None and reported > max_results:
         stop_reason = "max_results"
     return {"hostnames": sorted(found), "pages": pages, "reported_total": reported,
             "truncated": stop_reason is not None, "stop_reason": stop_reason}

@@ -738,7 +738,9 @@ export function loadRuntimeConfig(env = process.env) {
     configured: resolvedSubdomainSource.configured,
     reason: resolvedSubdomainSource.reason,
     virusTotalApiKey,
-    maxResults: boundedMaxResults(env.ASTRANULL_SUBDOMAIN_MAX_RESULTS),
+    maxResults: resolvedSubdomainSource.source === 'virustotal_ui'
+      ? 0
+      : boundedMaxResults(env.ASTRANULL_SUBDOMAIN_MAX_RESULTS),
     proxyUrl: typeof env.ASTRANULL_SUBDOMAIN_PROXY_URL === 'string' ? env.ASTRANULL_SUBDOMAIN_PROXY_URL.trim() : '',
     pythonExecutable: typeof env.ASTRANULL_SUBDOMAIN_PYTHON === 'string' && env.ASTRANULL_SUBDOMAIN_PYTHON.trim()
       ? env.ASTRANULL_SUBDOMAIN_PYTHON.trim() : '',

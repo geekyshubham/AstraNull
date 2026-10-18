@@ -48,9 +48,21 @@ test('UI transport failures are typed and never expose helper error strings', as
 
 test('runtime wires explicit UI source, proxy and Python override without needing an API key', () => {
   const config = loadRuntimeConfig({ NODE_ENV: 'test', ASTRANULL_SUBDOMAIN_SOURCE: 'virustotal_ui',
-    ASTRANULL_SUBDOMAIN_PROXY_URL: 'http://user:pass@proxy:10000', ASTRANULL_SUBDOMAIN_PYTHON: '/venv/bin/python' }).subdomainDiscovery;
+    ASTRANULL_SUBDOMAIN_PROXY_URL: 'http://user:pass@proxy:10000', ASTRANULL_SUBDOMAIN_PYTHON: '/venv/bin/python',
+    ASTRANULL_SUBDOMAIN_MAX_RESULTS: '200' }).subdomainDiscovery;
   assert.equal(config.source, 'virustotal_ui');
   assert.equal(config.configured, true);
   assert.equal(config.proxyUrl, 'http://user:pass@proxy:10000');
   assert.equal(config.pythonExecutable, '/venv/bin/python');
+  assert.equal(config.maxResults, 0, 'legacy deployment settings must not truncate the UI source');
+});
+
+test('UI source retains all normalized hosts beyond the old 1000 result ceiling by default', async () => {
+  const hostnames = Array.from({ length: 2401 }, (_, i) => `h${i}.example.com`);
+  const result = await fetchVirusTotalUiSubdomains('example.com', { runUiFn: async (input) => {
+    assert.equal(input.maxResults, 0);
+    return { hostnames, pages: 61, reported_total: 2401, truncated: false, stop_reason: null };
+  } });
+  assert.equal(result.hostnames.length, 2401);
+  assert.equal(result.truncated, false);
 });

@@ -21,7 +21,6 @@ import {
 } from '../lib/subdomainEnumeration.mjs';
 
 const COHORT_PAGE_LIMIT = 200;
-const COHORT_MAX_PAGES = 10;
 
 function fail(error, status, extra = {}) {
   return { error, status, ...extra };
@@ -44,7 +43,8 @@ async function readGroupHosts(ctx, parent, deps) {
   const parentHost = hostnameOf(parent);
   const rows = [];
   let cursor = null;
-  for (let page = 0; page < COHORT_MAX_PAGES; page += 1) {
+  const cursors = new Set();
+  for (;;) {
     const result = await deps.readCohort({
       target_group_id: parent.target_group_id,
       kind: 'fqdn',
@@ -57,6 +57,8 @@ async function readGroupHosts(ctx, parent, deps) {
     rows.push(...(Array.isArray(result?.items) ? result.items : []));
     cursor = result?.next_cursor ?? null;
     if (!cursor) break;
+    if (cursors.has(cursor)) return { error: fail('subdomain_inventory_incomplete', 502) };
+    cursors.add(cursor);
   }
   const parentRow = rows.find((row) => row.id === parent.id) ?? null;
   return {

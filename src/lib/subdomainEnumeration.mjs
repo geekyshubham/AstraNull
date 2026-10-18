@@ -93,6 +93,12 @@ export function boundedMaxResults(value) {
   return Math.min(parsed, SUBDOMAIN_MAX_RESULTS_CEILING);
 }
 
+/** UI source reads all pages by default; a positive operator override is optional. */
+export function virusTotalUiMaxResults(value) {
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : 0;
+}
+
 function pageUrl(domain, cursor) {
   const url = new URL(`${VIRUSTOTAL_API_BASE}${encodeURIComponent(domain)}/subdomains`);
   url.searchParams.set('limit', String(VIRUSTOTAL_PAGE_SIZE));
@@ -211,9 +217,9 @@ export async function fetchVirusTotalSubdomains(parentHostname, options = {}) {
   };
 }
 
-/** Bounded UI-source helper; hostnames still pass the same declaration boundary as API/CT. */
+/** Full UI-source import; hostnames still pass the same declaration boundary as API/CT. */
 export async function fetchVirusTotalUiSubdomains(parentHostname, options = {}) {
-  const maxResults = boundedMaxResults(options.maxResults);
+  const maxResults = virusTotalUiMaxResults(options.maxResults);
   const payload = await (options.runUiFn ?? runVirusTotalUiSubdomains)({
     domain: lower(parentHostname).replace(/\.$/, ''),
     maxResults,
@@ -235,10 +241,10 @@ export async function fetchVirusTotalUiSubdomains(parentHostname, options = {}) 
     throw new SubdomainSourceError('subdomain_source_failed', 'VirusTotal UI returned an unreadable response.');
   }
   const found = new Set(payload.hostnames.map((host) => normalizeSubdomainCandidate(host, parentHostname)).filter(Boolean));
-  const capped = found.size > maxResults;
+  const capped = maxResults > 0 && found.size > maxResults;
   return {
     source: SUBDOMAIN_SOURCE_VIRUSTOTAL_UI,
-    hostnames: [...found].sort().slice(0, maxResults),
+    hostnames: capped ? [...found].sort().slice(0, maxResults) : [...found].sort(),
     pages: payload.pages,
     reported_total: Number.isInteger(payload.reported_total) ? payload.reported_total : null,
     truncated: payload.truncated === true || capped,
