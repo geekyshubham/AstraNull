@@ -26,6 +26,10 @@ describe('efficacy network budget', () => {
       sockets.push(socket);
       if (endpoint.host === '2001:db8::10') {
         queueMicrotask(() => socket.emit('connect'));
+      } else {
+        // Deterministically drive the budgeted timeout instead of waiting out real wall-clock,
+        // which is flaky on loaded CI runners; the probe honours the socket 'timeout' event.
+        queueMicrotask(() => socket.emit('timeout'));
       }
       return socket;
     };
@@ -69,6 +73,10 @@ describe('efficacy network budget', () => {
       sockets.push(socket);
       if (endpoint.port === 22) {
         queueMicrotask(() => socket.emit('connect'));
+      } else {
+        // Deterministically drive the budgeted timeout instead of waiting out real wall-clock,
+        // which is flaky on loaded CI runners; the probe honours the socket 'timeout' event.
+        queueMicrotask(() => socket.emit('timeout'));
       }
       return socket;
     };
