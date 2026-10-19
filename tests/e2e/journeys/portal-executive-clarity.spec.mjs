@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { PORTAL_BASELINE_IDS } from '../../fixtures/portal-baseline/seed.mjs';
+import { collectPortalBrowserFailures } from '../../helpers/portal-browser-failures.mjs';
 import {
   getPortalPlaywrightBaseUrl,
   portalOwnerHeaders,
@@ -24,8 +25,14 @@ const E1_RUN_ID = 'run_exec_e1_declaration';
 
 // Server segment keys and the plain-language label each one reads as on the dashboard.
 const SEGMENT_LABELS = {
-  detected: 'detected',
-  not_detected: 'not detected',
+  detected: 'Detected',
+  not_detected: 'Not detected in the last observation',
+  not_checked: 'Not checked',
+  not_recorded: 'Not recorded',
+  inconclusive: 'Inconclusive',
+  stale: 'Stale observation',
+  conflict: 'Conflicting signals',
+  unknown: 'Unknown',
 };
 
 function seedDeclarationOnlyRun(store) {
@@ -93,6 +100,7 @@ test.describe('portal executive clarity', () => {
   });
 
   test('Dashboard WAF and CDN observations are the server counts in plain language, detection never read as blocking', async ({ page }) => {
+    const diagnostics = await collectPortalBrowserFailures(page, getPortalPlaywrightBaseUrl());
     const families = {
       WAF: await api('/v1/analytics/declared-hosts?family=waf&unit=normalized_hostname&limit=1'),
       CDN: await api('/v1/analytics/declared-hosts?family=cdn&unit=normalized_hostname&limit=1'),
@@ -101,21 +109,34 @@ test.describe('portal executive clarity', () => {
     await gotoPortalRoute(page, 'dashboard', getPortalPlaywrightBaseUrl());
 
     const region = page.getByRole('region', { name: 'WAF and CDN detection' });
-    await expect(region).toContainText('Unknown');
     for (const [label, body] of Object.entries(families)) {
       expect(body.complete).toBe(true);
-      for (const segment of body.segments.filter((item) => SEGMENT_LABELS[item.key] && item.count > 0)) {
-        const name = `${label} ${SEGMENT_LABELS[segment.key]}: ${segment.count} hosts. Open the list.`;
-        const link = region.getByRole('link', { name, exact: true });
+      expect(body.canonical_unit).toBe('hostname');
+      const row = region.locator('.coverage-row').filter({ has: page.getByText(label, { exact: true }) });
+      const parts = [...body.segments, { key: 'unknown', count: body.unknown_count }];
+      await expect(row.getByRole('link')).toHaveCount(parts.filter((part) => part.count > 0).length);
+      for (const part of parts) {
+        const text = SEGMENT_LABELS[part.key];
+        expect(text, `plain-language label for ${part.key}`).toBeDefined();
+        if (part.count === 0 && !['detected', 'not_detected'].includes(part.key)) continue;
+        const item = row.locator('.coverage-stats li').filter({ has: page.getByText(text, { exact: true }) });
+        const count = part.count.toLocaleString('en-US');
+        await expect(item.locator('strong')).toHaveText(count);
+        if (part.count === 0) {
+          await expect(item.getByRole('link')).toHaveCount(0);
+          continue;
+        }
+        const name = `${label} observations ${text.toLowerCase()}: ${count} distinct hostnames. Open the matching list.`;
+        const link = item.getByRole('link', { name, exact: true });
         await expect(link, name).toHaveCount(1);
-        await expect(link).toHaveAttribute('href', `#targets?family=${label.toLowerCase()}&family_status=${segment.key}&unit=hostname`);
+        await expect(link).toHaveAttribute('href', `#targets?family=${label.toLowerCase()}&family_status=${part.key}&unit=hostname`);
       }
     }
     // Only WAF and CDN have observation cohorts; no cloud or origin stage is inferred from them.
     const regionText = await region.innerText();
     expect(regionText).not.toMatch(/\bcloud\b|\borigin\b|blocked|protected/i);
     expect(regionText).not.toMatch(/\b(?:not_checked|not_detected|not_recorded|normalized_hostname|coverage_summary_not_populated)\b/);
-    expect(regionText).not.toMatch(/Conflicting signals|Stale observation|Not recorded/);
+    diagnostics.assertClean();
   });
 
   test('Dashboard and Target Detail do not overflow at 375, 768, 1024, or 1440 pixels', async ({ page }) => {

@@ -488,7 +488,7 @@ test.describe('current release: server cohorts from dashboard analytics', () => 
     await page.setViewportSize({ width: 1440, height: 1000 });
     const reads = trackTargetReads(page);
     await open(page, 'dashboard');
-    const segment = page.getByRole('link', { name: /^WAF unknown: [\d,]+ hosts\. Open the list\./ });
+    const segment = page.getByRole('link', { name: /^WAF observations not checked: [\d,]+ distinct hostnames\. Open the matching list\.$/ });
     const label = await segment.getAttribute('aria-label');
     const dashboardCount = Number(label.match(/: ([\d,]+) /)[1].replaceAll(',', ''));
     expect(dashboardCount).toBeGreaterThan(50);

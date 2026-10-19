@@ -225,9 +225,12 @@ describe('dashboard: authoritative declared scope and width-aware layout', () =>
     assert.match(dashboard, /`\/v1\/targets\?verification_state=\$\{state\}&unit=target&limit=1`/);
   });
 
-  it('names each cohort count the way it is shown', () => {
-    assert.match(dashboard, /: \$\{formatNumber\(part\.count\)\} hosts\. Open the list\./);
-    assert.doesNotMatch(dashboard, /: \$\{part\.count\} hosts/);
+  it('names each cohort count with its formatted value, server status and canonical unit', () => {
+    assert.match(dashboard, /const unitLabel = buckets\.unit === 'target' \? 'declared target records' : 'distinct hostnames';/);
+    assert.match(dashboard, /\$\{title\} observations \$\{part\.label\.toLowerCase\(\)\}: \$\{formatNumber\(part\.count\)\} \$\{unitLabel\}\. Open the matching list\./);
+    assert.match(dashboard, /<strong className="tabular-nums">\{formatNumber\(part\.count\)\}<\/strong>/);
+    assert.doesNotMatch(dashboard, /: \$\{part\.count\}/);
+    assert.doesNotMatch(dashboard, /hosts\. Open the list\./);
   });
 
   it('reflows by the dashboard width so a docked inspector stacks the overview instead of squeezing it', () => {
