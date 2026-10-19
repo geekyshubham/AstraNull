@@ -172,3 +172,25 @@ describe('assistant prompt', () => {
     assert.ok(!prompt.includes('abc123'));
   });
 });
+
+describe('structured AI purposes', () => {
+  it('only grants search_web, parses the reply and refuses unknown purposes', async () => {
+    const { registerStructuredPurpose } = await import('../../src/services/assistant.mjs');
+    registerStructuredPurpose('test_purpose', { parse: (content) => (content.startsWith('{') ? JSON.parse(content) : null), allowedTools: ['search_web', 'read_url_content', 'run_command'], timeoutSeconds: 5 });
+    const { store, cfg, deps, audits } = setup();
+    assert.deepEqual(await store.createStructuredJob(alice, { purpose: 'nope', prompt: 'x' }, cfg, deps), { error: 'unknown_purpose', status: 400 });
+    store.markRunnerSeen();
+    const created = await store.createStructuredJob(alice, { purpose: 'test_purpose', prompt: 'p', context: { target_id: 'tgt_1', 'Bad Key': 'x', nested: { a: 1 } } }, cfg, deps);
+    assert.deepEqual(audits.at(-1).metadata, { job_id: created.job_id, purpose: 'test_purpose', target_id: 'tgt_1' });
+    const lease = store.leaseJob(cfg);
+    assert.deepEqual(lease.allowed_tools, ['search_web']);
+    assert.equal(lease.timeout_seconds, 30);
+    assert.equal(lease.tools, false);
+    store.completeJob(created.job_id, { status: 'done', content: '{"ok":true}' }, cfg);
+    assert.deepEqual(store.getJob(alice, created.job_id, cfg).response.test_purpose, { ok: true });
+    const second = await store.createStructuredJob(alice, { purpose: 'test_purpose', prompt: 'p' }, cfg, deps);
+    store.leaseJob(cfg);
+    store.completeJob(second.job_id, { status: 'done', content: 'not json' }, cfg);
+    assert.equal(store.getJob(alice, second.job_id, cfg).error, 'test_purpose_unparseable');
+  });
+});
