@@ -227,6 +227,7 @@ describe('security headers', () => {
     // apps/web/index.html links fonts.googleapis.com and preconnects gstatic.
     assert.match(csp, /style-src[^;]*https:\/\/fonts\.googleapis\.com/);
     assert.match(csp, /font-src[^;]*https:\/\/fonts\.gstatic\.com/);
+    assert.equal(csp.split('; ').find((directive) => directive.startsWith('img-src ')), "img-src 'self' data: https://icons.duckduckgo.com");
     assert.match(csp, /object-src 'none'/);
   });
 });

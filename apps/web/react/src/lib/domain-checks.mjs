@@ -10,6 +10,8 @@ import { checkExclusionReason, checkSupportsTarget } from './check-picker.mjs';
 import { checkPrerequisite, needsTargetAnswer } from './control-declarations.mjs';
 import { MAX_SCAN_CHECKS } from './validation-scan.mjs';
 import { requiredInputMissing } from './missing-input.mjs';
+import { isDeclarationOnlyCheck } from './check-classification.mjs';
+export { isDeclarationOnlyCheck } from './check-classification.mjs';
 import { plainVerdictShortLabel } from './plain-language.mjs';
 import { checkPresentation, plainCheckExplanation } from '../../../../../src/lib/checkPresentation.mjs';
 import { OBSERVATION_ONLY_PROBE_KINDS, isVerdictCapableProbeKind } from '../../../../../src/lib/probeEvidenceTiers.mjs';
@@ -17,7 +19,6 @@ import { OBSERVATION_ONLY_PROBE_KINDS, isVerdictCapableProbeKind } from '../../.
 export const EDGE_DETECTION_CHECK_ID = 'waf.fingerprint.safe';
 export const ORIGIN_LOCKDOWN_CHECK_ID = 'nfw.origin_lockdown.safe';
 const ORIGIN_LOCKDOWN_CHECK_IDS = new Set([ORIGIN_LOCKDOWN_CHECK_ID, 'origin.direct_reachability.safe']);
-const DECLARATION_ONLY_KIND = 'metadata_marker';
 const VIOLATION_FAMILIES = new Set(['l3_l4', 'reflection', 'amplification']);
 
 /** Vector family → category. `layer` decides which efficacy (WAF or CDN) a verdict feeds. */
@@ -102,11 +103,6 @@ function isReadinessCapable(check) {
     && check?.produces_verdict !== false
     && check?.probe_profile?.produces_verdict !== false
     && tierOf(check) === 'E3';
-}
-
-/** E1 checks perform no network I/O and always verdict inconclusive, so they are not "run". */
-export function isDeclarationOnlyCheck(check) {
-  return tierOf(check) === 'E1' || text(check?.probe_profile?.kind) === DECLARATION_ONLY_KIND;
 }
 
 function runOrder(check) {

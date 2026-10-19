@@ -138,6 +138,18 @@ describe('check-first catalog grouping', () => {
     { check_id: 'waf.sqli.safe', safety_class: 'safe', canonical_name: 'SQLi managed marker' },
     { check_id: 'waf.xss.safe', safety_class: 'safe', canonical_name: 'XSS managed marker' },
   ];
+  it('never groups or offers declaration-only metadata as an executable check', () => {
+    const declarations = [
+      { check_id: 'e1', safety_class: 'safe', evidence_tier: 'E1', supported_targets: ['fqdn'] },
+      { check_id: 'metadata', safety_class: 'safe', probe_profile: { kind: 'metadata_marker' }, supported_targets: ['fqdn'] },
+    ];
+    const vectors = declarations.map((check) => vector({ vector_id: check.check_id, safe_check_ids: [check.check_id] }));
+    const grouped = groupVectorsByCheck(vectors, [...checks, ...declarations]);
+    assert.deepEqual(grouped.groups, []);
+    assert.equal(grouped.unmapped.length, 2);
+    for (const entry of vectors) assert.deepEqual(vectorTargetAvailability(entry, declarations, fqdn).runnableChecks, []);
+    assert.equal(countCompatibleSafeChecks(declarations.map((catalog) => ({ check_id: catalog.check_id, catalog })), declarations), 0);
+  });
   it('nests vectors under the checks that cover them and buckets the rest as unmapped', () => {
     const vectors = [
       { vector_id: 'V1', safe_check_ids: ['waf.sqli.safe'] },

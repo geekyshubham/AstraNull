@@ -11,6 +11,7 @@ export declare function classifyCheck(check: unknown): {
   controls: CheckProtectionControl[];
   declaration_only: boolean;
 };
+export declare function isDeclarationOnlyCheck(check: unknown): boolean;
 
 export declare function checkClassificationFields(check: unknown): {
   layer: string | null;

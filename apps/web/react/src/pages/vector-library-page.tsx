@@ -17,6 +17,7 @@ import { buildDetailHref, getRouteParam, replaceRouteParams } from '../lib/route
 import { plainCheckName, plainCodeLabel, plainVerdictLabel } from '../lib/plain-language.mjs';
 import { apiErrorMessage } from '../lib/error-messages';
 import { checkPresentation } from '../lib/check-presentation.mjs';
+import { isDeclarationOnlyCheck } from '../lib/check-classification.mjs';
 import { hasEvidenceBackedVerdict, publishedRunVerdict } from '../lib/run-verdict';
 import type { DataItem, PortalConfig, PortalData, Session } from '../lib/types';
 import { formatDate, formatNumber, formatTargetKind } from '../lib/utils';
@@ -121,7 +122,6 @@ function loadAllVectorPages(config: PortalConfig, session: Session, cacheKey: st
 const CAPABILITY_OPTIONS: SelectOption[] = [
   { value: '', label: 'Any evidence level' },
   { value: 'semantic_safe', label: 'Semantic-safe (E3)' },
-  { value: 'declaration_only', label: 'Declaration only (E1)' },
   { value: 'transport_only', label: 'Transport only (E2)' },
   { value: 'soc_governed', label: 'SOC-governed (E4)' },
   { value: 'monitor_only', label: 'Monitor only (E5)' },
@@ -256,7 +256,7 @@ export function VectorLibraryPage({
   const selectedTarget = targets.find((target) => getString(target, ['id']) === targetId) ?? null;
   const missingDeepLinkTarget = Boolean(targetId) && targetsStatus === 'loaded' && !selectedTarget;
 
-  const runnableChecks = data.checks.filter((check) => getString(check, ['safety_class']) === 'safe');
+  const runnableChecks = data.checks.filter((check) => !isDeclarationOnlyCheck(check) && getString(check, ['safety_class']) === 'safe');
   const [serverFit, setServerFit] = useState<{ targetId: string; status: 'loading' | 'loaded' | 'error'; checks: DataItem[] }>({ targetId: '', status: 'loading', checks: [] });
   const fitTargetId = selectedTarget ? getString(selectedTarget, ['id']) : '';
   useEffect(() => {

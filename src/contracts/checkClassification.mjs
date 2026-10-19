@@ -111,6 +111,11 @@ function layerFor(family, kind, checkId) {
   return FAMILY_LAYERS[family] ?? null;
 }
 
+export function isDeclarationOnlyCheck(check) {
+  return String(check?.evidence_tier ?? '').trim().toUpperCase() === 'E1'
+    || (check?.probe_profile?.kind ?? check?.request?.kind) === 'metadata_marker';
+}
+
 export function classifyCheck(check) {
   if (!check || typeof check !== 'object') return { layer: null, controls: [], declaration_only: false };
   const family = String(check.vector_family ?? '');
@@ -119,7 +124,7 @@ export function classifyCheck(check) {
   return {
     layer: layerFor(family, kind, checkId),
     controls: controlsFor(family, kind, checkId).map((id) => CHECK_PROTECTION_CONTROLS[id]),
-    declaration_only: kind === 'metadata_marker',
+    declaration_only: isDeclarationOnlyCheck(check),
   };
 }
 

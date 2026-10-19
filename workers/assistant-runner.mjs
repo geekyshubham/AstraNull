@@ -4,9 +4,8 @@
  * local `agy` CLI (signed in on this machine, e.g. through VibeRouter). Read-only research only.
  */
 
-import { isAllowedDocUrl } from '../src/lib/assistantDocDomains.mjs';
 import { spawn } from 'node:child_process';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -33,9 +32,8 @@ function cleanUrl(raw) {
 
 /** Parses agy `--output-format stream-json` output into an answer, the tools used and any policy breach. */
 export function parseAgyStream(output, allowedTools) {
-  const allowed = new Set(allowedTools ?? []);
+  const allowed = new Set([...(allowedTools ?? [])].filter((name) => name === 'search_web'));
   const searches = [];
-  const readUrls = [];
   let deltas = '';
   let response = null;
   let resultStatus = '';
@@ -56,11 +54,6 @@ export function parseAgyStream(output, allowedTools) {
         if (name && !allowed.has(name) && !disallowedTool) disallowedTool = name;
         const params = step.tool_info?.parameters ?? {};
         if (name === 'search_web' && params.query && !searches.includes(text(params.query))) searches.push(text(params.query).slice(0, 200));
-        if (name === 'read_url_content') {
-          const url = cleanUrl(params.url ?? params.Url);
-          if (!isAllowedDocUrl(url) && !disallowedTool) disallowedTool = 'read_url_content:blocked_host';
-          else if (url && !readUrls.includes(url)) readUrls.push(url);
-        }
       } else if (step.step_type === 'agent_response' && typeof step.text_delta === 'string') {
         deltas += step.text_delta;
       }
@@ -73,7 +66,7 @@ export function parseAgyStream(output, allowedTools) {
   }
   const content = (response ?? deltas).trim();
   const sources = [];
-  for (const url of [...readUrls, ...(content.match(URL_PATTERN) ?? []).map(cleanUrl)]) {
+  for (const url of (content.match(URL_PATTERN) ?? []).map(cleanUrl)) {
     if (url && !sources.some((entry) => entry.url === url)) sources.push({ url });
   }
   return { content, searches: searches.slice(0, 10), sources: sources.slice(0, 12), resultStatus, resultError, disallowedTool };
@@ -81,6 +74,20 @@ export function parseAgyStream(output, allowedTools) {
 
 export function agyArgs(job, prompt = job.prompt, timeoutSeconds = job.timeout_seconds) {
   return ['-p', prompt, '--output-format', 'stream-json', '--mode', 'plan', '--sandbox', '--disable-slash-commands', '--model', job.model, '--print-timeout', `${timeoutSeconds}s`];
+}
+
+/** Host-owned policy, installed before spawning agy; stream events alone arrive too late. */
+export async function installAssistantToolGate(workspace, allowedTools) {
+  const quote = (value) => `'${String(value).replaceAll("'", "'\\''")}'`;
+  const gate = fileURLToPath(new URL('./assistant-tool-gate.mjs', import.meta.url));
+  const allowSearch = [...(allowedTools ?? [])].includes('search_web');
+  const command = `${quote(process.execPath)} ${quote(gate)}${allowSearch ? ' --allow-search-web' : ''}`;
+  await mkdir(path.join(workspace, '.agents'), { mode: 0o700 });
+  await writeFile(path.join(workspace, '.agents', 'hooks.json'), JSON.stringify({
+    'astranull-search-only': {
+      PreToolUse: [{ matcher: '*', hooks: [{ type: 'command', command, timeout: 5 }] }],
+    },
+  }), { mode: 0o600 });
 }
 
 /** First astranull-tool fence in a model reply, validated: { name, args } or null. */
@@ -109,11 +116,12 @@ function childEnv(env = process.env) {
   return Object.fromEntries(['HOME', 'PATH', 'LANG', 'TMPDIR', 'USER'].filter((key) => env[key]).map((key) => [key, env[key]]));
 }
 
-/** Runs one agy step in an empty workspace and returns the parsed stream or a failure. */
+/** Runs one agy step in an isolated workspace with the pre-execution gate and returns the parsed stream or a failure. */
 export async function runAgyStep(job, prompt, timeoutSeconds, { agyBin = 'agy', env = process.env, graceSeconds = KILL_GRACE_SECONDS } = {}) {
   const workspace = await mkdtemp(path.join(tmpdir(), 'astranull-assistant-'));
   const allowed = job.allowed_tools ?? [];
   try {
+    await installAssistantToolGate(workspace, allowed);
     return await new Promise((resolve) => {
       const child = spawn(agyBin, agyArgs(job, prompt, timeoutSeconds), { cwd: workspace, env: childEnv(env), stdio: ['ignore', 'pipe', 'pipe'] });
       let output = '';

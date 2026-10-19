@@ -1,10 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import {
-  Globe2,
   Play,
   Plus,
   Search,
-  Server,
   Tags,
   Target,
   Trash2
@@ -26,6 +24,7 @@ import { Toast } from '../components/ui/toast';
 import { FormModal, useConfirmModal } from '../lib/crud-ui';
 import { canonicalCohortFilters, COHORT_FILTER_KEYS, inventoryUnits } from '../lib/domain-checks.mjs';
 import { TargetCsvImportButton } from '../components/targets/target-csv-import';
+import { DomainFavicon } from '../components/targets/domain-favicon';
 import { TargetCohortList } from '../components/targets/target-cohort';
 import { useListReturnState, useRestoreListPosition } from '../components/evidence/use-inspector';
 import { EVIDENCE_STATUS_TONE, latestEvidenceRunByTarget, latestRunVerdict } from '../lib/dashboard-metrics';
@@ -235,7 +234,7 @@ function visibleTargetTags(item: DataItem): string[] {
   const host = targetHostname(item);
   return targetTags(item).filter((tag) => {
     const [key, ...rest] = tag.split(':');
-    return !(key === 'domain' && rest.join(':') === host);
+    return key !== 'env' && key !== 'environment' && !(key === 'domain' && rest.join(':') === host);
   });
 }
 
@@ -311,7 +310,7 @@ export function TargetsPage({
   const addTagsResult = parseTagInput(addTags);
   const editTagsResult = parseTagInput(editTags);
   const allTags = useMemo(
-    () => [...new Set(targets.flatMap((item) => targetTags(item)))].sort(),
+    () => [...new Set(targets.flatMap((item) => visibleTargetTags(item)))].sort(),
     [targets]
   );
 
@@ -527,7 +526,7 @@ export function TargetsPage({
       verified: isVerified(state),
       verificationState: state,
       verificationProvenance: resolveTargetVerificationProvenance(item, verification),
-      tags: targetTags(item),
+      tags: visibleTargetTags(item),
       source: sourceLabel(item),
       rawSource: getString(item, ['source'], 'manual'),
       createdAt: item.created_at ?? null,
@@ -550,7 +549,7 @@ export function TargetsPage({
         const source = sourceLabel(item).replace(/_/g, ' ');
         return (
           <span className="target-primary">
-            <span className="target-primary-icon" aria-hidden="true">{getString(item, ['kind'], 'fqdn') === 'ip' ? <Server size={16} /> : <Globe2 size={16} />}</span>
+            <DomainFavicon value={getString(item, ['value'])} kind={getString(item, ['kind'], 'fqdn')} className="target-primary-icon" />
             <span className="target-primary-copy">
               <a
                 className="target-primary-name detail-entity-link"
@@ -732,7 +731,7 @@ export function TargetsPage({
                 <input
                   name="tags"
                   className="mono"
-                  placeholder="env:prod, tier:edge"
+                  placeholder="team:payments, tier:edge"
                   value={addTags}
                   onChange={(event) => setAddTags(event.target.value)}
                   aria-invalid={addTagsResult.error ? true : undefined}
@@ -839,7 +838,7 @@ export function TargetsPage({
             <span>Tags</span>
             <input
               className="mono"
-              placeholder="env:prod, tier:edge"
+              placeholder="team:payments, tier:edge"
               value={editTags}
               onChange={(event) => setEditTags(event.target.value)}
               autoFocus

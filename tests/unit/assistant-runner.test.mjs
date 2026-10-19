@@ -5,7 +5,7 @@ import path from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import { agyArgs, parseAgyStream, parseToolCall, runAgyJob } from '../../workers/assistant-runner.mjs';
 
-const ALLOWED = ['search_web', 'read_url_content'];
+const ALLOWED = ['search_web'];
 const line = (value) => JSON.stringify(value);
 const init = line({ event: 'init', conversation_id: 'c1', init: { model: 'gemini-3.8-flash-low', tools: ['search_web', 'write_to_file'] } });
 const search = (state) => line({ event: 'step_update', step_update: { step_index: 2, state, step_type: 'tool', tool_name: 'search_web', tool_info: { name: 'search_web', parameters: { query: 'Cloudflare rate limiting rules' } } } });
@@ -13,7 +13,7 @@ const read = line({ event: 'step_update', step_update: { step_index: 3, state: '
 const answer = 'Add a rate limiting rule. See https://developers.cloudflare.com/waf/rate-limiting-rules/create-zone-dashboard/.';
 const delta = line({ event: 'step_update', step_update: { step_index: 4, state: 'ACTIVE', step_type: 'agent_response', text_delta: answer } });
 const result = (status = 'SUCCESS', response = answer) => line({ event: 'result', result: { status, response, num_turns: 1 } });
-const SUCCESS = [init, search('ACTIVE'), search('DONE'), read, delta, result()].join('\n');
+const SUCCESS = [init, search('ACTIVE'), search('DONE'), delta, result()].join('\n');
 const DISALLOWED = [init, line({ event: 'step_update', step_update: { step_type: 'tool', state: 'ACTIVE', tool_name: 'write_to_file', tool_info: { name: 'write_to_file', parameters: { TargetFile: '/tmp/x' } } } }), result()].join('\n');
 
 describe('agy stream parsing', () => {
@@ -24,7 +24,6 @@ describe('agy stream parsing', () => {
     assert.equal(parsed.disallowedTool, '');
     assert.deepEqual(parsed.searches, ['Cloudflare rate limiting rules']);
     assert.deepEqual(parsed.sources.map((source) => source.url), [
-      'https://developers.cloudflare.com/waf/rate-limiting-rules/',
       'https://developers.cloudflare.com/waf/rate-limiting-rules/create-zone-dashboard/',
     ]);
   });
@@ -77,7 +76,7 @@ describe('agy job execution', () => {
 
   it('returns the answer from a successful run and removes the workspace', async () => {
     const before = await workspaces();
-    const bin = await script('agy-ok', `const fs=require('fs');if(fs.readdirSync(process.cwd()).length)process.exit(9);if(process.env.SECRET_FROM_PARENT)process.exit(8);process.stdout.write(${JSON.stringify(SUCCESS)}+'\\n')`);
+    const bin = await script('agy-ok', `const fs=require('fs');if(JSON.stringify(fs.readdirSync(process.cwd()))!==JSON.stringify(['.agents']))process.exit(9);if(!fs.existsSync('.agents/hooks.json'))process.exit(7);if(process.env.SECRET_FROM_PARENT)process.exit(8);process.stdout.write(${JSON.stringify(SUCCESS)}+'\\n')`);
     const out = await runAgyJob(job, { agyBin: bin, env: { ...process.env, SECRET_FROM_PARENT: 'x' } });
     assert.equal(out.status, 'done');
     assert.equal(out.content, answer);
@@ -152,14 +151,11 @@ if(p.includes('cannot call more data tools'))say('Final without tools.');else if
   });
 });
 
-describe('assistant runner page-read allowlist', () => {
-  it('kills a read_url_content call to a non-documentation or private host', async () => {
-    const { parseAgyStream } = await import('../../workers/assistant-runner.mjs');
+describe('assistant runner page-read policy', () => {
+  it('rejects every page read even when an older lease lists it as allowed', () => {
     const step = (url) => JSON.stringify({ event: 'step_update', step_update: { step_type: 'tool', state: 'ACTIVE', tool_name: 'read_url_content', tool_info: { name: 'read_url_content', parameters: { url } } } });
-    const allowed = new Set(['search_web', 'read_url_content']);
-    assert.equal(parseAgyStream(step('https://developers.cloudflare.com/waf/rate-limiting-rules/'), allowed).disallowedTool, '');
-    for (const url of ['http://169.254.169.254/latest/meta-data/', 'https://evil.example.com/?d=secret', 'http://localhost:3006/v1/findings', 'https://10.0.0.5/', 'https://docs.aws.amazon.com.evil.net/x']) {
-      assert.equal(parseAgyStream(step(url), allowed).disallowedTool, 'read_url_content:blocked_host', url);
+    for (const url of ['https://developers.cloudflare.com/waf/rate-limiting-rules/', 'http://169.254.169.254/latest/meta-data/', 'https://evil.example.com/?d=secret', 'http://localhost:3006/v1/findings', 'https://10.0.0.5/', 'https://docs.aws.amazon.com.evil.net/x']) {
+      assert.equal(parseAgyStream(step(url), ['search_web', 'read_url_content']).disallowedTool, 'read_url_content', url);
     }
   });
 });

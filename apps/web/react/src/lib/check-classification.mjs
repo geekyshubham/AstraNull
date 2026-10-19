@@ -1,1 +1,1 @@
-export { CHECK_IMPACT_CLASSES, CHECK_PROTECTION_CONTROLS, classifyCheck, classifyCheckImpact, checkClassificationFields } from '../../../../../src/contracts/checkClassification.mjs';
+export { CHECK_IMPACT_CLASSES, CHECK_PROTECTION_CONTROLS, classifyCheck, classifyCheckImpact, checkClassificationFields, isDeclarationOnlyCheck } from '../../../../../src/contracts/checkClassification.mjs';

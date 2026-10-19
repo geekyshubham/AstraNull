@@ -96,6 +96,14 @@ function escapeRegExp(value) {
 }
 
 async function chooseCustomSelect(scope, label, option) {
+  if (label === 'Check') {
+    const clear = scope.locator('.rf-check-selection').getByRole('button', { name: 'Clear', exact: true });
+    if (await clear.isEnabled()) await clear.click();
+    await scope.getByRole('searchbox', { name: 'Find a check' }).fill(option);
+    await scope.getByRole('group', { name: 'Checks to schedule' }).getByRole('checkbox', { name: new RegExp(escapeRegExp(option)) }).check();
+    return;
+  }
+
   const trigger = scope.getByRole('button', { name: label, exact: true });
   await expect(trigger).toBeEnabled({ timeout: 15_000 });
   await trigger.click();
@@ -139,17 +147,15 @@ function forbidNativeDialogs(page) {
 }
 
 async function chooseScheduleCheck(scope, checkId) {
-  const picker = scope.locator('.rf-check-picker, .rf-check-summary').first();
-  await expect(picker).toBeVisible({ timeout: 10_000 });
-  if (await scope.locator('.rf-check-summary').count()) await scope.locator('.rf-check-summary').getByRole('button', { name: 'Change' }).click();
+  const clear = scope.locator('.rf-check-selection').getByRole('button', { name: 'Clear', exact: true });
+  if (await clear.isEnabled()) await clear.click();
   await scope.getByRole('searchbox', { name: 'Find a check' }).fill(checkId);
-  await scope.getByRole('radio', { name: new RegExp(checkId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')) }).click();
-  await expect(scope.locator('.rf-check-summary')).toContainText(checkId);
+  await scope.getByRole('group', { name: 'Checks to schedule' }).getByRole('checkbox').check();
 }
 
 test.describe('Refined test policies and runs (G03)', () => {
   test.beforeAll(async () => {
-    await startPortalPlaywrightServer({ mutate: applyFixture });
+    await startPortalPlaywrightServer({ mutate: applyFixture, liveSource: true });
   });
   test.afterAll(async () => {
     await stopPortalPlaywrightServer();
@@ -161,7 +167,7 @@ test.describe('Refined test policies and runs (G03)', () => {
   ]) {
     test(`Refined schedule creation keeps only the failed exact binding after a partial failure (${combo.name})`, async ({ page }) => {
       // Fresh store per combo: the previous combo's successful write would otherwise be a duplicate.
-      await startPortalPlaywrightServer({ mutate: applyFixture });
+      await startPortalPlaywrightServer({ mutate: applyFixture, liveSource: true });
       await page.setViewportSize({ width: combo.width, height: combo.height });
       await prepareRefined(page, 'test-policies', { theme: combo.theme });
       const errors = [];
@@ -228,7 +234,7 @@ test.describe('Refined test policies and runs (G03)', () => {
   }
 
   test('Refined runs cancel and finalize in-flight rows only after the in-app confirm', async ({ page }) => {
-    await startPortalPlaywrightServer({ mutate: applyFixture });
+    await startPortalPlaywrightServer({ mutate: applyFixture, liveSource: true });
     await page.emulateMedia({ reducedMotion: 'reduce' });
     await prepareRefined(page, 'runs');
     const nativeDialogs = forbidNativeDialogs(page);
@@ -323,7 +329,6 @@ test.describe('Refined test policies and runs (G03)', () => {
     await page.route((url) => url.pathname === '/v1/high-scale-requests' && url.searchParams.get('scope') === 'my-tenant', async (route) => {
       customerCalls += 1;
       if (!failNext) return route.fallback();
-      failNext = false;
       return route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: 'internal_error' }) });
     });
     await injectPortalDevHeadersSession(page);
@@ -332,6 +337,7 @@ test.describe('Refined test policies and runs (G03)', () => {
     const banner = gate.locator('.table-load-error');
     await expect(banner).toContainText('Could not load', { timeout: 15_000 });
     await expect(gate.getByRole('heading', { name: 'Validation requests' })).toBeVisible();
+    failNext = false;
     await banner.getByRole('button', { name: 'Retry' }).click();
     await expect(banner).toHaveCount(0, { timeout: 15_000 });
     await expect(gate.locator('tbody tr').first()).toBeVisible();

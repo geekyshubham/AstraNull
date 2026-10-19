@@ -1,6 +1,7 @@
 import { checkPresentation } from '../lib/check-presentation.mjs';
 import { scheduleCheckEntries } from '../lib/schedule-checks.mjs';
 import { Fragment, useEffect, useMemo, useRef, useState, type ComponentPropsWithoutRef, type CSSProperties, type FormEvent, type HTMLAttributes, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
+import { isDeclarationOnlyCheck } from '../lib/check-classification.mjs';
 import {
   Activity,
   Bot,
@@ -2352,7 +2353,8 @@ export function PolicyPage({
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [policyTargetIds, setPolicyTargetIds] = useState<string[]>([]);
-  const [policyCheckId, setPolicyCheckId] = useState('');
+  const [policyCheckIds, setPolicyCheckIds] = useState<string[]>([]);
+  const [retryBindings, setRetryBindings] = useState<Array<{ checkId: string; targetId: string }> | null>(null);
   const [policyCadence, setPolicyCadence] = useState('weekly');
   const [policyExpectedVerdict, setPolicyExpectedVerdict] = useState('pass');
   const [policyTimezone, setPolicyTimezone] = useState('UTC');
@@ -2365,18 +2367,29 @@ export function PolicyPage({
   const canWritePolicies = sessionHasPermission(session, 'test_policy:write');
   const allChecksRunnable = data.deploymentFeatures?.all_checks_customer_runnable === true;
   const policyCheckEntries = useMemo(() => scheduleCheckEntries(data.checks, { allChecksRunnable }), [data.checks, allChecksRunnable]);
-  const safeChecks = useMemo(() => policyCheckEntries.filter((entry) => entry.selectable).map((entry) => entry.check), [policyCheckEntries]);
-  const selectedPolicyCheck = safeChecks.find(
-    (check) => getString(check, ['check_id', 'id'], '') === policyCheckId
-  ) ?? null;
-  const policyCheckObservationOnly = isObservationOnlyCheck(selectedPolicyCheck);
+  const safeChecks = useMemo(() => policyCheckEntries.filter((entry) => entry.selectable && !isDeclarationOnlyCheck(entry.check)).map((entry) => entry.check), [policyCheckEntries]);
+  const policyCheckOptions: SelectOption[] = [
+    { value: '', label: 'Select check' },
+    ...safeChecks.map((check) => ({
+      value: getString(check, ['check_id']),
+      label: checkPresentation(check).name,
+      description: getString(check, ['check_id'])
+    }))
+  ];
+  const selectedPolicyChecks = safeChecks.filter((check) => policyCheckIds.includes(getString(check, ['check_id', 'id'], '')));
+  const policyCheckObservationOnly = selectedPolicyChecks.length > 0 && selectedPolicyChecks.every(isObservationOnlyCheck);
   const policyVerdictOptions = policyCheckObservationOnly
     ? POLICY_VERDICT_OPTIONS.filter((option) => option.value === OBSERVATION_ONLY_VERDICT)
     : POLICY_VERDICT_OPTIONS;
   const activePolicyTargets = data.targets.filter((target) => !target.archived_at && !target.deleted_at);
-  const policySelectionReady = policyTargetIds.length > 0 && policyTargetIds.every((id) => {
+  const policyBindings = retryBindings ?? policyTargetIds.flatMap((targetId) => {
+    const target = activePolicyTargets.find((candidate) => getString(candidate, ['id']) === targetId);
+    return selectedPolicyChecks.filter((check) => target && isPolicyTargetCompatible(check, target))
+      .map((check) => ({ checkId: getString(check, ['check_id']), targetId }));
+  });
+  const policySelectionReady = policyBindings.length > 0 && policyTargetIds.every((id) => {
     const target = activePolicyTargets.find((candidate) => getString(candidate, ['id'], '') === id);
-    return target && isPolicyTargetCompatible(selectedPolicyCheck, target);
+    return target && selectedPolicyChecks.some((check) => isPolicyTargetCompatible(check, target));
   });
 
   // Carry only the caller's exact declared domain; never infer or select other targets.
@@ -2384,7 +2397,7 @@ export function PolicyPage({
     if (!canWritePolicies || !callerPrefill.checkId) return;
     const check = safeChecks.find((candidate) => getString(candidate, ['check_id'], '') === callerPrefill.checkId);
     if (!check) return;
-    setPolicyCheckId(callerPrefill.checkId); setShowCreateSchedule(true);
+    setPolicyCheckIds([callerPrefill.checkId]); setRetryBindings(null); setShowCreateSchedule(true);
     const target = activePolicyTargets.find((candidate) => getString(candidate, ['id'], '') === callerPrefill.targetId);
     if (target && isPolicyTargetCompatible(check, target)) setPolicyTargetIds([callerPrefill.targetId]);
     setCallerPrefill({ checkId: '', targetId: '' });
@@ -2395,18 +2408,17 @@ export function PolicyPage({
     if (policyCheckObservationOnly && policyExpectedVerdict !== OBSERVATION_ONLY_VERDICT) setPolicyExpectedVerdict(OBSERVATION_ONLY_VERDICT);
   }, [policyCheckObservationOnly, policyExpectedVerdict]);
 
-  function handlePolicyCheckChange(nextCheckId: string) {
-    const nextCheck = safeChecks.find((check) => getString(check, ['check_id', 'id'], '') === nextCheckId) ?? null;
-    if (policyCheckObservationOnly && !isObservationOnlyCheck(nextCheck)) setPolicyExpectedVerdict('pass');
-    setPolicyCheckId(nextCheckId);
+  function handlePolicyChecksChange(nextCheckIds: string[]) {
+    if (policyCheckObservationOnly && !safeChecks.filter((check) => nextCheckIds.includes(getString(check, ['check_id']))).every(isObservationOnlyCheck)) setPolicyExpectedVerdict('pass');
+    setPolicyCheckIds(nextCheckIds);
+    setRetryBindings(null);
   }
 
   async function handleCreatePolicy(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!canWritePolicies) return;
+    if (!canWritePolicies || busy) return;
     const formElement = event.currentTarget;
     const form = new FormData(formElement);
-    const checkId = String(form.get('check_id') ?? '').trim();
     if (policyTargetIds.length === 0) {
       setError('Select a declared domain or domains before creating schedules.');
       return;
@@ -2415,7 +2427,7 @@ export function PolicyPage({
       setError('Select active domains compatible with this check before creating schedules.');
       return;
     }
-    if (!checkId) {
+    if (selectedPolicyChecks.length === 0) {
       setError('Select a check from the catalog before creating a schedule.');
       return;
     }
@@ -2443,10 +2455,8 @@ export function PolicyPage({
 
     const safe_windows = hasSafeWindow ? [{ day, start, end, timezone }] : [];
     const bodyBase = {
-      check_id: checkId,
       cadence,
       timezone,
-      expected_verdict: policyCheckObservationOnly ? OBSERVATION_ONLY_VERDICT : String(form.get('expected_verdict') ?? 'pass'),
       safe_windows
     };
     setBusy('create-test-policy');
@@ -2454,17 +2464,19 @@ export function PolicyPage({
     setMessage('');
     try {
       const successes: Array<{ targetId: string; result: unknown }> = [];
-      const failures: Array<{ targetId: string; message: string }> = [];
-      for (const targetId of policyTargetIds) {
+      const failures: Array<{ targetId: string; checkId: string; message: string }> = [];
+      for (const { targetId, checkId } of policyBindings) {
+        const check = selectedPolicyChecks.find((item) => getString(item, ['check_id']) === checkId);
         try {
           const result = await requestJson(config, session, '/v1/test-policies', {
             method: 'POST',
-            body: { ...bodyBase, target_id: targetId }
+            body: { ...bodyBase, check_id: checkId, target_id: targetId, expected_verdict: isObservationOnlyCheck(check) ? OBSERVATION_ONLY_VERDICT : policyExpectedVerdict }
           });
           successes.push({ targetId, result });
         } catch (err) {
           failures.push({
             targetId,
+            checkId,
             message: apiErrorMessage(err, 'Schedule creation failed.')
           });
         }
@@ -2482,11 +2494,13 @@ export function PolicyPage({
       if (failures.length > 0) {
         const failedIds = new Set(failures.map((failure) => failure.targetId));
         setPolicyTargetIds([...failedIds]);
+        setPolicyCheckIds([...new Set(failures.map((failure) => failure.checkId))]);
+        setRetryBindings(failures.map(({ checkId, targetId }) => ({ checkId, targetId })));
         const failedResults = failures
-          .map((failure) => `${targetDisplayName(data, failure.targetId)}: ${failure.message}`)
+          .map((failure) => `${checkPresentation(failure.checkId).name} on ${targetDisplayName(data, failure.targetId)}: ${failure.message}`)
           .join(' ');
         setError(
-          `Created ${successes.length} of ${policyTargetIds.length} schedules. `
+          `Created ${successes.length} of ${policyBindings.length} schedules. `
           + `Failed ${failures.length}: ${failedResults} `
           + 'Successful writes were retained; only failed exact target bindings remain selected for retry.'
           + (refreshFailure ? ` ${refreshFailure}` : '')
@@ -2495,6 +2509,7 @@ export function PolicyPage({
       }
 
       const lastResult = successes.at(-1)?.result ?? null;
+      setRetryBindings(null);
       const success = `Created ${successes.length} validation ${successes.length === 1 ? 'schedule' : 'schedules'}. The scheduler recorded each first run time shown in the list.`;
       if (refreshFailure) {
         setPolicyTargetIds([]);
@@ -2525,7 +2540,7 @@ export function PolicyPage({
     onCreateSchedule: () => {
       setError('');
       setMessage('');
-      if (!policyCheckId && safeChecks.length === 1) setPolicyCheckId(getString(safeChecks[0], ['check_id'], ''));
+      if (!policyCheckIds.length && safeChecks.length === 1) setPolicyCheckIds([getString(safeChecks[0], ['check_id'], '')]);
       setShowCreateSchedule(true);
     },
     onActionResult: (nextMessage, nextError) => {
@@ -2538,12 +2553,14 @@ export function PolicyPage({
       onSubmit: (event) => void handleCreatePolicy(event),
       targets: activePolicyTargets,
       selectedTargetIds: policyTargetIds,
-      onTargetsChange: setPolicyTargetIds,
+      onTargetsChange: (ids) => { setPolicyTargetIds(ids); setRetryBindings(null); },
       selectionReady: policySelectionReady,
-      selectedCheck: selectedPolicyCheck,
-      checkId: policyCheckId,
-      checkEntries: policyCheckEntries,
-      onCheckChange: handlePolicyCheckChange,
+      selectedChecks: selectedPolicyChecks,
+      checkIds: policyCheckIds,
+      bindings: policyBindings,
+      retrying: retryBindings !== null,
+      checkOptions: policyCheckOptions,
+      onChecksChange: handlePolicyChecksChange,
       cadence: policyCadence,
       cadenceOptions: POLICY_CADENCE_OPTIONS,
       onCadenceChange: setPolicyCadence,

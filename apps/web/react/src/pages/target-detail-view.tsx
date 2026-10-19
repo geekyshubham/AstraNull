@@ -256,7 +256,7 @@ function TagEditor({ tags, canEdit, onChange }: { tags: string[]; canEdit: boole
   return (
     <div className="td-tag-block">
       <div className="td-tags">
-        {tags.map((tag) => (
+        {tags.filter((tag) => !/^(env|environment):/i.test(tag)).map((tag) => (
           <span key={tag} className="td-tag badge-identifier">
             {tag}
             {canEdit ? (
@@ -278,7 +278,7 @@ function TagEditor({ tags, canEdit, onChange }: { tags: string[]; canEdit: boole
             autoFocus={adding && !draft}
             type="text"
             value={draft}
-            placeholder="Add a tag, e.g. env:prod"
+            placeholder="Add a tag, e.g. team:payments"
             aria-label="Add a tag to this target"
             aria-invalid={error ? true : undefined}
             aria-describedby={error ? 'td-tag-error' : undefined}

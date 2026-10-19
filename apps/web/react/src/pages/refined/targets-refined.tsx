@@ -1,12 +1,11 @@
+import { DomainFavicon } from '../../components/targets/domain-favicon';
 import { useMemo, useRef, useState, type MouseEvent } from 'react';
 import {
   ChevronDown,
   CircleDashed,
-  Globe2,
   Info,
   Link2,
   Lock,
-  Network,
   Play,
   Plus,
   RefreshCw,
@@ -131,10 +130,6 @@ function familyLabel(family: string) {
   return 'edge';
 }
 
-function KindIcon({ kind }: { kind: string }) {
-  const Icon = kind === 'ip' || kind === 'tcp' ? Server : kind === 'url' || kind === 'canary' ? Link2 : kind === 'dns_zone' ? Network : Globe2;
-  return <span className="rf-target-icon" aria-hidden="true"><Icon size={16} /></span>;
-}
 
 function DnsPathView({ path }: { path: DnsPath }) {
   if (path.kind === 'declared_ip') {
@@ -341,7 +336,7 @@ export function TargetsRefinedInventory(props: TargetsRefinedInventoryProps) {
         const href = row.verified ? props.detailHref(row.id) : `${props.detailHref(row.id)}&tab=overview`;
         return (
           <div className="rf-target">
-            <KindIcon kind={row.kind} />
+            <DomainFavicon value={row.value} kind={row.kind} className="rf-target-icon" />
             <div className="rf-target-copy">
               <a
                 className="rf-target-name"

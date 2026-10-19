@@ -76,7 +76,7 @@ test('a job is queued, leased by the runner, answered and read back by its owner
   assert.equal(lease.status, 200);
   assert.equal(lease.json.job_id, id);
   assert.match(lease.json.prompt, /Rate limiting missing on origin\.test/);
-  assert.deepEqual(lease.json.allowed_tools, ['search_web', 'read_url_content']);
+  assert.deepEqual(lease.json.allowed_tools, ['search_web']);
 
   const posted = await request(on.baseUrl, 'POST', `/internal/assistant/runner/jobs/${id}/result`, {
     headers: runner(),
