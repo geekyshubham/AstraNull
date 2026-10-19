@@ -37,6 +37,7 @@ import { hasEvidenceBackedVerdict, publishedRunVerdict } from '../lib/run-verdic
 import { findingStatus, fixVerifiedBasisHint, isFindingOpen } from '../lib/finding-lifecycle.mjs';
 // @ts-ignore Plain ESM keeps truthfulness rules executable in focused node tests.
 import { addTargetTag, apiErrorCode, demoTenantSignal, edgeDetectionReasonExplanation, isActiveDnsChallenge, isTargetRunEligible, ownershipMethodLabel, ownershipStepStatus, removeTargetTag, targetDeclarationProvenanceLabel, targetDisplayValue, uniqueRecentRuns, uniqueVerificationHistory } from '../lib/target-detail.mjs';
+import { usePublishAssistantContext } from '../lib/assistant-page-store';
 import { VerifyChip, resolveTargetVerificationProvenance } from '../lib/verify-chip';
 import { buildDetailHref, getRouteParam, replaceRouteParams } from '../lib/route-params';
 import type { AcceptedExecution, DataItem, PortalConfig, Session } from '../lib/types';
@@ -1301,6 +1302,25 @@ export function TargetDetailView({
       </header>
     );
   }
+
+  usePublishAssistantContext(entityId ? {
+    route: 'target-detail',
+    entity: { type: 'target', id: entityId },
+    tab,
+    facts: {
+      Target: target ? targetDisplayValue(target) : undefined,
+      Kind: target ? kind : undefined,
+      Ownership: target ? verificationState : undefined,
+      Tags: tags.length ? tags.slice(0, 8).join(', ') : undefined,
+      'Open findings': detail && !detail.loading ? deduplicatedOpenFindings.length : undefined,
+      'Checks with a gap': rowCounts.failed,
+      'Checks protected': rowCounts.passed,
+      'Checks not run yet': rowCounts.not_run,
+      'Selected check': effectiveSelectedCheckId ? displayCheckName(effectiveSelectedCheckId) : undefined,
+      ...Object.fromEntries(providerRows.map((row) => [row.title, row.providerName ? `${row.providerName} (${row.statusLabel})` : row.statusLabel])),
+      'Scan in progress': scanActive ? 'Yes' : undefined,
+    },
+  } : null);
 
   if (!detail || detail.loading) {
     return (

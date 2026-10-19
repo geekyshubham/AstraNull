@@ -36,6 +36,7 @@ import { exposedVerdictLabel } from '../../lib/probe-evidence.mjs';
 import { Badge } from '../ui/badge';
 import { AnchorButton, Button } from '../ui/button';
 import { InspectorPanel } from '../ui/inspector-panel';
+import { AskAiButton } from '../assistant/ask-ai-button';
 import { sequencePosition, useInspectorSequence } from './inspector-sequence';
 import { ExecutionInspector } from './execution-inspector';
 import { NotTestedNote } from '../runs/not-tested-note';
@@ -541,6 +542,13 @@ export function EvidenceInspectorHost({ config, session, data, locationKey }: Ev
   if ((ref.entry === 'finding' || ref.entry === 'group_member') && ref.finding_id) {
     actions.push(
       <AnchorButton key="finding" size="sm" variant="secondary" href={`#finding-detail?id=${encodeURIComponent(ref.finding_id)}`}>Open finding</AnchorButton>,
+      <AskAiButton
+        key="ask-ai"
+        config={config}
+        session={session}
+        variant="ghost"
+        context={{ finding_id: ref.finding_id, ...(targetId ? { target_id: targetId } : {}), label: subject.title || targetLabel || 'This finding' }}
+      />,
     );
   }
   const onSameTarget = window.location.hash.startsWith('#target-detail') && hashParams.get('id') === targetId;

@@ -15,6 +15,7 @@ import { validateHmacSecretEntropy } from './lib/evidenceSigning.mjs';
 import { loadEvidenceSigningConfig } from './lib/evidenceSigningConfig.mjs';
 import { boundedMaxResults, resolveSubdomainSource } from './lib/subdomainEnumeration.mjs';
 import { approvedProbeSourcesFromEnv } from './lib/probeSourcePerspective.mjs';
+import { loadAssistantConfig } from './lib/assistantConfig.mjs';
 
 export const AUTH_MODES = ['dev-headers', 'signed-session', 'oidc-jwt'];
 
@@ -905,6 +906,7 @@ export function loadRuntimeConfig(env = process.env) {
     connectorSecretEncryptionKey: connectorWorkerConfig.connectorSecretEncryptionKey,
     connectorSecretEncryptionConfigured: connectorWorkerConfig.connectorSecretEncryptionConfigured,
     subdomainDiscovery,
+    assistant: loadAssistantConfig(env),
     featureFlags: {
       wafPostureEnabled,
       externalDiscoveryEnabled,

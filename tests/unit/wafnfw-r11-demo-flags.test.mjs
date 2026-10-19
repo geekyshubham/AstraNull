@@ -237,6 +237,7 @@ describe('Ticket R11: every feature-flag gate honours explicit demo tenants', ()
       connectors: true,
       protection_validation: true,
       origin_clues: false,
+      assistant: false,
     });
   });
 
@@ -306,6 +307,7 @@ describe('Ticket R11: every feature-flag gate honours explicit demo tenants', ()
       connectors: false,
       protection_validation: false,
       origin_clues: false,
+      assistant: false,
     });
   });
 
@@ -350,6 +352,7 @@ describe('Ticket R11: every feature-flag gate honours explicit demo tenants', ()
       connectors: false,
       protection_validation: false,
       origin_clues: false,
+      assistant: false,
     });
   });
 

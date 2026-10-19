@@ -1,6 +1,14 @@
 - [x] Clarify network coverage prerequisites: name blocked TCP/UDP ports, explain why intended rules are needed, and show “Set blocked ports” with the existing controls link. Preserve exposure-only conclusions and policy admission. Scan regression covers immediately completed children sharing a tick while preserving plan order and a single active run.
 # AstraNull Progress Tracker
 
+## AI remediation assistant (2026-10-19, [ADR-0037](docs/adr/0037-ai-remediation-assistant-runner.md))
+
+- [x] Chat widget on every customer page ("AstraNull AI"): page context sent automatically (route, entity, tab, filters, page facts), history in the browser, Stop/Retry, sources and searched queries, inline tables and SVG bar/line/donut charts from server-registered data results, "Ask AI how to fix" on findings and the evidence drawer.
+- [x] Control plane: `/v1/assistant/status|jobs` (default off; `ASTRANULL_ASSISTANT_ENABLED`, `ASTRANULL_ASSISTANT_TENANTS`), in-memory jobs, per-user/per-tenant rate limits, secret redaction and untrusted-data fencing, `assistant.job_created` / `assistant.tool_called` audit without message text.
+- [x] 13 read-only, tenant-scoped, RBAC-gated data tools including `query_data` aggregations that back charts; markers for unregistered results are stripped.
+- [x] `workers/assistant-runner.mjs`: runs `agy` sandboxed in plan mode on a host signed in through VibeRouter, allows only web search and page reads, stateless tool loop with an 8-call cap and a 240 s deadline. Runner routes use `ASTRANULL_ASSISTANT_RUNNER_TOKEN` only.
+- [~] Production enablement: set the three env vars in `ops/aws/.env` on the host and keep a runner connected; occasional bare `agy` ERROR results on long multi-step answers are logged with the step for follow-up.
+
 ## Demo production login repair (2026-10-19)
 
 - [x] Recognize the actual public demo login (`ten_demo` + `usr_admin`) in feature projection and both run-admission paths. Previous selection coverage incorrectly used a synthetic tenant identity. The corrected browser regression selects and submits all 18 reported exploit, delivery-pattern and high-scale checks; 100 focused Node tests and the real PostgreSQL regression pass, with other users/tenants and kill-switch denial retained. [ADR-0016 correction](docs/adr/0016-demo-tenant-ownership-auto-verify.md#production-login-identity-correction-2026-10-19). The live pre-release bundle hash differed from the committed portal and still contained the old redacted 2-KiB capture; deployment must update the control plane and workers together. CI and deployment provide release evidence for this commit.

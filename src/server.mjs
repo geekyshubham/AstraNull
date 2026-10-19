@@ -137,6 +137,8 @@ import {
   tryHandleWafEdgeDetectionRoutes,
 } from './routes/wafEdgeDetectionRoutes.mjs';
 import { tryHandleProtectionValidationRoutes } from './routes/protectionValidationRoutes.mjs';
+import { handleAssistantRunnerApi, isAssistantRunnerRoute, tryHandleAssistantRoutes } from './routes/assistantRoutes.mjs';
+import { roleHasPermission } from './contracts/roles.mjs';
 import {
   configureProtectionValidationRuntime,
   devProtectionValidationFacade,
@@ -825,6 +827,98 @@ async function withMissingControl(runtimeConfig, serviceDeps, ctx, finding) {
     gap: true,
   });
   return missingControl ? { ...finding, missing_control: missingControl } : finding;
+}
+
+const ASSISTANT_ENTITY_PERMISSIONS = Object.freeze({ run: 'test_run:read', scan: 'test_run:read', check: 'check:read', report: 'report:read', schedule: 'test_policy:read' });
+
+function itemsOf(value) {
+  if (Array.isArray(value)) return value;
+  return Array.isArray(value?.items) ? value.items : [];
+}
+
+/** Read-only data access for the assistant, mirroring the /v1 handlers in both persistence modes. */
+function buildAssistantDeps(runtimeConfig, serviceDeps) {
+  const postgres = runtimeConfig.persistenceMode === 'postgres';
+  const listTargets = async (ctx) => {
+    const svc = serviceDeps.targetGroups;
+    if (typeof svc?.listTargetsEnvelope === 'function') return itemsOf(presentTargetInventory(await svc.listTargetsEnvelope(ctx)));
+    if (typeof svc?.listTargets === 'function') return itemsOf(await svc.listTargets(ctx));
+    return postgres ? [] : itemsOf(presentTargetInventory(targetGroups.listTargetsEnvelope(ctx)));
+  };
+  const getTarget = async (ctx, targetId) => (await readOwnTarget(ctx, runtimeConfig, serviceDeps, targetId)).target ?? null;
+  const getFinding = async (ctx, findingId) => {
+    const finding = await serviceDeps.findings.getFinding(ctx, findingId);
+    return finding ? withMissingControl(runtimeConfig, serviceDeps, ctx, finding) : null;
+  };
+  const listFindings = async (ctx, options = {}) => {
+    const listOpts = Object.fromEntries(Object.entries(options).filter(([key, value]) => FINDING_LIST_QUERY_KEYS.includes(key) && value !== undefined && value !== '').map(([key, value]) => [key, String(value)]));
+    try {
+      parseFindingListQuery(listOpts);
+    } catch (err) {
+      const rejected = findingListQueryError(err);
+      if (rejected) return rejected;
+      throw err;
+    }
+    if (typeof serviceDeps.findings.listFindingsEnvelope === 'function') return serviceDeps.findings.listFindingsEnvelope(ctx, listOpts);
+    return { items: itemsOf(await serviceDeps.findings.listFindings(ctx, listOpts)) };
+  };
+  const listRuns = async (ctx, options = {}) => {
+    const listOpts = { target_id: options.target_id, check_id: options.check_id, limit: options.limit };
+    if (typeof serviceDeps.testRuns.listTestRunsEnvelope === 'function') return itemsOf(await serviceDeps.testRuns.listTestRunsEnvelope(ctx, listOpts));
+    return itemsOf(await serviceDeps.testRuns.listTestRuns(ctx, listOpts));
+  };
+  const getRun = (ctx, runId) => serviceDeps.testRuns.getTestRun(ctx, runId);
+  const listChecks = async (ctx) => withCheckMissingControls(itemsOf(await serviceDeps.testRuns.listChecks({ scope: 'all', tenantId: ctx.tenantId })));
+  const getCheck = async (_ctx, checkId) => {
+    const check = getCheckById(checkId);
+    return check ? withCheckMissingControls([withCheckSection(check)])[0] : null;
+  };
+  const getState = (ctx) => (postgres ? serviceDeps.state.getState : state.getState)(ctx);
+  const getEdgeCoverage = async (ctx, family) => {
+    const query = { family, unit: 'normalized_hostname', limit: '1' };
+    const result = await readDeclaredHostCohortForRequest(ctx, runtimeConfig, serviceDeps, query, 'hostname');
+    return result?.notWired ? null : declaredHostApiPayload(result, { family });
+  };
+  const listSchedules = async (ctx) => itemsOf(await serviceDeps.testPolicies?.listTestPolicies?.(ctx));
+  const listAuditEvents = async (ctx, limit) => {
+    const query = normalizeAuditRouteQuery({ limit: String(limit) });
+    if (postgres) {
+      const queryFn = serviceDeps.state?.queryAuditEntries ?? serviceDeps.audit?.queryAuditEntries;
+      return typeof queryFn === 'function' ? queryFn(ctx, query) : { items: [] };
+    }
+    return state.queryAuditEntries(ctx, query);
+  };
+  const resolveEntity = async (ctx, type, id) => {
+    const permission = ASSISTANT_ENTITY_PERMISSIONS[type];
+    if (!permission || !roleHasPermission(ctx.role, permission)) return null;
+    if (type === 'run') return getRun(ctx, id);
+    if (type === 'check') return getCheck(ctx, id);
+    if (type === 'scan') return serviceDeps.validationScans?.getValidationScan?.(ctx, id, { runtimeConfig, advance: false }) ?? null;
+    if (type === 'report') return serviceDeps.reports?.getReport?.(ctx, id) ?? null;
+    if (type === 'schedule') return (await listSchedules(ctx)).find((row) => row?.id === id) ?? null;
+    return null;
+  };
+  return {
+    getFinding,
+    getTarget,
+    resolveEntity,
+    recordAudit: postgres ? (entry) => serviceDeps.audit?.appendAuditEvent?.(entry) : appendDevAudit,
+    tools: {
+      listTargets,
+      getTarget,
+      getEdgeDetection: (ctx, targetId) => findingEdgeDetection(runtimeConfig, serviceDeps, ctx, targetId),
+      listFindings,
+      getFinding,
+      listRuns,
+      getRun,
+      listChecks,
+      getCheck,
+      getState,
+      getEdgeCoverage,
+      listSchedules,
+      listAuditEvents,
+    },
+  };
 }
 
 function blockPostgresPortalRevampRoute(runtimeConfig, serviceDeps, path, method, res) {
@@ -1698,6 +1792,10 @@ export function createServer(options = {}) {
           });
           return;
         }
+        if (isAssistantRunnerRoute(url.pathname, req.method)) {
+          await handleAssistantRunnerApi(req, res, url, runtimeConfig, { serviceDeps, recordDevAudit: appendDevAudit, assistantDeps: buildAssistantDeps(runtimeConfig, serviceDeps) });
+          return;
+        }
         if (isInternalAdminApiRoute(url.pathname, req.method, runtimeConfig)) {
           const staffAuth = await resolveStaffAuth(req.headers, runtimeConfig);
           if (!staffAuth.ok) {
@@ -1893,6 +1991,7 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
     return json(res, 200, getTenantDeploymentFeatures(ctx, runtimeConfig));
   }
   if (await tryHandleProtectionValidationRoutes(req, res, url, ctx, runtimeConfig, serviceDeps)) return;
+  if (await tryHandleAssistantRoutes(req, res, url, ctx, runtimeConfig, buildAssistantDeps(runtimeConfig, serviceDeps))) return;
   if (method === 'GET' && path === '/v1/reports/protection-validation') {
     const gate = requirePermission(ctx, 'report:read');
     if (!gate.ok) return json(res, gate.status, gate.body);

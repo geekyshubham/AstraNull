@@ -44,6 +44,7 @@ import { formatDate, formatNumber, formatSeverityLabel, pluralize } from '../../
 import './findings-refined.css';
 import { findingStatusTone } from '../../lib/status-tone';
 import { severityTone } from '../../lib/severity-tone';
+import { usePublishAssistantContext } from '../../lib/assistant-page-store';
 
 /**
  * Everything the Refined findings view needs. Refresh, busy, and feedback state stay owned
@@ -425,6 +426,25 @@ export function FindingsRefined(props: FindingsRefinedProps) {
   const pageStart = ((serverPage.envelope?.page ?? page) - 1) * pageSize;
   useRestoreListPosition(Boolean(envelope) && findings.length > 0, initial);
   const inspectedFindingId = inspected && (inspected.entry === 'finding' || inspected.entry === 'group_member') ? inspected.finding_id ?? '' : '';
+  const contextTarget = targetFilter === 'all' ? undefined : targetOptions.find((option) => option.value === targetFilter)?.label ?? targetFilter;
+  usePublishAssistantContext({
+    route: 'findings',
+    filters: {
+      status: statusFilter === 'all' ? undefined : statusFilter,
+      severity: severityFilter === 'all' ? undefined : severityFilter,
+      target: contextTarget,
+      search: debouncedSearch || undefined,
+      view,
+      sort: view === 'grouped' ? sort : undefined,
+    },
+    facts: {
+      ...Object.fromEntries(Object.entries(estateTotals.totals).flatMap(([status, total]) => (typeof total === 'number' ? [[`Findings ${status.replace(/_/g, ' ')}`, total]] : []))),
+      'Open by severity': openComplete ? openKpis.openSeverityBreakdown : undefined,
+      'SLA breaches': slaComplete ? slaBreachCount : undefined,
+      'Matching filters': filtered || statusFilter !== 'all' ? matchTotal ?? undefined : undefined,
+      'Grouped checks': view === 'grouped' && groupsComplete ? groupCount : undefined,
+    },
+  });
 
   function inspectFinding(finding: DataItem) {
     const id = getString(finding, ['id']);

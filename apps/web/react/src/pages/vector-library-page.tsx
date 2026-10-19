@@ -37,6 +37,7 @@ import {
 } from '../lib/vector-library.mjs';
 import { PageHeader } from './page-components';
 import './vector-library-page.css';
+import { usePublishAssistantContext } from '../lib/assistant-page-store';
 
 const PAGE_SIZE = 25;
 const API_PAGE_SIZE = 100;
@@ -315,6 +316,23 @@ export function VectorLibraryPage({
     effectiveTargetAvailability ? `Fit: ${TARGET_AVAILABILITY_OPTIONS.find((option) => option.value === effectiveTargetAvailability)?.label ?? effectiveTargetAvailability}` : '',
     query.trim() ? `Search: “${query.trim()}”` : '',
   ].filter(Boolean);
+  usePublishAssistantContext({
+    route: 'checks',
+    filters: {
+      category: category || undefined,
+      section: section || undefined,
+      evidence: capability || undefined,
+      execution: execution || undefined,
+      fit: effectiveTargetAvailability || undefined,
+      search: query.trim() || undefined,
+    },
+    facts: {
+      'Checks shown': loading ? undefined : checkGroups.length,
+      'Runnable checks': runnableChecks.length,
+      'Fit target': selectedTarget ? getString(selectedTarget, ['value', 'id']) : undefined,
+      'Compatible runnable checks': fitForSelected?.status === 'loaded' ? compatibleRunnableCount : undefined,
+    },
+  });
 
   function clearFilters() {
     setQuery('');

@@ -52,6 +52,7 @@ import { severityCountTone, severityTone } from '../lib/severity-tone';
 // @ts-ignore Plain ESM keeps executive terminology directly testable with node:test.
 import { dashboardReadinessMessage, plainFindingTitle, plainInlineText, plainVerdictLabel } from '../lib/plain-language.mjs';
 import { PageHeader } from './page-components';
+import { usePublishAssistantContext } from '../lib/assistant-page-store';
 import './dashboard-page.css';
 
 type UiBadgeTone = BadgeTone;
@@ -712,6 +713,22 @@ export function DashboardPage({
     .map((slice) => `${slice.label} ${formatNumber(slice.count)}`)
     .join(', ')}`;
 
+  usePublishAssistantContext({
+    route: 'dashboard',
+    tab,
+    facts: {
+      'Readiness score': score === null ? 'Not scored yet' : `${score}/100`,
+      'Open findings': openOverview.total ?? undefined,
+      'Critical open': openOverview.total === null ? undefined : severity.critical,
+      'High open': openOverview.total === null ? undefined : severity.high,
+      'Declared targets': targetsUnavailable ? undefined : declaredTargets,
+      'Ownership verified': verifiedTargets ?? undefined,
+      'Targets with results': coveragePercent === null ? undefined : `${targetsWithEvidence} (${coveragePercent}%)`,
+      ...Object.fromEntries(postureTally.map((item) => [`Targets ${item.status === 'none' ? 'without results' : `with ${item.status}`}`, item.count])),
+      'Last validation': lastValidationLabel,
+      'Kill switch': killSwitchActive ? 'Active' : undefined,
+    },
+  });
   return (
     <div className="content dashboard-page">
       <PageHeader

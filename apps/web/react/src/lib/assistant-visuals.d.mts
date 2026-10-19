@@ -1,0 +1,26 @@
+export type DataColumn = { key: string; label: string; type: 'string' | 'number' | 'date' };
+export type DataCell = string | number | null;
+export type VisualType = 'table' | 'bar' | 'line' | 'donut';
+export type DataResult = { id: string; title: string; columns: DataColumn[]; rows: DataCell[][]; suggested_visual: VisualType };
+export type ToolCall = { name: string; summary: string };
+export type AnswerSegment = { type: 'markdown'; text: string } | { type: 'data'; id: string; visual: VisualType | '' };
+
+export const VISUAL_TYPES: readonly VisualType[];
+export const MAX_RESULTS: number;
+export const MAX_COLUMNS: number;
+export const MAX_ROWS: number;
+export const MAX_BAR_CATEGORIES: number;
+export const MAX_DONUT_SLICES: number;
+export function sanitizeDataResult(value: unknown): DataResult | null;
+export function sanitizeDataResults(value: unknown): DataResult[];
+export function sanitizeToolCalls(value: unknown): ToolCall[];
+export function splitAnswer(content: string, results: DataResult[] | undefined): AnswerSegment[];
+export function unplacedResults(segments: AnswerSegment[], results: DataResult[] | undefined): DataResult[];
+export function barSeries(result: DataResult): Array<{ label: string; value: number }> | null;
+export function lineSeries(result: DataResult): Array<{ at: number; label: string; value: number }> | null;
+export function donutSlices(result: DataResult): Array<{ label: string; value: number; share: number }> | null;
+export function chooseVisual(result: DataResult, requested: VisualType | '' | undefined): VisualType;
+export function summarizeVisual(result: DataResult, visual: VisualType): string;
+export function sortRows(rows: DataCell[][], index: number, direction: 'ascending' | 'descending', type: DataColumn['type']): DataCell[][];
+export function toCsv(result: DataResult): string;
+export function formatCell(value: DataCell, type: DataColumn['type']): string;

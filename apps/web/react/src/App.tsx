@@ -36,6 +36,7 @@ import {
   StaffLoginPage
 } from './pages/public-pages';
 import { RouteView } from './pages/router';
+import { AssistantWidget } from './components/assistant/assistant-widget';
 
 /**
  * Boot handoff: render nothing until config resolves.
@@ -392,6 +393,7 @@ export default function App() {
     {session ? (
       <EvidenceInspectorHost config={config} session={activeSession} data={scopedData} locationKey={`${path}|${route}`} />
     ) : null}
+    {session && activeSession.principal !== 'staff' ? <AssistantWidget config={config} session={activeSession} data={scopedData} /> : null}
     </ConfirmModalProvider>
   );
 }

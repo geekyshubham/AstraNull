@@ -479,6 +479,7 @@ describe('Ticket R7: demo tenant runs every customer check with no access or inp
         connectors: true,
         protection_validation: true,
         origin_clues: false,
+        assistant: false,
       });
 
       const prodFeat = await request(baseUrl, 'GET', '/v1/tenant/deployment-features', { headers: prodAdmin() });
@@ -490,6 +491,7 @@ describe('Ticket R7: demo tenant runs every customer check with no access or inp
         connectors: false,
         protection_validation: false,
         origin_clues: false,
+        assistant: false,
       });
 
       // Wildcard demo does not bypass feature gates in Postgres mode
@@ -515,6 +517,7 @@ describe('Ticket R7: demo tenant runs every customer check with no access or inp
           connectors: false,
           protection_validation: false,
           origin_clues: false,
+          assistant: false,
         });
       } finally {
         process.env.ASTRANULL_DEMO_AUTO_VERIFY_TENANTS = DEMO_TENANT;

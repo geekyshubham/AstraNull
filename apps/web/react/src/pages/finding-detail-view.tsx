@@ -49,11 +49,13 @@ import { findingStatusTone } from '../lib/status-tone';
 import { severityTone } from '../lib/severity-tone';
 import { FindingStatusBadge } from './refined/findings-refined';
 import { DetailBackLink } from '../components/layout/detail-back-link';
+import { AskAiButton } from '../components/assistant/ask-ai-button';
 import { VerdictReplay } from '../components/runs/verdict-replay';
 import { useEntityDocumentTitle } from '../components/layout/app-shell';
 import { FINDING_STATUS_DESCRIPTIONS, FINDING_STATUS_LABELS, findingStatusTransitions, type FindingStatus } from '../lib/findings-query.mjs';
 import { findingDecisionNote, findingStatusBucket } from '../lib/finding-groups.mjs';
 import { fixVerifiedBasis } from '../lib/finding-lifecycle.mjs';
+import { usePublishAssistantContext } from '../lib/assistant-page-store';
 
 type StatTone = NonNullable<BadgeProps['tone']>;
 
@@ -332,6 +334,21 @@ export function FindingDetailView({
   const laterVerdictId = getString(entity, ['last_verdict_id'], '');
   const hasLaterVerdict = Boolean(laterVerdictId) && laterVerdictId !== originalVerdictId;
   const closedAt = lineage.closedAt || getString(entity, ['closed_at'], '');
+  usePublishAssistantContext(entityId ? {
+    route: 'finding-detail',
+    entity: { type: 'finding', id: entityId },
+    facts: {
+      Finding: loading ? undefined : title,
+      Severity: loading ? undefined : severity,
+      Status: loading ? undefined : findingStatus,
+      Target: targetDisplay || undefined,
+      Check: checkId ? getString(data.checks?.find((check) => getString(check, ['check_id', 'id'], '') === checkId) ?? null, ['name', 'title'], checkId) : undefined,
+      'Attack family': vectorFamily || undefined,
+      'SLA due': slaDueAt || undefined,
+      'Affected targets': affectedTargetsLoading ? undefined : affectedTargets.length,
+      'Closed at': closedAt || undefined,
+    },
+  } : null);
   const closureBasis = fixVerifiedBasis(entity, decisionHistory.items);
   const retestAction = resolveFindingRetestAction(entity);
   const retestCheck = data.checks.find((check) => getString(check, ['check_id', 'id'], '') === checkId) ?? null;
@@ -800,6 +817,11 @@ export function FindingDetailView({
         </div>
         <div className="row-actions">
           <Button size="sm" variant="default" data-focus-key="finding-view-evidence" onClick={inspectOriginal}><Eye size={14} aria-hidden="true" />View original evidence</Button>
+          <AskAiButton
+            config={config}
+            session={session}
+            context={{ finding_id: entityId, ...(targetId && targetId !== 'Not reported' ? { target_id: targetId } : {}), label: title }}
+          />
         </div>
       </div>
 

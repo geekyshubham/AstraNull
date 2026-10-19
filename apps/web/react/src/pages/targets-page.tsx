@@ -35,6 +35,7 @@ import { useDesignVariant } from '../lib/design-variant';
 import { VariantSwitch } from '../components/ui/variant-switch';
 import { TargetsRefinedInventory, type TargetRowModel } from './refined/targets-refined';
 import { computeSubdomainGrouping } from '../lib/subdomain-grouping';
+import { usePublishAssistantContext } from '../lib/assistant-page-store';
 
 const TARGETS_PAGE_STYLES = `
 .targets-page .targets-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden; background: var(--border-soft); gap: 1px; }
@@ -339,6 +340,22 @@ export function TargetsPage({
   const unverifiedCount = topLevelList.length - verifiedCount;
   const units = useMemo(() => inventoryUnits(topLevelList), [topLevelList]);
   const filtersActive = Boolean(query.trim()) || verificationFilter !== 'all' || kindFilter !== 'all' || tagFilter !== 'all';
+  usePublishAssistantContext({
+    route: 'targets',
+    filters: {
+      search: query.trim() || undefined,
+      ownership: verificationFilter === 'all' ? undefined : verificationFilter,
+      kind: kindFilter === 'all' ? undefined : kindFilter,
+      tag: tagFilter === 'all' ? undefined : tagFilter,
+    },
+    facts: {
+      'Declared targets': topLevelList.length,
+      'Ownership verified': verifiedCount,
+      'Ownership not verified': unverifiedCount,
+      'Shown with filters': filtersActive ? filtered.length : undefined,
+      'Subdomains grouped': subdomainGrouping.hiddenIds.size || undefined,
+    },
+  });
 
   function clearCohort() {
     replaceRouteParams(Object.fromEntries(COHORT_ADDRESS_KEYS.map((key) => [key, null])));

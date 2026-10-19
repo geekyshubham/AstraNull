@@ -1,5 +1,6 @@
 import { isExplicitDemoTenant } from '../lib/demoAutoVerify.mjs';
 import { originCluesEnabledFor } from '../lib/originClues.mjs';
+import { assistantEnabledForTenant } from './assistant.mjs';
 import {
   connectorsEnabledFor,
   externalDiscoveryEnabledFor,
@@ -17,6 +18,7 @@ export function getTenantDeploymentFeatures(ctx, runtimeConfig) {
     connectors: connectorsEnabledFor(runtimeConfig, ctx?.tenantId),
     protection_validation: protectionValidationEnabledFor(runtimeConfig, ctx?.tenantId),
     origin_clues: originCluesEnabledFor(runtimeConfig, ctx?.tenantId),
+    assistant: assistantEnabledForTenant(runtimeConfig, ctx),
   };
 }
 

@@ -40,6 +40,7 @@ import type { PortalConfig, PortalData, PortalDataset, Session } from '../../lib
 import { formatDate, formatSeverityLabel, pluralize } from '../../lib/utils';
 import { FindingStatusBadge, SlaBadge, slaPresentation } from './findings-refined';
 import { severityTone } from '../../lib/severity-tone';
+import { usePublishAssistantContext } from '../../lib/assistant-page-store';
 import './findings-refined.css';
 import './finding-group-detail.css';
 
@@ -163,6 +164,20 @@ export function FindingGroupDetailPage({ data, config, session, onRefresh }: Fin
   )), [visibleAssets, assetFilter]);
   usePublishInspectorSequence(group ? { owner: `finding-group:${group.key}`, noun: 'affected targets in this group', items: memberSequence } : null);
   const inspectedMemberId = inspected?.entry === 'group_member' ? inspected.finding_id ?? '' : '';
+  usePublishAssistantContext(groupKey ? {
+    route: 'finding-group-detail',
+    entity: checkId ? { type: 'check', id: checkId } : undefined,
+    filters: { targets: assetFilter === 'all' ? undefined : assetFilter },
+    facts: {
+      Finding: group?.title,
+      Severity: group?.severity || undefined,
+      'Affected targets': group ? `${assetCounts.all}${complete ? '' : '+'}` : undefined,
+      'Open targets': group ? assetCounts.open : undefined,
+      'Accepted targets': group ? assetCounts.accepted : undefined,
+      'Closed targets': group ? assetCounts.closed : undefined,
+      'Open findings': group ? `${group.openCount}${complete ? '' : '+'}` : undefined,
+    },
+  } : null);
 
   function inspectMember(findingId: string, targetId: string) {
     openInspector({ entry: 'group_member', finding_id: findingId, target_id: targetId || undefined }, `member-${findingId}`);
