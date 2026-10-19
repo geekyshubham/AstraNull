@@ -6,6 +6,25 @@ import { requirePermission } from '../rbac.mjs';
 import { MAX_TOOL_CALLS, assistantToolGuide, executeAssistantTool, isAssistantToolName } from './assistantTools.mjs';
 import { buildInsightPrompt, parseInsightNarrative } from './assistantInsights.mjs';
 
+const STRUCTURED_PURPOSES = new Map();
+const PURPOSE_NAME = /^[a-z][a-z_]{1,30}$/;
+const STRUCTURED_TOOLS = new Set(['search_web']);
+
+/**
+ * Registers a structured job purpose: a single-answer job whose reply is parsed server-side into
+ * response[responseKey]. Purposes never get data tools; at most search_web.
+ */
+export function registerStructuredPurpose(name, { parse, responseKey = name, timeoutSeconds = 90, allowedTools = [], perUserPerMinute = 6 } = {}) {
+  if (!PURPOSE_NAME.test(name) || typeof parse !== 'function') throw new Error(`invalid structured purpose ${name}`);
+  const tools = allowedTools.filter((tool) => STRUCTURED_TOOLS.has(tool));
+  STRUCTURED_PURPOSES.set(name, { parse, responseKey, timeoutSeconds: Math.min(240, Math.max(30, timeoutSeconds)), allowedTools: tools, perUserPerMinute });
+}
+
+registerStructuredPurpose('insight', { parse: (content) => {
+  const insight = parseInsightNarrative(content);
+  return insight ? { ...insight, ai: true } : null;
+}, perUserPerMinute: 6 });
+
 // Jobs live in this process's memory only (dev-json and postgres alike): they are short-lived
 // and expire after jobTtlMs. Conversations themselves stay in the requesting browser.
 
@@ -13,7 +32,6 @@ export const ASSISTANT_ALLOWED_TOOLS = Object.freeze(['search_web', 'read_url_co
 export const RUNNER_ONLINE_WINDOW_MS = 60000;
 const RUNNER_TIMEOUT_SECONDS = 120;
 const RUNNER_DEADLINE_SECONDS = 240;
-const INSIGHT_TIMEOUT_SECONDS = 90;
 const MAX_TOOL_SUMMARY_CHARS = 140;
 const VISUAL_TYPES = Object.freeze(['table', 'bar', 'line', 'donut']);
 const ENTITY_TYPES = Object.freeze(['target', 'finding', 'run', 'check', 'scan', 'report', 'schedule', 'group']);
@@ -381,28 +399,34 @@ export function createAssistantStore({ now = () => Date.now() } = {}) {
     return { job_id: job.id, status: job.status };
   }
 
-  /** Queues a tool-less narrative for a computed insight board; the board itself never waits on it. */
-  async function createInsightJob(ctx, board, runtimeConfig, deps = {}) {
+  /**
+   * Queues a structured single-answer job (a registered purpose). The prompt is built by the
+   * caller from server-computed data; the parsed reply lands in response[responseKey].
+   */
+  async function createStructuredJob(ctx, { purpose, prompt, context = {} }, runtimeConfig, deps = {}) {
     sweep(runtimeConfig);
+    const spec = STRUCTURED_PURPOSES.get(purpose);
+    if (!spec) return fail(400, 'unknown_purpose');
     const cfg = runtimeConfig?.assistant ?? {};
     if (!cfg.enabled || !assistantEnabledForTenant(runtimeConfig, ctx)) return fail(403, 'assistant_not_enabled_for_tenant');
     if (!cfg.runnerToken || !runnerOnline()) return fail(503, 'assistant_runner_offline');
-    const userKey = `i:${ctx.tenantId}:${ctx.userId}`;
-    const wait = limited(userKey, cfg.insightsPerUserPerMinute ?? 6) || limited(`t:${ctx.tenantId}`, cfg.perTenantPerMinute ?? 30);
+    const userKey = `s:${purpose}:${ctx.tenantId}:${ctx.userId}`;
+    const wait = limited(userKey, spec.perUserPerMinute) || limited(`t:${ctx.tenantId}`, cfg.perTenantPerMinute ?? 30);
     if (wait) return fail(429, 'assistant_rate_limited', { retry_after_seconds: wait });
     hits.get(userKey).push(now());
     hits.get(`t:${ctx.tenantId}`).push(now());
+    const safeContext = Object.fromEntries(Object.entries(context).filter(([key, value]) => /^[a-z_]{1,30}$/.test(key) && ['string', 'number', 'boolean'].includes(typeof value)).map(([key, value]) => [key, typeof value === 'string' ? value.slice(0, 120) : value]));
     const job = {
       id: newJobId(),
-      purpose: 'insight',
+      purpose,
       tenant_id: ctx.tenantId,
       user_id: ctx.userId,
       status: 'queued',
-      prompt: buildInsightPrompt(board),
+      prompt: text(prompt).slice(0, 120000),
       model: cfg.model,
       tool_calls: 0,
       data_results: [],
-      context: { page_kind: text(board?.kind).slice(0, 40) },
+      context: safeContext,
       created_at: iso(),
       updated_at: iso(),
     };
@@ -414,9 +438,14 @@ export function createAssistantStore({ now = () => Date.now() } = {}) {
       action: 'assistant.job_created',
       resource_type: 'assistant_job',
       resource_id: job.id,
-      metadata: { job_id: job.id, purpose: 'insight', page_kind: job.context.page_kind },
+      metadata: { job_id: job.id, purpose, ...safeContext },
     });
     return { job_id: job.id, status: job.status };
+  }
+
+  /** Queues a tool-less narrative for a computed insight board; the board itself never waits on it. */
+  function createInsightJob(ctx, board, runtimeConfig, deps = {}) {
+    return createStructuredJob(ctx, { purpose: 'insight', prompt: buildInsightPrompt(board), context: { page_kind: text(board?.kind).slice(0, 40) } }, runtimeConfig, deps);
   }
 
   function getJob(ctx, id, runtimeConfig) {
@@ -453,8 +482,9 @@ export function createAssistantStore({ now = () => Date.now() } = {}) {
     next.status = 'running';
     next.lease_expires_at = now() + (runtimeConfig?.assistant?.leaseTimeoutMs ?? 300000);
     next.updated_at = iso();
-    if (next.purpose === 'insight') {
-      return { job_id: next.id, prompt: next.prompt, model: next.model, allowed_tools: [], timeout_seconds: INSIGHT_TIMEOUT_SECONDS, deadline_seconds: INSIGHT_TIMEOUT_SECONDS, max_tool_calls: 0, tools: false };
+    const structured = STRUCTURED_PURPOSES.get(next.purpose);
+    if (structured) {
+      return { job_id: next.id, prompt: next.prompt, model: next.model, allowed_tools: [...structured.allowedTools], timeout_seconds: structured.timeoutSeconds, deadline_seconds: structured.timeoutSeconds, max_tool_calls: 0, tools: false };
     }
     return {
       job_id: next.id,
@@ -481,12 +511,18 @@ export function createAssistantStore({ now = () => Date.now() } = {}) {
     job.updated_at = iso();
     delete job.prompt;
     delete job.lease_expires_at;
-    if (result.status === 'done' && job.purpose === 'insight') {
-      const insight = parseInsightNarrative(result.content);
-      if (insight) job.response = { insight: { ...insight, ai: true }, model: job.model };
+    const structured = STRUCTURED_PURPOSES.get(job.purpose);
+    if (result.status === 'done' && structured) {
+      let parsed = null;
+      try {
+        parsed = structured.parse(result.content, { sources: result.sources });
+      } catch {
+        parsed = null;
+      }
+      if (parsed) job.response = { [structured.responseKey]: parsed, sources: result.sources, model: job.model };
       else {
         job.status = 'failed';
-        job.error = 'insight_unparseable';
+        job.error = `${job.purpose}_unparseable`;
       }
     } else if (result.status === 'done') {
       const content = validateDataMarkers(result.content, job.data_results);
@@ -511,7 +547,7 @@ export function createAssistantStore({ now = () => Date.now() } = {}) {
     sweep(runtimeConfig);
     const job = jobs.get(text(id));
     if (!job) return fail(404, 'not_found');
-    if (job.purpose === 'insight') return fail(400, 'tools_not_allowed');
+    if (STRUCTURED_PURPOSES.has(job.purpose)) return fail(400, 'tools_not_allowed');
     if (job.status !== 'running' || !job.ctx) return fail(409, 'job_not_running', { job_status: job.status });
     const name = text(body?.name);
     if (!isAssistantToolName(name)) return fail(400, 'unknown_tool');
@@ -544,7 +580,7 @@ export function createAssistantStore({ now = () => Date.now() } = {}) {
     runnerSeenAt = 0;
   }
 
-  return { status, createJob, createInsightJob, getJob, cancelJob, leaseJob, completeJob, runJobTool, markRunnerSeen, sweep, _jobs: jobs, _reset };
+  return { status, createJob, createStructuredJob, createInsightJob, getJob, cancelJob, leaseJob, completeJob, runJobTool, markRunnerSeen, sweep, _jobs: jobs, _reset };
 }
 
 export const assistantStore = createAssistantStore();

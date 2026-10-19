@@ -14,6 +14,7 @@ import {
 import type { PortalConfig, Session } from '../../lib/types';
 import { Button } from '../ui/button';
 import { AssistantVisual } from './assistant-visual';
+import './ai-motion.css';
 import './insights.css';
 
 const TONE_LABEL: Record<InsightTone, string> = { critical: 'Needs attention', caution: 'Watch', positive: 'Healthy', neutral: 'Information' };
@@ -37,9 +38,9 @@ function useElapsed(running: boolean) {
   return seconds;
 }
 
-function Kpi({ kpi }: { kpi: InsightKpi }) {
+function Kpi({ kpi, index }: { kpi: InsightKpi; index: number }) {
   return (
-    <li className="ai-ins-kpi" data-tone={kpi.tone}>
+    <li className="ai-ins-kpi ai-reveal" data-tone={kpi.tone} style={{ ['--i' as string]: index }}>
       <span className="ai-ins-kpi-label">{kpi.label}</span>
       <span className="ai-ins-kpi-value tabular-nums">
         {formatKpi(kpi)}
@@ -53,9 +54,9 @@ function Kpi({ kpi }: { kpi: InsightKpi }) {
   );
 }
 
-function ActionRow({ action, onOpen }: { action: InsightAction; onOpen: (route: string) => void }) {
+function ActionRow({ action, onOpen, index }: { action: InsightAction; onOpen: (route: string) => void; index: number }) {
   return (
-    <li className="ai-ins-action" data-severity={action.severity}>
+    <li className="ai-ins-action ai-reveal" data-severity={action.severity} style={{ ['--i' as string]: index + 4 }}>
       <span className="ai-ins-sev">{action.severity === 'unknown' ? 'Note' : action.severity}</span>
       <span className="ai-ins-action-body">
         <strong>{action.title}</strong>
@@ -174,7 +175,7 @@ export function InsightsDialog({ config, session, scope, open, onClose }: {
 
           {board ? (
             <div className={insights.refreshing ? 'ai-ins-board is-refreshing' : 'ai-ins-board'}>
-              <section className="ai-ins-verdict" data-tone={board.verdict.tone} aria-label="Verdict">
+              <section className="ai-ins-verdict ai-reveal" data-tone={board.verdict.tone} aria-label="Verdict">
                 <span className="ai-ins-verdict-icon"><ToneIcon tone={board.verdict.tone} size={22} /></span>
                 <div className="ai-ins-verdict-text">
                   <span className="ai-ins-verdict-tone">{TONE_LABEL[board.verdict.tone]}</span>
@@ -188,7 +189,7 @@ export function InsightsDialog({ config, session, scope, open, onClose }: {
                 ) : null}
               </section>
 
-              {board.kpis.length ? <ul className="ai-ins-kpis" aria-label="Key numbers">{board.kpis.map((kpi) => <Kpi key={kpi.id} kpi={kpi} />)}</ul> : null}
+              {board.kpis.length ? <ul className="ai-ins-kpis" aria-label="Key numbers">{board.kpis.map((kpi, index) => <Kpi key={kpi.id} kpi={kpi} index={index} />)}</ul> : null}
 
               {!board.noAccess ? (
                 <section className="ai-ins-summary" aria-labelledby={`${ids}-summary`} data-ai={narrative?.ai ? 'true' : 'false'}>
@@ -216,7 +217,7 @@ export function InsightsDialog({ config, session, scope, open, onClose }: {
 
               {board.actions.length ? (
                 <Section id={`${ids}-actions`} title="What to do first">
-                  <ol className="ai-ins-actions">{board.actions.map((action) => <ActionRow key={`${action.title}-${action.route ?? ''}`} action={action} onOpen={goTo} />)}</ol>
+                  <ol className="ai-ins-actions">{board.actions.map((action, index) => <ActionRow key={`${action.title}-${action.route ?? ''}`} action={action} onOpen={goTo} index={index} />)}</ol>
                 </Section>
               ) : null}
 

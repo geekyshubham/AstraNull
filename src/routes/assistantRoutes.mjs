@@ -3,6 +3,7 @@ import { json, readJsonBody } from '../lib/http.mjs';
 import { requirePermission } from '../rbac.mjs';
 import { assistantEnabledForTenant, assistantStore } from '../services/assistant.mjs';
 import { buildInsightBoard, normalizeInsightRequest } from '../services/assistantInsights.mjs';
+import { ASSISTANT_FEATURE_ROUTES } from './assistantFeatureRoutes.mjs';
 
 const RUNNER_LEASE = '/internal/assistant/runner/lease';
 const RUNNER_RESULT = /^\/internal\/assistant\/runner\/jobs\/([A-Za-z0-9_]{1,64})\/result$/;
@@ -10,6 +11,12 @@ const RUNNER_TOOL = /^\/internal\/assistant\/runner\/jobs\/([A-Za-z0-9_]{1,64})\
 const RUNNER_TOOL_BODY_LIMIT = 16 * 1024;
 const JOB_PATH = /^\/v1\/assistant\/jobs\/([A-Za-z0-9_]{1,64})$/;
 const INSIGHTS_PATH = '/v1/assistant/insights';
+
+/**
+ * AI feature routes under /v1/assistant/*. Each entry: { path: string | RegExp, method, handle(req, res, ctx, runtimeConfig, deps, match) }.
+ * Every route here runs after the finding:read gate and must check the assistant switch itself (assistantFeatureGate).
+ */
+const FEATURE_ROUTES = ASSISTANT_FEATURE_ROUTES;
 const RUNNER_BODY_LIMIT = 256 * 1024;
 
 export function isAssistantRunnerRoute(pathname, method) {
@@ -86,7 +93,8 @@ export async function tryHandleAssistantRoutes(req, res, url, ctx, runtimeConfig
   const { pathname: path } = url;
   const method = req.method;
   const jobMatch = path.match(JOB_PATH);
-  if (path !== '/v1/assistant/status' && path !== '/v1/assistant/jobs' && path !== INSIGHTS_PATH && !jobMatch) return false;
+  const feature = matchFeatureRoute(path);
+  if (path !== '/v1/assistant/status' && path !== '/v1/assistant/jobs' && path !== INSIGHTS_PATH && !jobMatch && !feature) return false;
   const gate = requirePermission(ctx, 'finding:read');
   if (!gate.ok) {
     json(res, gate.status, gate.body);
@@ -106,6 +114,15 @@ export async function tryHandleAssistantRoutes(req, res, url, ctx, runtimeConfig
     } else {
       json(res, 202, result);
     }
+    return true;
+  }
+  if (feature) {
+    const route = FEATURE_ROUTES.find((entry) => entry.method === method && matchesPath(entry.path, path));
+    if (!route) {
+      json(res, 405, { error: 'method_not_allowed' });
+      return true;
+    }
+    await route.handle(req, res, ctx, runtimeConfig, deps, typeof route.path === 'string' ? null : path.match(route.path));
     return true;
   }
   if (path === INSIGHTS_PATH && method === 'POST') {
@@ -145,4 +162,12 @@ async function handleInsights(req, res, ctx, runtimeConfig, deps) {
   }
   res.setHeader('Cache-Control', 'no-store');
   return json(res, 200, { board: built.board, narrative });
+}
+
+function matchesPath(pattern, path) {
+  return typeof pattern === 'string' ? pattern === path : pattern.test(path);
+}
+
+function matchFeatureRoute(path) {
+  return FEATURE_ROUTES.some((entry) => matchesPath(entry.path, path));
 }

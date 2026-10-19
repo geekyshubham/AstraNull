@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { requestJson, sessionIdentity } from './api';
-import { pollDelay } from './assistant-api';
+import { pollStructuredJob } from './assistant-jobs';
 import {
   INSIGHT_CACHE_TTL_MS,
   insightCacheKey,
@@ -81,30 +81,8 @@ function errorCode(error: unknown): InsightsErrorCode {
   return 'failed';
 }
 
-function wait(ms: number, signal: AbortSignal) {
-  return new Promise<void>((resolve) => {
-    const timer = window.setTimeout(resolve, ms);
-    signal.addEventListener('abort', () => {
-      window.clearTimeout(timer);
-      resolve();
-    }, { once: true });
-  });
-}
-
-async function pollNarrative(config: PortalConfig, session: Session, jobId: string, signal: AbortSignal): Promise<InsightNarrative | null> {
-  const started = Date.now();
-  for (let attempt = 0; !signal.aborted && Date.now() - started < NARRATIVE_DEADLINE_MS; attempt += 1) {
-    await wait(pollDelay(attempt, Date.now() - started), signal);
-    if (signal.aborted) return null;
-    const job = await requestJson(config, session, `/v1/assistant/jobs/${encodeURIComponent(jobId)}`, { signal }) as Record<string, unknown> | null;
-    const status = String(job?.status ?? '');
-    if (status === 'done') {
-      const response = job?.response && typeof job.response === 'object' ? job.response as Record<string, unknown> : {};
-      return sanitizeNarrative(response.insight);
-    }
-    if (status === 'failed' || status === 'cancelled') return null;
-  }
-  return null;
+function pollNarrative(config: PortalConfig, session: Session, jobId: string, signal: AbortSignal) {
+  return pollStructuredJob(config, session, jobId, 'insight', sanitizeNarrative, signal, NARRATIVE_DEADLINE_MS);
 }
 
 /** Loads the board for a scope once the dialog opens, then enriches it with the AI summary. */
