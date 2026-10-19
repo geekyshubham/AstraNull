@@ -106,8 +106,9 @@ describe('waf offensive API', () => {
     assert.equal(suites.status, 200);
     assert.ok(suites.json.suites.some((s) => s.suite_id === 'sqli_offensive'));
 
+    // A customer other than the public demo login, which may select every check.
     const blocked = await request(baseUrl, 'POST', '/v1/test-runs', {
-      headers: adminHeaders,
+      headers: demoHeaders('admin', 'ten_demo', 'usr_customer_admin'),
       body: {
         check_id: 'waf.offensive_sqli.soc',
         target_group_id: 'tg_1',

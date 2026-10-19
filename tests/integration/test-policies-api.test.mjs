@@ -85,7 +85,8 @@ describe('test policies API', () => {
   });
 
   it('rejects SOC-gated checks as customer-runnable policy bindings', async () => {
-    const engineer = demoHeaders('engineer');
+    // A customer other than the public demo login, which may select every check.
+    const engineer = demoHeaders('engineer', 'ten_demo', 'usr_customer_engineer');
     const created = await request(baseUrl, 'POST', '/v1/test-policies', {
       headers: engineer,
       body: {
