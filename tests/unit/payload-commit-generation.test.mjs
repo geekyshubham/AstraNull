@@ -194,6 +194,43 @@ describe('portal payload commit generation', () => {
     assert.deepEqual(secretNames(revisitedSettings), [freshSecret.name]);
   });
 
+  it('refreshes Notifications on entry and rejects a late prior-route refresh from its cache', async () => {
+    const rules = [{ id: 'nrule_connected', channel: 'slack', enabled: true }];
+    const staleRefresh = deferred();
+    let notificationRequests = 0;
+    globalThis.fetch = async (input) => {
+      const requestPath = typeof input === 'string' ? input : input.url;
+      assert.equal(requestPath, '/v1/notifications');
+      notificationRequests += 1;
+      if (notificationRequests === 2) return jsonResponse(await staleRefresh.promise);
+      return jsonResponse({ rules: notificationRequests === 1 ? [] : rules, events: [] });
+    };
+    const options = { route: 'notifications', datasets: ['notifications'], includeCore: false };
+    assert.deepEqual((await fetchPortalData(CONFIG, SESSION, options)).notificationRules, []);
+
+    const gate = createPayloadCommitGate('integrations');
+    const oldRequest = runGenerationKeyedPayload({
+      gate,
+      routeKey: 'integrations',
+      load: (isCurrent) => fetchPortalDatasets(CONFIG, SESSION, ['notifications'], isCurrent),
+      onCommit: () => assert.fail('a prior-route refresh must not commit'),
+      onError: (error) => assert.fail(error),
+    });
+    assert.equal(notificationRequests, 2);
+    gate.activate('notifications');
+    const current = await fetchPortalData(CONFIG, SESSION, options);
+    assert.equal(notificationRequests, 3, 'route entry must read current rules instead of the cached empty list');
+    assert.deepEqual(current.notificationRules, rules);
+
+    staleRefresh.resolve({ rules: [], events: [] });
+    assert.equal(await oldRequest, false);
+    const cached = await fetchPortalData(CONFIG, SESSION, {
+      datasets: ['notifications'], includeCore: false,
+    });
+    assert.equal(notificationRequests, 3, 'non-route callers retain normal caching');
+    assert.deepEqual(cached.notificationRules, rules, 'late prior-route data cannot repopulate the cache');
+  });
+
   it('caches current non-App dataset callers by default', async () => {
     resetPortalDataCache();
     let secretsRequests = 0;

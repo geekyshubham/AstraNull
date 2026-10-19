@@ -163,5 +163,26 @@ test('risk/plan surfaces fit four widths in both themes with keyboard, reduced m
     await page.screenshot({ path, fullPage: true, animations: 'disabled' });
     await testInfo.attach(`risk-plan-${width}-${theme}`, { path, contentType: 'image/png' });
   }
+  // Wider system-font metrics must wrap actions, not expand the review grid.
+  const fontStress = await page.addStyleTag({ content: '.ai-risk-panel, .ai-risk-panel * { font-family: Verdana, sans-serif !important; }' });
+  try {
+    await page.setViewportSize({ width: 375, height: 1000 });
+    for (const theme of ['light', 'dark']) {
+      await page.evaluate((value) => { document.documentElement.dataset.theme = value; }, theme);
+      const geometry = await page.locator('.ai-risk-panel').evaluate((node) => ({ width: node.getBoundingClientRect().width, scroll: node.scrollWidth, page: document.documentElement.scrollWidth }));
+      expect(geometry.scroll, `wider-font ${theme} panel containment`).toBeLessThanOrEqual(geometry.width + 1);
+      expect(geometry.page).toBeLessThanOrEqual(376);
+      const review = panel(page).getByRole('button', { name: 'Review selected checks in scan launcher' });
+      const bounds = await review.boundingBox();
+      expect(bounds.height).toBeGreaterThanOrEqual(44);
+      expect(await review.evaluate((node) => node.scrollWidth <= node.clientWidth + 1)).toBe(true);
+      const path = testInfo.outputPath(`risk-plan-375-${theme}-wide-font.png`);
+      await page.evaluate(() => window.scrollTo(0, 0));
+      await page.screenshot({ path, fullPage: true, animations: 'disabled' });
+      await testInfo.attach(`risk-plan-375-${theme}-wide-font`, { path, contentType: 'image/png' });
+    }
+  } finally {
+    await fontStress.evaluate((node) => node.remove());
+  }
   noExecution(page);
 });

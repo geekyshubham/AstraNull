@@ -799,7 +799,10 @@ export async function fetchPortalData(
   requested.forEach((dataset) => {
     if (dataset === 'deploymentFeatures') return;
     if (!canReadDataset(session, dataset)) return;
-    if (options.force !== true && initialCache.loadedDatasets.has(dataset)) return;
+    // A channel mutation may still be refreshing Integrations when its user leaves.
+    // Re-enter the live delivery feed from the server, not a previously empty cache.
+    const refreshNotifications = options.route === 'notifications' && dataset === 'notifications';
+    if (options.force !== true && !refreshNotifications && initialCache.loadedDatasets.has(dataset)) return;
     loadEntries[dataset] = loaders[dataset]();
   });
   const loadedResults = await resolveLoadResults(loadEntries);
