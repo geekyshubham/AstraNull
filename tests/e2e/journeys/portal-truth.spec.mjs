@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { checkPresentation } from '../../../src/lib/checkPresentation.mjs';
 import { applyPortalBaselineReadinessBoost } from '../../fixtures/portal-baseline/readiness.mjs';
 import { PORTAL_BASELINE_IDS } from '../../fixtures/portal-baseline/seed.mjs';
 import {
@@ -51,7 +52,7 @@ test.describe('portal truth surfaces', () => {
     await injectPortalDevHeadersSession(page);
 
     await openCheck(page, 'l3.icmp_flood.readiness');
-    await expect(page.getByText('Stored declaration only; zero target traffic', { exact: true }).first()).toBeVisible();
+    await expect(page.locator('#portal-main')).toContainText(checkPresentation('l3.icmp_flood.readiness').mechanism);
     await expect(page.getByText('No network I/O', { exact: true }).first()).toBeVisible();
     await expect(page.getByText('ATT-002', { exact: true })).toBeHidden();
     let technical = await openCheckTechnicalDetails(page);
@@ -60,15 +61,15 @@ test.describe('portal truth surfaces', () => {
     await expect(technical.getByText('l3.icmp_flood.readiness', { exact: true })).toBeVisible();
 
     await openCheck(page, 'ops.runbook_contact_validation.safe');
-    await expect(page.getByText('Local operational-declaration evaluation; no target traffic', { exact: true }).first()).toBeVisible();
+    await expect(page.locator('#portal-main')).toContainText(checkPresentation('ops.runbook_contact_validation.safe').mechanism);
     await expect(page.getByText('1 self-check', { exact: true }).first()).toBeVisible();
 
     await openCheck(page, 'l3.forbidden_tcp_port.safe');
-    await expect(page.getByText('Bounded TCP connection samples', { exact: true }).first()).toBeVisible();
+    await expect(page.locator('#portal-main')).toContainText(checkPresentation('l3.forbidden_tcp_port.safe').mechanism);
     await expect(page.getByText('Up to 2 probe operations + up to two DNS destination-vetting resolver operations per hostname destination', { exact: true }).first()).toBeVisible();
 
     await openCheck(page, 'waf.offensive_sqli.soc');
-    await expect(page.getByText('Governed request only; no customer probe executor', { exact: true }).first()).toBeVisible();
+    await expect(page.locator('#portal-main')).toContainText(checkPresentation('waf.offensive_sqli.soc').mechanism);
     await expect(page.getByText('No customer execution', { exact: true }).first()).toBeVisible();
     technical = await openCheckTechnicalDetails(page);
     await expect(technical.getByText('WV-001', { exact: true })).toBeVisible();

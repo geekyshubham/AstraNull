@@ -771,9 +771,10 @@ export function FindingsRefined(props: FindingsRefinedProps) {
                     <span className="tabular-nums">{formatNumber(groupCount)}</span> {pluralize(groupCount, 'finding group')} from <span className="tabular-nums">{formatNumber(matchTotal)}</span> matching {pluralize(matchTotal, 'finding')}.
                   </>
                 ) : (
-                  <span title="Groups and their counts are partial until every matching finding is read.">
-                    <span className="tabular-nums">{formatNumber(groupCount)}</span> {pluralize(groupCount, 'finding group')} from <span className="tabular-nums">{formatNumber(grouped.items.length)}</span> of <span className="tabular-nums">{formatNumber(matchTotal)}</span> matching {pluralize(matchTotal, 'finding')}, still loading.
-                  </span>
+                  <>
+                    <span className="tabular-nums">{formatNumber(groupCount)}</span> {pluralize(groupCount, 'finding group')} from <span className="tabular-nums">{formatNumber(grouped.items.length)}</span> of <span className="tabular-nums">{formatNumber(matchTotal)}</span> matching {pluralize(matchTotal, 'finding')}.
+                    {' Groups and their counts are partial until every matching finding is read.'}
+                  </>
                 )
               ) : (
                 <><span className="tabular-nums">{formatNumber(matchTotal)}</span> matching {pluralize(matchTotal, 'finding')}, newest first.</>

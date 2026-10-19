@@ -22,6 +22,7 @@ import {
 } from '../../helpers/portal-playwright-server.mjs';
 import { injectPortalDevHeadersSession } from '../../helpers/portal-playwright-session.mjs';
 import { getStore } from '../../../src/store.mjs';
+import { checkPresentation } from '../../../src/lib/checkPresentation.mjs';
 import { acceptTargetObservation } from '../../../src/services/targetHistory.mjs';
 import { archiveOriginBinding, createOriginBinding } from '../../../src/services/originBindings.mjs';
 import { registerRetestLineage } from '../../../src/services/retestLineage.mjs';
@@ -171,7 +172,7 @@ test.describe('current release: evidence inspector and target workspace', () => 
     await page.setViewportSize({ width: 1440, height: 900 });
     await open(page, 'findings?inspect=finding&ev_finding=fnd_checkout_1');
     await expect(inspector(page).getByRole('heading', { name: 'Finding evidence' })).toBeVisible();
-    await expect(inspector(page)).toContainText('Origin Leak Scan');
+    await expect(inspector(page)).toContainText(checkPresentation(PORTAL_BASELINE_IDS.checkId).name);
 
     await page.goto(`${webBase}/app#findings?inspect=finding&ev_finding=fnd_does_not_exist`, { waitUntil: 'networkidle' });
     await expect(inspector(page).getByText('No longer available')).toBeVisible();
@@ -251,7 +252,7 @@ test.describe('current release: evidence inspector and target workspace', () => 
     await open(page, `finding-detail?id=${ids.findingId}&retest=review`);
     const dialog = page.getByRole('dialog', { name: 'Review this retest' });
     await expect(dialog).toBeVisible();
-    await expect(dialog).toContainText('Origin Leak Scan');
+    await expect(dialog).toContainText(checkPresentation(PORTAL_BASELINE_IDS.checkId).name);
     await expect(dialog).toContainText('never closes other domains');
     await dialog.getByRole('button', { name: 'Cancel' }).click();
     await expect(page).not.toHaveURL(/retest=review/);

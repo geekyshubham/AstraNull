@@ -126,8 +126,8 @@ test.describe('portal dynamic provenance', () => {
     const promotedTargetRow = page.locator('tr').filter({ hasText: PROVENANCE_DNS_LADDER.promotedTargetValue });
     await expect(verifiedSummary.locator('strong')).toHaveText(String(PROVENANCE_DNS_LADDER.baselineDnsVerified));
     await expect(page.locator('.targets-table-wrap tbody tr')).toHaveCount(PROVENANCE_DNS_LADDER.total);
-    // ADR-0008: pending targets read "Verification in progress" (no agent "observed from inside").
-    await expect(promotedTargetRow).toContainText('Verification in progress');
+    // ADR-0008: pending targets read "Pending" (no agent "observed from inside").
+    await expect(promotedTargetRow.locator('.target-status')).toHaveText('Pending');
 
     await restartPortalPlaywrightServer({ mutate: applyPortalProvenanceDnsLadderExpanded });
     const mutatedBaseUrl = getPortalPlaywrightBaseUrl();
@@ -137,7 +137,7 @@ test.describe('portal dynamic provenance', () => {
 
     await page.goto(`${mutatedBaseUrl}/app#targets`, { waitUntil: 'networkidle', timeout: 60_000 });
     await expect(verifiedSummary.locator('strong')).toHaveText(String(PROVENANCE_DNS_LADDER.mutatedDnsVerified));
-    await expect(promotedTargetRow).toContainText('Domain ownership verified');
+    await expect(promotedTargetRow.locator('.target-status')).toHaveText('Verified');
   });
 
   test('FT-PROV-dyn-04 configured WAF posture never reads as observed WAF detection; per-family history follows recorded observations', async ({ page }) => {

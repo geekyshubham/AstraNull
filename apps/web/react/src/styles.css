@@ -8489,15 +8489,34 @@ dialog.inspector-panel::backdrop {
 @media (max-width: 620px) { .cohort-panel { padding: var(--space-4); } }
 
 /* Direct declared-domain selection */
-.domain-picker { min-width: 0; margin: 0; padding: var(--space-4); border: 1px solid var(--border); border-radius: var(--radius-md); }
-.domain-picker-search { display: grid; gap: var(--space-2); }
-.domain-picker-search input { min-width: 0; min-height: 44px; width: 100%; padding: var(--space-2) var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--fg); background: var(--surface); }
-.domain-picker-options { display: grid; gap: var(--space-2); max-height: 320px; overflow-y: auto; }
-.domain-picker-option { display: flex; align-items: center; gap: var(--space-3); min-height: 44px; padding: var(--space-2); border-radius: var(--radius-sm); cursor: pointer; }
-.domain-picker-option:hover { background: var(--wash); }
-.domain-picker-option:focus-within { box-shadow: var(--focus-ring); }
-.domain-picker-option > span { display: grid; min-width: 0; gap: var(--space-1); overflow-wrap: anywhere; }
-.domain-picker-option small { color: var(--fg-2); }
+.domain-picker { display: flex; min-width: 0; flex-direction: column; overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface); }
+.domain-picker .domain-picker-head { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-3); padding: var(--space-3) var(--space-4) 0; }
+.domain-picker .domain-picker-label { color: var(--fg); font-size: var(--text-sm); font-weight: 600; }
+.domain-picker .domain-picker-count { color: var(--fg-2); font-family: var(--font-mono); font-size: var(--text-xs); font-variant-numeric: tabular-nums; }
+.domain-picker .domain-picker-tools { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--border-soft); }
+.domain-picker .domain-picker-search { display: flex; flex: 1 1 auto; min-width: 0; min-height: 40px; align-items: center; gap: var(--space-2); padding: 0 var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-sunk); color: var(--fg-2); font-weight: 400; }
+.domain-picker .domain-picker-search:focus-within { border-color: var(--focus-color); box-shadow: var(--focus-ring); }
+.domain-picker .domain-picker-search svg { flex: none; }
+.domain-picker .domain-picker-search input { flex: 1 1 auto; min-width: 0; min-height: 38px; padding: 0; border: 0; outline: 0; background: transparent; color: var(--fg); font: inherit; font-size: var(--text-sm); box-shadow: none; }
+.domain-picker .domain-picker-tools [data-ui='button'] { flex: none; white-space: nowrap; }
+.domain-picker .domain-picker-options { display: flex; max-height: 300px; flex-direction: column; margin: 0; padding: var(--space-1) 0; overflow-y: auto; list-style: none; overscroll-behavior: contain; }
+.domain-picker .domain-picker-option { display: flex; min-height: 44px; align-items: center; gap: var(--space-3); padding: var(--space-1-5) var(--space-4); color: var(--fg); font-weight: 400; cursor: pointer; transition: background-color var(--motion-fast) var(--ease-out-soft); }
+.domain-picker .domain-picker-option[data-depth='1'] { padding-inline-start: calc(var(--space-4) + var(--space-5)); }
+.domain-picker .domain-picker-option[data-depth='2'] { padding-inline-start: calc(var(--space-4) + var(--space-5) * 2); }
+.domain-picker .domain-picker-option[data-depth='3'] { padding-inline-start: calc(var(--space-4) + var(--space-5) * 3); }
+.domain-picker .domain-picker-option:hover { background: var(--surface-hover); }
+.domain-picker .domain-picker-option:has(input:checked) { background: var(--surface-selected); }
+.domain-picker .domain-picker-option:has(input:disabled:not(:checked)) { cursor: not-allowed; }
+.domain-picker .domain-picker-option input { flex: none; inline-size: 16px; block-size: 16px; min-height: 0; margin: 0; padding: 0; accent-color: var(--accent); }
+.domain-picker .domain-picker-option input:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.domain-picker .domain-picker-text { display: flex; min-width: 0; flex: 1 1 auto; align-items: baseline; justify-content: space-between; gap: var(--space-3); }
+.domain-picker .domain-picker-text strong { min-width: 0; overflow: hidden; color: var(--fg); font-size: var(--text-sm); font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.domain-picker .domain-picker-option[data-depth]:not([data-depth='0']) .domain-picker-text strong { font-weight: 400; }
+.domain-picker .domain-picker-text small { flex: none; color: var(--fg-2); font-size: var(--text-xs); }
+.domain-picker .domain-picker-option[data-incompatible] .domain-picker-text strong { color: var(--fg-2); }
+.domain-picker .domain-picker-note { margin: 0; padding: var(--space-3) var(--space-4); color: var(--fg-2); font-size: var(--text-sm); }
+@media (pointer: coarse) { .domain-picker .domain-picker-option input { width: 20px; height: 20px; } }
+@media (prefers-reduced-motion: reduce) { .domain-picker .domain-picker-option { transition: none; } }
 
 /* ═══ Visual QA pass · 2026-10-12 ═══ */
 

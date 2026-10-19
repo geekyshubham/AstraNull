@@ -474,6 +474,7 @@ describe('Ticket R7: demo tenant runs every customer check with no access or inp
       assert.equal(demoFeat.status, 200);
       assert.deepEqual(demoFeat.json, {
         demo_tenant: true,
+        all_checks_customer_runnable: true,
         waf_posture: true,
         external_discovery: true,
         connectors: true,
@@ -486,6 +487,7 @@ describe('Ticket R7: demo tenant runs every customer check with no access or inp
       assert.equal(prodFeat.status, 200);
       assert.deepEqual(prodFeat.json, {
         demo_tenant: false,
+        all_checks_customer_runnable: false,
         waf_posture: false,
         external_discovery: false,
         connectors: false,
@@ -512,6 +514,7 @@ describe('Ticket R7: demo tenant runs every customer check with no access or inp
         assert.equal(wildcardFeat.status, 200);
         assert.deepEqual(wildcardFeat.json, {
           demo_tenant: false,
+          all_checks_customer_runnable: false,
           waf_posture: false,
           external_discovery: false,
           connectors: false,

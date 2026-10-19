@@ -196,14 +196,14 @@ export function ProviderObservations({ rows, effectiveness, evaluating, note, ac
                   <span className="td-provider-mark" aria-hidden="true">
                     {row.logo ? <ProviderLogo provider={row.logo as ProviderLogoId} size={16} /> : <Shield size={14} />}
                   </span>
-                  {row.title}
+                  <span className="td-provider-layer-name">{row.title}</span>
                 </span>
                 <span className="td-provider-result" data-tone={tone} id={`td-provider-${row.family}-value`}>
                   {running ? <span className="td-evaluating"><Spinner size={14} />Detecting</span> : (
                     <>
                       <span className="td-provider-dot" aria-hidden="true" />
-                      <span className="td-provider-name">{result}</span>
-                      {how ? <span className="td-provider-how">{how}</span> : null}
+                      <span className="td-provider-name" title={result}>{result}</span>
+                      {how ? <span className="td-provider-how" title={how}>{how}</span> : null}
                       {when ? <span className="sr-only">{`, ${when}`}</span> : null}
                     </>
                   )}
@@ -276,6 +276,9 @@ export function ProviderObservations({ rows, effectiveness, evaluating, note, ac
             <summary>How this is decided</summary>
             <p className="td-copy">
               Only recent results from the current check version count. A layer reads <b>Protecting</b> after at least 3 recent checks across 2 rule types with no failure. <b>Bypassable via origin</b> appears only when an origin check finds your server answering directly.
+            </p>
+            <p className="td-copy">
+              <b>Managed rule markers</b> are harmless strings that common managed rule sets recognise. <b>Custom canary rules</b> use AstraNull&apos;s own token. Installed rule tokens and placements are not bound to these checks, so they do not verify custom-rule action or attack-class coverage.
             </p>
           </details>
         </div>

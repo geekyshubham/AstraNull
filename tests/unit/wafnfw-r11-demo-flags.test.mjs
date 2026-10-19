@@ -232,6 +232,7 @@ describe('Ticket R11: every feature-flag gate honours explicit demo tenants', ()
     assert.equal(featRes.status, 200);
     assert.deepEqual(featRes.json, {
       demo_tenant: true,
+      all_checks_customer_runnable: false,
       waf_posture: true,
       external_discovery: true,
       connectors: true,
@@ -302,6 +303,7 @@ describe('Ticket R11: every feature-flag gate honours explicit demo tenants', ()
     assert.equal(featRes.status, 200);
     assert.deepEqual(featRes.json, {
       demo_tenant: false,
+      all_checks_customer_runnable: false,
       waf_posture: false,
       external_discovery: false,
       connectors: false,
@@ -347,6 +349,7 @@ describe('Ticket R11: every feature-flag gate honours explicit demo tenants', ()
     assert.equal(resFeat.status, 200);
     assert.deepEqual(resFeat.json, {
       demo_tenant: false,
+      all_checks_customer_runnable: false,
       waf_posture: false,
       external_discovery: false,
       connectors: false,

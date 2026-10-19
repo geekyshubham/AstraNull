@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { applyPortalBaselineReadinessBoost } from '../../fixtures/portal-baseline/readiness.mjs';
+import { PORTAL_BASELINE_IDS } from '../../fixtures/portal-baseline/seed.mjs';
 import {
   getPortalPlaywrightBaseUrl,
   startPortalPlaywrightServer,
@@ -11,7 +12,7 @@ import {
 } from '../../helpers/portal-playwright-session.mjs';
 import { NAV_ROUTE_IDS } from '../../helpers/portal-routes.mjs';
 
-// Measured 26 /v1 requests for boot + 6 sidebar navigations + one Check library target selection
+// Measured 26 /v1 requests for boot + 6 sidebar navigations + one Check library target deep link
 // (2026-10, three consecutive runs, no variance). 45 keeps ~1.7x headroom so a fetch regression trips
 // the budget instead of hiding under it; re-tune from the OBSERVED_V1_REQUESTS line this spec logs.
 const REQUEST_BUDGET = 45;
@@ -53,13 +54,12 @@ test.describe('portal route request budget (WP1)', () => {
       await page.waitForTimeout(250);
       await page.waitForLoadState('networkidle');
       if (route.routeId === 'checks') {
-        // Choosing a target is the page's main selection; it adds one exact compatibility read.
+        // A target arrives by deep link (as from a target page); it adds one exact compatibility read.
         const compatibility = page.waitForResponse((response) => /\/v1\/targets\/[^/]+\/compatible-checks$/.test(new URL(response.url()).pathname));
-        await page.getByRole('button', { name: 'Target', exact: true }).click();
-        await page.getByRole('listbox', { name: 'Target' }).getByRole('option', { name: /checkout\.acme\.com/ }).first().click();
+        await page.evaluate((targetId) => { window.location.hash = `#checks?target=${encodeURIComponent(targetId)}`; }, PORTAL_BASELINE_IDS.targetId);
         expect((await compatibility).status()).toBe(200);
         await page.waitForLoadState('networkidle');
-        await expect(page.locator('.vector-target-note')).toContainText('checkout.acme.com');
+        await expect(page.locator('.vector-target-chip')).toContainText('checkout.acme.com');
       }
     }
     await expect(page.getByRole('button', { name: 'Test runs', exact: true })).toHaveCount(0);

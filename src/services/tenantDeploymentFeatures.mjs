@@ -1,4 +1,4 @@
-import { isExplicitDemoTenant } from '../lib/demoAutoVerify.mjs';
+import { isExplicitDemoTenant, matchesDemoAccount } from '../lib/demoAutoVerify.mjs';
 import { originCluesEnabledFor } from '../lib/originClues.mjs';
 import { assistantEnabledForTenant } from './assistant.mjs';
 import {
@@ -13,6 +13,7 @@ export function getTenantDeploymentFeatures(ctx, runtimeConfig) {
   const isDemo = isExplicitDemoTenant(ctx);
   return {
     demo_tenant: isDemo,
+    all_checks_customer_runnable: matchesDemoAccount(ctx),
     waf_posture: wafPostureEnabledFor(runtimeConfig, ctx?.tenantId),
     external_discovery: externalDiscoveryEnabledFor(runtimeConfig, ctx?.tenantId),
     connectors: connectorsEnabledFor(runtimeConfig, ctx?.tenantId),

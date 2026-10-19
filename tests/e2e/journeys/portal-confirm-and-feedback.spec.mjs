@@ -73,8 +73,8 @@ test.describe('portal in-app confirmations (FT-CONFIRM-01)', () => {
 
     await expect.poll(() => new URL(page.url()).hash).toBe('#checks');
     await expect(page.getByRole('heading', { level: 1, name: 'Check library' })).toBeVisible({ timeout: 15_000 });
-    await expect(page.locator('.vector-target-note')).toContainText('Browsing without a target');
-    await expect(page.getByRole('button', { name: 'Target', exact: true })).toBeEnabled();
+    await expect(page.locator('.vector-target-chip')).toHaveCount(0);
+    await expect(page.getByRole('group', { name: /check categor/i })).toBeVisible();
     await expect(page.getByRole('button', { name: /^(Review run|Start check)$/ })).toHaveCount(0);
     expect(runPosts, 'navigation must not start a run').toHaveLength(0);
     expect(nativeDialogs, 'no native window.confirm may be raised').toEqual([]);

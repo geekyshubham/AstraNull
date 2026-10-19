@@ -198,6 +198,15 @@ export function VectorLibraryPage({
   const [reloadKey, setReloadKey] = useState(0);
   const [showAdvanced, setShowAdvanced] = useState(false);
 
+  useEffect(() => {
+    const onHashChange = () => {
+      const next = getRouteParam('target');
+      if (next !== targetId) chooseTarget(next);
+    };
+    window.addEventListener('hashchange', onHashChange);
+    return () => window.removeEventListener('hashchange', onHashChange);
+  }, [targetId]);
+
   const canStartBoundedRun = RUN_START_ROLES.has(String(session.role ?? '').trim().toLowerCase());
 
   useEffect(() => {

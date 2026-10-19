@@ -4,6 +4,7 @@ import AxeBuilder from '@axe-core/playwright';
 import { createPortalSourceServer as createViteServer } from '../../helpers/portal-playwright-server.mjs';
 import { applyPortalBaselineReadinessBoost } from '../../fixtures/portal-baseline/readiness.mjs';
 import { PORTAL_BASELINE_IDS } from '../../fixtures/portal-baseline/seed.mjs';
+import { checkPresentation } from '../../../src/lib/checkPresentation.mjs';
 import {
   startPortalPlaywrightServer,
   stopPortalPlaywrightServer,
@@ -260,7 +261,7 @@ test.describe('current-release customer pages', () => {
     await expect(legacy.getByRole('button', { name: /^Edit schedule/ })).toHaveCount(0);
     await expect(legacy.getByRole('link', { name: /^Create replacement for schedule / })).toHaveAttribute('href', /#test-policies\?check=/);
 
-    await bound.getByRole('link', { name: /Origin Leak Scan/i }).click();
+    await bound.getByRole('link', { name: checkPresentation(PORTAL_BASELINE_IDS.checkId).name }).click();
     await expect(page).toHaveURL(new RegExp(`#check-detail\\?id=${PORTAL_BASELINE_IDS.checkId.replaceAll('.', '\\.')}&policy=${BOUND_POLICY_ID}`));
     await expect(page.getByText('Opened from schedule')).toBeVisible();
     await expect(page.getByRole('link', { name: 'Back to schedule' })).toHaveAttribute('href', new RegExp(`policy-detail\\?id=${BOUND_POLICY_ID}`));
@@ -688,7 +689,7 @@ test.describe('current-release customer pages', () => {
     await expect(facts).toContainText('Runnable checks');
     await expect(facts).toContainText('Fit this target');
     await expect(facts.locator('div').filter({ hasText: 'Fit this target' }).locator('dd').first()).toHaveText(String(distinctServerChecks));
-    await expect(page.locator('.vector-target-note')).toContainText('checkout.acme.com');
+    await expect(page.locator('.vector-target-chip')).toContainText('checkout.acme.com');
   });
 
   test('check detail: exact read with server compatibility for the caller target; unknown check is not substituted', async ({ page }) => {

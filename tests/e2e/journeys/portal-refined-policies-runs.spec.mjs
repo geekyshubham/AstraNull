@@ -34,7 +34,6 @@ const ids = PORTAL_BASELINE_IDS;
 const SECOND_GROUP_ID = 'tg_refined_api';
 const SECOND_GROUP_NAME = 'refined-api';
 const SECOND_TARGET_ID = 'tgt_refined_api_1';
-const HOST_CHECK = 'Firewall Exposure Scan (Safe)';
 const CANCEL_RUN_ID = 'run_refined_cancel';
 const FINALIZE_RUN_ID = 'run_refined_finalize';
 const COMPLETED_RUN_ID = ids.readinessRunId;
@@ -139,6 +138,15 @@ function forbidNativeDialogs(page) {
   return raised;
 }
 
+async function chooseScheduleCheck(scope, checkId) {
+  const picker = scope.locator('.rf-check-picker, .rf-check-summary').first();
+  await expect(picker).toBeVisible({ timeout: 10_000 });
+  if (await scope.locator('.rf-check-summary').count()) await scope.locator('.rf-check-summary').getByRole('button', { name: 'Change' }).click();
+  await scope.getByRole('searchbox', { name: 'Find a check' }).fill(checkId);
+  await scope.getByRole('radio', { name: new RegExp(checkId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')) }).click();
+  await expect(scope.locator('.rf-check-summary')).toContainText(checkId);
+}
+
 test.describe('Refined test policies and runs (G03)', () => {
   test.beforeAll(async () => {
     await startPortalPlaywrightServer({ mutate: applyFixture });
@@ -183,7 +191,7 @@ test.describe('Refined test policies and runs (G03)', () => {
       const panel = page.locator('section.rf-create');
       await expect(panel).toBeVisible();
 
-      await chooseCustomSelect(panel, 'Check', HOST_CHECK);
+      await chooseScheduleCheck(panel, 'l3.firewall_exposure_scan.safe');
       const submit = panel.getByRole('button', { name: 'Create schedule', exact: true });
       await expect(submit).toBeDisabled();
       await panel.locator('.domain-picker-option').filter({ hasText: 'checkout.acme.com' }).getByRole('checkbox').check();
@@ -213,7 +221,7 @@ test.describe('Refined test policies and runs (G03)', () => {
       await expect(panel.locator('.rf-readiness')).toContainText('Ready to create 1 schedule');
 
       // The successful write is in the schedule table.
-      await expect(page.getByRole('row').filter({ hasText: 'checkout.acme.com' }).filter({ hasText: HOST_CHECK }).first())
+      await expect(page.getByRole('row').filter({ hasText: 'checkout.acme.com' }).filter({ hasText: 'l3.firewall_exposure_scan.safe' }).first())
         .toBeVisible({ timeout: 15_000 });
       expect(errors).toEqual([]);
     });

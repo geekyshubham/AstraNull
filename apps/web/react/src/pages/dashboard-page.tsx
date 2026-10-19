@@ -50,7 +50,7 @@ import type { BadgeTone, DataItem, PortalConfig, PortalData, ReadinessFactor, Se
 import { formatDate, formatNumber, formatSeverityLabel, pluralize, scoreTone } from '../lib/utils';
 import { severityCountTone, severityTone } from '../lib/severity-tone';
 // @ts-ignore Plain ESM keeps executive terminology directly testable with node:test.
-import { dashboardReadinessMessage, plainFindingTitle, plainInlineText, plainVerdictLabel } from '../lib/plain-language.mjs';
+import { dashboardReadinessMessage, plainFindingTitle, plainInlineText, plainVerdictLabel, plainVerificationLabel } from '../lib/plain-language.mjs';
 import { PageHeader } from './page-components';
 import { usePublishAssistantContext } from '../lib/assistant-page-store';
 import './dashboard-page.css';
@@ -674,7 +674,7 @@ export function DashboardPage({
     {
       key: 'verification',
       label: 'Ownership',
-      render: (row) => <VerifyChip state={row.verificationState} />
+      render: (row) => <VerifyChip state={row.verificationState} label={shortOwnershipLabel(row.verificationState)} provenance={plainVerificationLabel(row.verificationState)} />
     }
   ];
 
@@ -1095,6 +1095,14 @@ export function DashboardPage({
       ) : null}
     </div>
   );
+}
+
+/** Short ownership wording for the compact posture table; the full state stays in the chip title. */
+function shortOwnershipLabel(state: string): string {
+  const key = state.trim().toLowerCase();
+  if (['dns_verified', 'provider_verified', 'user_confirmed'].includes(key)) return 'Verified';
+  if (['pending', 'dns_pending', 'checking'].includes(key)) return 'In progress';
+  return 'Not verified';
 }
 
 /** Subdomain count and one tag; a `domain:` tag that repeats the hostname is dropped. */
