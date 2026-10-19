@@ -38,6 +38,7 @@ import { findingStatus, fixVerifiedBasisHint, isFindingOpen } from '../lib/findi
 // @ts-ignore Plain ESM keeps truthfulness rules executable in focused node tests.
 import { addTargetTag, apiErrorCode, demoTenantSignal, edgeDetectionReasonExplanation, isActiveDnsChallenge, isTargetRunEligible, ownershipMethodLabel, ownershipStepStatus, removeTargetTag, targetDeclarationProvenanceLabel, targetDisplayValue, uniqueRecentRuns, uniqueVerificationHistory } from '../lib/target-detail.mjs';
 import { usePublishAssistantContext } from '../lib/assistant-page-store';
+import { AiInsightsButton } from '../components/assistant/insights-button';
 import { VerifyChip, resolveTargetVerificationProvenance } from '../lib/verify-chip';
 import { buildDetailHref, getRouteParam, replaceRouteParams } from '../lib/route-params';
 import type { AcceptedExecution, DataItem, PortalConfig, Session } from '../lib/types';
@@ -1282,6 +1283,7 @@ export function TargetDetailView({
         </div>
         {hasTarget ? (
           <div className="td-head-actions">
+            <AiInsightsButton config={config} session={session} scope={{ route: 'target-detail', kind: 'target', label: 'Target', subject: title || undefined, entity: { id: entityId } }} />
             {proveOwnershipFirst ? (
               <Button onClick={proveOwnership}>
                 <ShieldCheck size={15} aria-hidden="true" />Prove ownership

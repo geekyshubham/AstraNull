@@ -61,7 +61,7 @@ test('a job is queued, leased by the runner, answered and read back by its owner
   const idle = await request(on.baseUrl, 'POST', '/internal/assistant/runner/lease', { headers: runner() });
   assert.equal(idle.status, 204);
   const status = await request(on.baseUrl, 'GET', '/v1/assistant/status', { headers: demoHeaders('viewer') });
-  assert.deepEqual(status.json, { enabled: true, tenant_enabled: true, runner_online: true, model: 'gemini-3.8-flash-high', reason: null, capabilities: { data_tools: true, visuals: true, page_context: true, web_search: true } });
+  assert.deepEqual(status.json, { enabled: true, tenant_enabled: true, runner_online: true, model: 'gemini-3.8-flash-high', reason: null, capabilities: { data_tools: true, visuals: true, page_context: true, web_search: true, insights: true } });
   assert.ok(!status.text.includes(TOKEN));
 
   const created = await request(on.baseUrl, 'POST', '/v1/assistant/jobs', { headers: demoHeaders('viewer'), body: ask });
@@ -164,4 +164,35 @@ test('the runner calls data tools for the asker and the answer carries reference
   assert.deepEqual(chart.rows.map((row) => row[0]).sort(), ['high', 'medium']);
   const toolAudits = getStore().auditLog.filter((entry) => entry.action === 'assistant.tool_called' && entry.resource_id === id);
   assert.deepEqual(toolAudits.map((entry) => entry.metadata.tool), ['query_data', 'list_audit_events']);
+});
+
+test('AI insights return a computed board and queue a tool-less narrative', async () => {
+  const hidden = await request(off.baseUrl, 'POST', '/v1/assistant/insights', { headers: demoHeaders(), body: { kind: 'findings' } });
+  assert.equal(hidden.status, 404);
+  const invalid = await request(on.baseUrl, 'POST', '/v1/assistant/insights', { headers: demoHeaders(), body: { kind: 'finding' } });
+  assert.equal(invalid.status, 400);
+
+  const offline = await request(on.baseUrl, 'POST', '/v1/assistant/insights', { headers: demoHeaders('viewer'), body: { kind: 'finding', entity: { id: 'fnd_1' } } });
+  assert.equal(offline.status, 200);
+  assert.equal(offline.json.board.kind, 'finding');
+  assert.equal(offline.json.board.subject, 'Rate limiting missing on origin.test');
+  assert.deepEqual(offline.json.narrative, { status: 'unavailable', reason: 'assistant_runner_offline' });
+
+  const missing = await request(on.baseUrl, 'POST', '/v1/assistant/insights', { headers: demoHeaders(), body: { kind: 'finding', entity: { id: 'fnd_nope' } } });
+  assert.equal(missing.status, 404);
+  const audit = await request(on.baseUrl, 'POST', '/v1/assistant/insights', { headers: demoHeaders('viewer'), body: { kind: 'audit' } });
+  assert.equal(audit.json.board.scope.no_access, true);
+  assert.equal(audit.json.narrative.status, 'not_requested');
+
+  await request(on.baseUrl, 'POST', '/internal/assistant/runner/lease', { headers: runner() });
+  const queued = await request(on.baseUrl, 'POST', '/v1/assistant/insights', { headers: demoHeaders(), body: { kind: 'findings' } });
+  assert.equal(queued.json.narrative.status, 'queued');
+  const lease = await request(on.baseUrl, 'POST', '/internal/assistant/runner/lease', { headers: runner() });
+  assert.deepEqual(lease.json.allowed_tools, []);
+  assert.equal(lease.json.tools, false);
+  assert.match(lease.json.prompt, /UNTRUSTED_DATA_BEGIN insight board/);
+  const done = await request(on.baseUrl, 'POST', `/internal/assistant/runner/jobs/${lease.json.job_id}/result`, { headers: runner(), body: { status: 'done', content: '{"summary":"One high finding is open.","takeaways":["Add a rate limit rule."]}' } });
+  assert.equal(done.status, 200);
+  const job = await request(on.baseUrl, 'GET', `/v1/assistant/jobs/${lease.json.job_id}`, { headers: demoHeaders() });
+  assert.deepEqual(job.json.response.insight, { summary: 'One high finding is open.', takeaways: ['Add a rate limit rule.'], ai: true });
 });

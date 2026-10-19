@@ -41,6 +41,7 @@ import { formatDate, formatSeverityLabel, pluralize } from '../../lib/utils';
 import { FindingStatusBadge, SlaBadge, slaPresentation } from './findings-refined';
 import { severityTone } from '../../lib/severity-tone';
 import { usePublishAssistantContext } from '../../lib/assistant-page-store';
+import { usePublishInsightScope } from '../../lib/assistant-insights-api';
 import './findings-refined.css';
 import './finding-group-detail.css';
 
@@ -177,6 +178,16 @@ export function FindingGroupDetailPage({ data, config, session, onRefresh }: Fin
       'Closed targets': group ? assetCounts.closed : undefined,
       'Open findings': group ? `${group.openCount}${complete ? '' : '+'}` : undefined,
     },
+  } : null);
+
+  const groupFindingIds = useMemo(() => (group?.assets ?? []).flatMap((asset) => asset.members.map((member) => member.findingId)), [group]);
+  usePublishInsightScope(groupKey && groupFindingIds.length ? {
+    route: 'finding-group-detail',
+    kind: 'finding_group',
+    label: 'Finding group',
+    subject: group?.title,
+    entity: { id: groupKey.slice(0, 120).replace(/[^A-Za-z0-9_.:-]/g, '_') || 'group' },
+    finding_ids: groupFindingIds,
   } : null);
 
   function inspectMember(findingId: string, targetId: string) {

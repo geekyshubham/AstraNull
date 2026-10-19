@@ -23,6 +23,8 @@ type AppShellProps = {
   showRoleSwitcher?: boolean;
   accessNotice?: string;
   onDismissAccessNotice?: () => void;
+  /** Page-level actions shown in the topbar, such as AI insights. */
+  topbarActions?: ReactNode;
   children: ReactNode;
 };
 
@@ -166,6 +168,7 @@ export function AppShell({
   showRoleSwitcher = false,
   accessNotice = '',
   onDismissAccessNotice,
+  topbarActions,
   children
 }: AppShellProps) {
   const [theme, setTheme] = useState<'light' | 'dark'>(() =>
@@ -506,6 +509,7 @@ export function AppShell({
             <b aria-current="page">{crumb.label}</b>
           </nav>
           <div className="topbar-spacer" aria-hidden="true" />
+          {topbarActions}
           <ThemeToggle theme={theme} onToggle={toggleTheme} />
         </header>
         {data.error ? (

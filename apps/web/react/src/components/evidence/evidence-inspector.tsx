@@ -37,6 +37,7 @@ import { Badge } from '../ui/badge';
 import { AnchorButton, Button } from '../ui/button';
 import { InspectorPanel } from '../ui/inspector-panel';
 import { AskAiButton } from '../assistant/ask-ai-button';
+import { AiInsightsButton } from '../assistant/insights-button';
 import { sequencePosition, useInspectorSequence } from './inspector-sequence';
 import { ExecutionInspector } from './execution-inspector';
 import { NotTestedNote } from '../runs/not-tested-note';
@@ -548,6 +549,12 @@ export function EvidenceInspectorHost({ config, session, data, locationKey }: Ev
         session={session}
         variant="ghost"
         context={{ finding_id: ref.finding_id, ...(targetId ? { target_id: targetId } : {}), label: subject.title || targetLabel || 'This finding' }}
+      />,
+      <AiInsightsButton
+        key="ai-insights"
+        config={config}
+        session={session}
+        scope={{ route: 'finding-detail', kind: 'finding', label: 'Finding', subject: subject.title || targetLabel || undefined, entity: { id: ref.finding_id } }}
       />,
     );
   }

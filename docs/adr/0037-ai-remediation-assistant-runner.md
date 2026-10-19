@@ -28,6 +28,15 @@ Added 2026-10-19 at the product owner's request ("it was able to interact with t
 5. **Visuals.** `query_data` registers each table as `Q1`, `Q2`, …; the answer places `[[data:Q1]]` or `[[data:Q1|bar]]` (table, bar, line, donut) where a chart belongs. The server drops markers for ids it did not register and returns only referenced tables in `response.data_results`, which the portal renders without injecting HTML.
 6. **Agent loop.** The runner re-runs `agy` statelessly with the transcript plus each tool result, under the same sandbox flags, allow list, per-step timeout and an overall 240-second deadline. Once the tool budget is spent it runs one last step that must answer without tools.
 
+## AI insights
+
+Added 2026-10-19 at the product owner's request ("just like what we had with AI insights in the DNSPM … on each page or even in the details … an AI insights button"), matching the CheckRed DNSPM page insights.
+
+1. **Computed first.** `POST /v1/assistant/insights` builds a board for the open page or record (verdict, up to 5 KPIs, up to 6 chart or table sections, up to 5 actions) from the same read-only service functions as the data tools, with the caller's tenant, role and scopes. Datasets the caller cannot read are skipped silently, without `rbac.denied` noise, and listed as unavailable. Every number on the board is computed server-side.
+2. **Narrative second.** When the runner is online, the server queues an insight job whose prompt holds only the board, fenced as untrusted data, and asks for a JSON `{ summary, takeaways }`. The job leases with no allowed tools (no web search, no page reads, no data tools), a 90-second limit and its own per-user rate limit. The parsed briefing is stripped of markdown and links, secret-redacted and capped. Anything unparseable fails the job, and the portal keeps the computed summary.
+3. **Entry points.** The portal topbar shows "AI insights" on every customer page, scoped to the route and its record. Target, finding and evidence views carry inline entries. A finding group publishes its member finding ids, because the route alone cannot name them. Action links are limited to in-portal hash routes.
+4. **Governance.** Insights follow the assistant switch (`ASTRANULL_ASSISTANT_ENABLED` and tenant opt-in). Narrative jobs are audited as `assistant.job_created` with `purpose: insight` and the page kind only.
+
 ## Consequences
 
 - The assistant is available only while a runner is connected; the portal shows a setup state when no runner has polled in the last 60 seconds.

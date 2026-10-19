@@ -47,7 +47,7 @@ describe('assistant status', () => {
     assert.equal(store.status(alice, cfg).reason, 'runner_offline');
     store.markRunnerSeen();
     const ready = store.status(alice, cfg);
-    assert.deepEqual(ready, { enabled: true, tenant_enabled: true, runner_online: true, model: 'gemini-3.8-flash-high', reason: null, capabilities: { data_tools: true, visuals: true, page_context: true, web_search: true } });
+    assert.deepEqual(ready, { enabled: true, tenant_enabled: true, runner_online: true, model: 'gemini-3.8-flash-high', reason: null, capabilities: { data_tools: true, visuals: true, page_context: true, web_search: true, insights: true } });
     assert.ok(!JSON.stringify(ready).includes(TOKEN));
   });
 

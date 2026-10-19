@@ -1,13 +1,15 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { json, readJsonBody } from '../lib/http.mjs';
 import { requirePermission } from '../rbac.mjs';
-import { assistantStore } from '../services/assistant.mjs';
+import { assistantEnabledForTenant, assistantStore } from '../services/assistant.mjs';
+import { buildInsightBoard, normalizeInsightRequest } from '../services/assistantInsights.mjs';
 
 const RUNNER_LEASE = '/internal/assistant/runner/lease';
 const RUNNER_RESULT = /^\/internal\/assistant\/runner\/jobs\/([A-Za-z0-9_]{1,64})\/result$/;
 const RUNNER_TOOL = /^\/internal\/assistant\/runner\/jobs\/([A-Za-z0-9_]{1,64})\/tool$/;
 const RUNNER_TOOL_BODY_LIMIT = 16 * 1024;
 const JOB_PATH = /^\/v1\/assistant\/jobs\/([A-Za-z0-9_]{1,64})$/;
+const INSIGHTS_PATH = '/v1/assistant/insights';
 const RUNNER_BODY_LIMIT = 256 * 1024;
 
 export function isAssistantRunnerRoute(pathname, method) {
@@ -84,7 +86,7 @@ export async function tryHandleAssistantRoutes(req, res, url, ctx, runtimeConfig
   const { pathname: path } = url;
   const method = req.method;
   const jobMatch = path.match(JOB_PATH);
-  if (path !== '/v1/assistant/status' && path !== '/v1/assistant/jobs' && !jobMatch) return false;
+  if (path !== '/v1/assistant/status' && path !== '/v1/assistant/jobs' && path !== INSIGHTS_PATH && !jobMatch) return false;
   const gate = requirePermission(ctx, 'finding:read');
   if (!gate.ok) {
     json(res, gate.status, gate.body);
@@ -106,6 +108,10 @@ export async function tryHandleAssistantRoutes(req, res, url, ctx, runtimeConfig
     }
     return true;
   }
+  if (path === INSIGHTS_PATH && method === 'POST') {
+    await handleInsights(req, res, ctx, runtimeConfig, deps);
+    return true;
+  }
   if (jobMatch && method === 'GET') {
     const job = assistantStore.getJob(ctx, jobMatch[1], runtimeConfig);
     json(res, job ? 200 : 404, job ?? { error: 'not_found' });
@@ -118,4 +124,25 @@ export async function tryHandleAssistantRoutes(req, res, url, ctx, runtimeConfig
   }
   json(res, 405, { error: 'method_not_allowed' });
   return true;
+}
+
+async function handleInsights(req, res, ctx, runtimeConfig, deps) {
+  if (!runtimeConfig.assistant?.enabled) return json(res, 404, { error: 'assistant_disabled' });
+  if (!assistantEnabledForTenant(runtimeConfig, ctx)) return json(res, 403, { error: 'assistant_not_enabled_for_tenant' });
+  const body = await readJsonBody(req, 16 * 1024);
+  const request = normalizeInsightRequest(body);
+  if (!request) return json(res, 400, { error: 'invalid_insight_request', message: 'Send { kind, entity?: { id }, finding_ids? } for a known page.' });
+  const built = await buildInsightBoard(ctx, request, deps.tools ?? {});
+  if (built.error) return json(res, built.status, { error: built.error });
+  let narrative = { status: 'not_requested' };
+  if (request.narrative && !built.board.scope.no_access) {
+    const job = await assistantStore.createInsightJob(ctx, built.board, runtimeConfig, deps);
+    if (job.error) {
+      narrative = { status: job.status === 429 ? 'rate_limited' : 'unavailable', reason: job.error, ...(job.retry_after_seconds ? { retry_after_seconds: job.retry_after_seconds } : {}) };
+    } else {
+      narrative = { status: 'queued', job_id: job.job_id };
+    }
+  }
+  res.setHeader('Cache-Control', 'no-store');
+  return json(res, 200, { board: built.board, narrative });
 }

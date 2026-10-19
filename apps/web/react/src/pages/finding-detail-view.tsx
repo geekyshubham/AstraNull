@@ -50,6 +50,7 @@ import { severityTone } from '../lib/severity-tone';
 import { FindingStatusBadge } from './refined/findings-refined';
 import { DetailBackLink } from '../components/layout/detail-back-link';
 import { AskAiButton } from '../components/assistant/ask-ai-button';
+import { AiInsightsButton } from '../components/assistant/insights-button';
 import { VerdictReplay } from '../components/runs/verdict-replay';
 import { useEntityDocumentTitle } from '../components/layout/app-shell';
 import { FINDING_STATUS_DESCRIPTIONS, FINDING_STATUS_LABELS, findingStatusTransitions, type FindingStatus } from '../lib/findings-query.mjs';
@@ -822,6 +823,7 @@ export function FindingDetailView({
             session={session}
             context={{ finding_id: entityId, ...(targetId && targetId !== 'Not reported' ? { target_id: targetId } : {}), label: title }}
           />
+          <AiInsightsButton config={config} session={session} scope={{ route: 'finding-detail', kind: 'finding', label: 'Finding', subject: title, entity: { id: entityId } }} />
         </div>
       </div>
 

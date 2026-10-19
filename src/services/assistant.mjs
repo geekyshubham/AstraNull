@@ -4,6 +4,7 @@ import { redactSecrets, wrapUntrusted } from '../lib/assistantSafety.mjs';
 import { ASSISTANT_DOC_DOMAINS } from '../lib/assistantDocDomains.mjs';
 import { requirePermission } from '../rbac.mjs';
 import { MAX_TOOL_CALLS, assistantToolGuide, executeAssistantTool, isAssistantToolName } from './assistantTools.mjs';
+import { buildInsightPrompt, parseInsightNarrative } from './assistantInsights.mjs';
 
 // Jobs live in this process's memory only (dev-json and postgres alike): they are short-lived
 // and expire after jobTtlMs. Conversations themselves stay in the requesting browser.
@@ -12,6 +13,7 @@ export const ASSISTANT_ALLOWED_TOOLS = Object.freeze(['search_web', 'read_url_co
 export const RUNNER_ONLINE_WINDOW_MS = 60000;
 const RUNNER_TIMEOUT_SECONDS = 120;
 const RUNNER_DEADLINE_SECONDS = 240;
+const INSIGHT_TIMEOUT_SECONDS = 90;
 const MAX_TOOL_SUMMARY_CHARS = 140;
 const VISUAL_TYPES = Object.freeze(['table', 'bar', 'line', 'donut']);
 const ENTITY_TYPES = Object.freeze(['target', 'finding', 'run', 'check', 'scan', 'report', 'schedule', 'group']);
@@ -298,7 +300,7 @@ export function createAssistantStore({ now = () => Date.now() } = {}) {
       runner_online: online,
       model: enabled ? cfg.model ?? null : null,
       reason,
-      capabilities: { data_tools: true, visuals: true, page_context: true, web_search: true },
+      capabilities: { data_tools: true, visuals: true, page_context: true, web_search: true, insights: true },
     };
   }
 
@@ -379,6 +381,44 @@ export function createAssistantStore({ now = () => Date.now() } = {}) {
     return { job_id: job.id, status: job.status };
   }
 
+  /** Queues a tool-less narrative for a computed insight board; the board itself never waits on it. */
+  async function createInsightJob(ctx, board, runtimeConfig, deps = {}) {
+    sweep(runtimeConfig);
+    const cfg = runtimeConfig?.assistant ?? {};
+    if (!cfg.enabled || !assistantEnabledForTenant(runtimeConfig, ctx)) return fail(403, 'assistant_not_enabled_for_tenant');
+    if (!cfg.runnerToken || !runnerOnline()) return fail(503, 'assistant_runner_offline');
+    const userKey = `i:${ctx.tenantId}:${ctx.userId}`;
+    const wait = limited(userKey, cfg.insightsPerUserPerMinute ?? 6) || limited(`t:${ctx.tenantId}`, cfg.perTenantPerMinute ?? 30);
+    if (wait) return fail(429, 'assistant_rate_limited', { retry_after_seconds: wait });
+    hits.get(userKey).push(now());
+    hits.get(`t:${ctx.tenantId}`).push(now());
+    const job = {
+      id: newJobId(),
+      purpose: 'insight',
+      tenant_id: ctx.tenantId,
+      user_id: ctx.userId,
+      status: 'queued',
+      prompt: buildInsightPrompt(board),
+      model: cfg.model,
+      tool_calls: 0,
+      data_results: [],
+      context: { page_kind: text(board?.kind).slice(0, 40) },
+      created_at: iso(),
+      updated_at: iso(),
+    };
+    jobs.set(job.id, job);
+    await deps.recordAudit?.({
+      tenant_id: ctx.tenantId,
+      actor_user_id: ctx.userId,
+      actor_role: ctx.role,
+      action: 'assistant.job_created',
+      resource_type: 'assistant_job',
+      resource_id: job.id,
+      metadata: { job_id: job.id, purpose: 'insight', page_kind: job.context.page_kind },
+    });
+    return { job_id: job.id, status: job.status };
+  }
+
   function getJob(ctx, id, runtimeConfig) {
     sweep(runtimeConfig);
     const job = findOwned(ctx, id);
@@ -413,6 +453,9 @@ export function createAssistantStore({ now = () => Date.now() } = {}) {
     next.status = 'running';
     next.lease_expires_at = now() + (runtimeConfig?.assistant?.leaseTimeoutMs ?? 300000);
     next.updated_at = iso();
+    if (next.purpose === 'insight') {
+      return { job_id: next.id, prompt: next.prompt, model: next.model, allowed_tools: [], timeout_seconds: INSIGHT_TIMEOUT_SECONDS, deadline_seconds: INSIGHT_TIMEOUT_SECONDS, max_tool_calls: 0, tools: false };
+    }
     return {
       job_id: next.id,
       prompt: next.prompt,
@@ -438,7 +481,14 @@ export function createAssistantStore({ now = () => Date.now() } = {}) {
     job.updated_at = iso();
     delete job.prompt;
     delete job.lease_expires_at;
-    if (result.status === 'done') {
+    if (result.status === 'done' && job.purpose === 'insight') {
+      const insight = parseInsightNarrative(result.content);
+      if (insight) job.response = { insight: { ...insight, ai: true }, model: job.model };
+      else {
+        job.status = 'failed';
+        job.error = 'insight_unparseable';
+      }
+    } else if (result.status === 'done') {
       const content = validateDataMarkers(result.content, job.data_results);
       const used = referencedIds(content);
       job.response = {
@@ -461,6 +511,7 @@ export function createAssistantStore({ now = () => Date.now() } = {}) {
     sweep(runtimeConfig);
     const job = jobs.get(text(id));
     if (!job) return fail(404, 'not_found');
+    if (job.purpose === 'insight') return fail(400, 'tools_not_allowed');
     if (job.status !== 'running' || !job.ctx) return fail(409, 'job_not_running', { job_status: job.status });
     const name = text(body?.name);
     if (!isAssistantToolName(name)) return fail(400, 'unknown_tool');
@@ -493,7 +544,7 @@ export function createAssistantStore({ now = () => Date.now() } = {}) {
     runnerSeenAt = 0;
   }
 
-  return { status, createJob, getJob, cancelJob, leaseJob, completeJob, runJobTool, markRunnerSeen, sweep, _jobs: jobs, _reset };
+  return { status, createJob, createInsightJob, getJob, cancelJob, leaseJob, completeJob, runJobTool, markRunnerSeen, sweep, _jobs: jobs, _reset };
 }
 
 export const assistantStore = createAssistantStore();

@@ -37,6 +37,7 @@ import {
 } from './pages/public-pages';
 import { RouteView } from './pages/router';
 import { AssistantWidget } from './components/assistant/assistant-widget';
+import { AiInsightsButton } from './components/assistant/insights-button';
 
 /**
  * Boot handoff: render nothing until config resolves.
@@ -370,6 +371,7 @@ export default function App() {
       onRoleChange={handleRoleChange}
       onRefresh={() => void handleRefresh()}
       showRoleSwitcher={config.authMode === 'dev-headers' && activeSession.principal !== 'staff'}
+      topbarActions={session && routeAllowed && activeSession.principal !== 'staff' ? <AiInsightsButton key={route} config={config} session={activeSession} variant="topbar" /> : null}
     >
       {routeAllowed ? (
         <RouteView
