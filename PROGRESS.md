@@ -5,7 +5,7 @@
 
 ## AI advisory suite continuation (2026-10-19, [ADR-0039](docs/adr/0039-assistant-advisory-snapshots-and-personal-widgets.md))
 
-Implementation checkout: `astranull-ai`, branch `feat/ai-suite`, base `4e9c7c9a`. The unrelated dirty `astranull` checkout is preserved. [UX scope and acceptance](docs/ux/15-assistant-advisory-surfaces.md); [test strategy](docs/backend/05-test-strategy.md#assistant-advisory-suite-2026-10-19).
+Implementation checkout: `astranull-ai`, branch `feat/ai-suite`, feature commit `2adbc4d8` and owned socket-fixture repair `b65fce07`. Integration checkout: `astranull-ai-release`, branch `release/ai-advisory-suite`, based on fresh main `d68ef6cf`. The unrelated dirty `astranull` checkout is preserved. Integration retains upstream portal fixes and runner policy unchanged; only generated bundles and additive progress entries required conflict resolution. Integrated TypeScript/build, lint, portal lint, safety and whitespace checks pass. Exact-candidate runtime/browser verification remains pending; runner-policy execution remains excluded by the existing restriction. [UX scope and acceptance](docs/ux/15-assistant-advisory-surfaces.md); [test strategy](docs/backend/05-test-strategy.md#assistant-advisory-suite-2026-10-19).
 
 - [~] Provider fix packs: published deterministic guidance plus optional exact-source-bound tailoring, escaped copy, provider/session disposal, explicit cancel/retry; no Apply/retest/closure.
 - [~] Combined-risk stories: target Overview panel, bounded recorded facts distinct from conditional hypotheses, dated unknown/stale/incomplete labels and original-evidence inspector links; no scores/groups/causal verdicts.
