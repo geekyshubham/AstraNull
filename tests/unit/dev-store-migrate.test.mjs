@@ -347,6 +347,7 @@ describe('dev store migration', () => {
       protectionComparisonEvaluations: [],
       entryPathComparisons: [],
       reviewedOperations: [],
+      assistantWidgets: [],
     };
     resetStoreForTests(data);
     assert.equal(migrateDevStore(getStore()), false);

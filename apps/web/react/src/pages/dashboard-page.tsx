@@ -53,6 +53,7 @@ import { severityCountTone, severityTone } from '../lib/severity-tone';
 import { dashboardReadinessMessage, plainFindingTitle, plainInlineText, plainVerdictLabel, plainVerificationLabel } from '../lib/plain-language.mjs';
 import { PageHeader } from './page-components';
 import { usePublishAssistantContext } from '../lib/assistant-page-store';
+import { PersonalWidgets } from '../components/assistant/personal-widgets';
 import './dashboard-page.css';
 
 type UiBadgeTone = BadgeTone;
@@ -812,6 +813,8 @@ export function DashboardPage({
               actionLabel="Open the open findings queue"
             />
           </div>
+
+          <PersonalWidgets config={config} session={session} targets={data.targets} enabled={data.deploymentFeatures?.assistant === true} />
 
           <div className="an-dash-grid">
             <div className="dash-area-coverage">

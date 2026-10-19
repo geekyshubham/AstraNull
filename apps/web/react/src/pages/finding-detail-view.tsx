@@ -834,7 +834,7 @@ export function FindingDetailView({
 
       {!loading ? (
         <>
-      <MissingControlCard key={entityId} finding={entity} />
+      <MissingControlCard key={entityId} finding={entity} config={config} session={session} />
       <Card className="finding-summary-card">
         <CardHeader>
           <div><CardTitle>Finding summary</CardTitle><CardDescription>Key facts and exact relationships for triage and evidence review.</CardDescription></div>

@@ -1,0 +1,8 @@
+.provider-fix-pack { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border-soft); }
+.provider-fix-pack-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.provider-fix-pack-content { margin-top: 16px; overflow-wrap: anywhere; }
+.provider-fix-pack-content h5 { margin: 16px 0 8px; font-size: inherit; }
+.provider-fix-pack-content ol, .provider-fix-pack-content ul { padding-left: 24px; }
+.provider-fix-pack-content li { margin-bottom: 8px; }
+.provider-fix-pack-text { white-space: pre-wrap; font-family: inherit; color: var(--fg); background: transparent; }
+.provider-fix-pack-content a { color: var(--fg); text-decoration: underline; }

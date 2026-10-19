@@ -108,6 +108,7 @@ function emptyStore() {
     protectionComparisonEvaluations: [],
     entryPathComparisons: [],
     reviewedOperations: [],
+    assistantWidgets: [],
   };
 }
 

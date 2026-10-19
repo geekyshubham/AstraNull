@@ -27,6 +27,7 @@ import * as publicSite from './services/publicSite.mjs';
 import * as bundledStagingAuth from './services/bundledStagingAuth.mjs';
 import { createPasswordAuthService } from './services/passwordAuth.mjs';
 import { createDevPasswordAuthRepository } from './services/passwordAuthRepository.mjs';
+import { createDevAssistantWidgetRepository } from './services/assistantWidgets.mjs';
 import { exchangeGuardianBotDastSession } from './services/guardianbotDastSession.mjs';
 import { getTenantDeploymentFeatures } from './services/tenantDeploymentFeatures.mjs';
 import { isExplicitDemoTenant, warnIfDemoAutoVerifyWildcard } from './lib/demoAutoVerify.mjs';
@@ -868,6 +869,14 @@ function buildAssistantDeps(runtimeConfig, serviceDeps) {
   };
   const getRun = (ctx, runId) => serviceDeps.testRuns.getTestRun(ctx, runId);
   const listChecks = async (ctx) => withCheckMissingControls(itemsOf(await serviceDeps.testRuns.listChecks({ scope: 'all', tenantId: ctx.tenantId })));
+  const listTargetChecks = async (ctx, targetId) => {
+    if (!requirePermission(ctx, 'target_group:read').ok || !requirePermission(ctx, 'check:read').ok) return null;
+    const owned = await readOwnTarget(ctx, runtimeConfig, serviceDeps, targetId);
+    if (!owned.target) return null;
+    const declarations = await readTargetDeclarationsForChecks(ctx, runtimeConfig, serviceDeps, targetId);
+    const originBindings = await readTargetOriginBindingsForChecks(ctx, runtimeConfig, serviceDeps, targetId);
+    return withCheckMissingControls(itemsOf(await serviceDeps.testRuns.listChecks({ scope: 'all', target: owned.target, declarations, originBindings, tenantId: ctx.tenantId })));
+  };
   const getCheck = async (_ctx, checkId) => {
     const check = getCheckById(checkId);
     return check ? withCheckMissingControls([withCheckSection(check)])[0] : null;
@@ -901,6 +910,7 @@ function buildAssistantDeps(runtimeConfig, serviceDeps) {
     getFinding,
     getTarget,
     resolveEntity,
+    widgets: postgres ? serviceDeps.assistantWidgets : createDevAssistantWidgetRepository(),
     recordAudit: postgres ? (entry) => serviceDeps.audit?.appendAuditEvent?.(entry) : appendDevAudit,
     tools: {
       listTargets,
@@ -911,6 +921,7 @@ function buildAssistantDeps(runtimeConfig, serviceDeps) {
       listRuns,
       getRun,
       listChecks,
+      listTargetChecks,
       getCheck,
       getState,
       getEdgeCoverage,

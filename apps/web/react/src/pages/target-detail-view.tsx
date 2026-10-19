@@ -39,6 +39,7 @@ import { findingStatus, fixVerifiedBasisHint, isFindingOpen } from '../lib/findi
 import { addTargetTag, apiErrorCode, demoTenantSignal, edgeDetectionReasonExplanation, isActiveDnsChallenge, isTargetRunEligible, ownershipMethodLabel, ownershipStepStatus, removeTargetTag, targetDeclarationProvenanceLabel, targetDisplayValue, uniqueRecentRuns, uniqueVerificationHistory } from '../lib/target-detail.mjs';
 import { usePublishAssistantContext } from '../lib/assistant-page-store';
 import { AiInsightsButton } from '../components/assistant/insights-button';
+import { RiskPlanPanel } from '../components/assistant/risk-plan-panel';
 import { VerifyChip, resolveTargetVerificationProvenance } from '../lib/verify-chip';
 import { buildDetailHref, getRouteParam, replaceRouteParams } from '../lib/route-params';
 import type { AcceptedExecution, DataItem, PortalConfig, Session } from '../lib/types';
@@ -1967,6 +1968,7 @@ export function TargetDetailView({
           <div className="td-overview">
             {renderGlance()}
             {renderNextAction()}
+            {target ? <RiskPlanPanel key={executionScope} config={config} session={session} target={target} checks={fullCatalog ?? checks} canStart={canStartBoundedRun} /> : null}
             <ProviderObservations
               rows={providerRows}
               effectiveness={effectiveness}

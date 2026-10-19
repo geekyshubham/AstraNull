@@ -2,7 +2,8 @@ import { useId, useMemo, useState } from 'react';
 import { Badge } from '../ui/badge';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../ui/card';
 import { Tabs } from '../ui/tabs';
-import type { DataItem } from '../../lib/types';
+import type { DataItem, PortalConfig, Session } from '../../lib/types';
+import { ProviderFixPack } from './provider-fix-pack';
 import './missing-control-card.css';
 
 export type ProviderGuidance = {
@@ -138,7 +139,7 @@ function GuidancePanel({ row, id, labelledBy }: { row: ProviderGuidance; id: str
   );
 }
 
-export function MissingControlCard({ finding }: { finding: DataItem | null | undefined }) {
+export function MissingControlCard({ finding, config, session }: { finding: DataItem | null | undefined; config?: PortalConfig; session?: Session }) {
   const control = useMemo(() => readMissingControl(finding), [finding]);
   const baseId = useId();
   const guidance = control?.provider_guidance ?? [];
@@ -191,7 +192,10 @@ export function MissingControlCard({ finding }: { finding: DataItem | null | und
               />
             ) : null}
             {active ? (
-              <GuidancePanel row={active} id={panelId(active.provider)} labelledBy={guidance.length > 1 ? tabId(active.provider) : undefined} />
+              <>
+                <GuidancePanel row={active} id={panelId(active.provider)} labelledBy={guidance.length > 1 ? tabId(active.provider) : undefined} />
+                {config && session && typeof finding?.id === 'string' ? <ProviderFixPack config={config} session={session} scope={{ findingId: finding.id, provider: active.provider, controlFamily: control.control_family, docs: active.docs }} /> : null}
+              </>
             ) : null}
             {control.detected_without_guidance.length ? (
               <p className="muted small">
@@ -208,6 +212,7 @@ export function MissingControlCard({ finding }: { finding: DataItem | null | und
                 <section key={row.provider} aria-labelledby={`${baseId}-other-${row.provider}`}>
                   <h4 id={`${baseId}-other-${row.provider}`}>{row.provider_label}</h4>
                   <GuidancePanel row={row} id={`${baseId}-other-panel-${row.provider}`} />
+                  {config && session && typeof finding?.id === 'string' ? <ProviderFixPack config={config} session={session} scope={{ findingId: finding.id, provider: row.provider, controlFamily: control.control_family, docs: row.docs }} /> : null}
                 </section>
               ))}
             </div>

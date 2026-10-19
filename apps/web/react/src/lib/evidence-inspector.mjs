@@ -108,6 +108,8 @@ const ROUTE_PARAM_RULES = Object.freeze({
   add: 'int',
   fit: 'slug',
   target_id: 'id',
+  check_id: 'id',
+  test_run_id: 'id',
 });
 
 const CREDENTIAL_NAME = /(token|password|passwd|secret|credential|invite|invitation|auth|session|cookie|bearer|api[_-]?key|signature|code)/i;
@@ -134,7 +136,7 @@ function safeRouteValue(rule, value) {
   if (rule === 'slug') return /^[a-z0-9][a-z0-9_.-]{0,63}$/i.test(raw) ? raw : '';
   if (rule === 'int') return /^\d{1,6}$/.test(raw) ? raw : '';
   if (rule === 'label') return raw.length <= 80 && /^[\w .:@/+-]+$/.test(raw) ? raw : '';
-  if (rule === 'search') return raw.length <= 120 ? raw : '';
+  if (rule === 'search') return raw.length <= 200 ? raw : '';
   if (rule === 'date') return /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d{1,6})?)?(Z|[+-]\d{2}:\d{2})?)?$/.test(raw) ? raw : '';
   if (rule === 'group_key') return raw.length <= 640 && /^[A-Za-z0-9_.:%~!*'()|-]+$/.test(raw) ? raw : '';
   return '';

@@ -1,0 +1,16 @@
+.ai-filter-preview { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border-soft); color: var(--fg); }
+.ai-filter-preview .field { margin-bottom: 8px; }
+.ai-filter-controls { display: flex; gap: 8px; align-items: center; }
+.ai-filter-controls .input { flex: 1; min-width: 0; }
+.ai-filter-preview p { margin: 8px 0; font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
+.ai-filter-preview .ai-filter-hint { color: var(--fg-2); }
+.ai-filter-result { margin-top: 12px; padding: 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-sunk); }
+.ai-filter-predicate { display: flex; flex-wrap: wrap; gap: 8px 24px; margin: 12px 0; }
+.ai-filter-predicate > div { min-width: 0; }
+.ai-filter-predicate dt { color: var(--fg-2); font-size: 11px; font-family: var(--font-mono, "JetBrains Mono", monospace); text-transform: uppercase; }
+.ai-filter-predicate dd { margin: 4px 0; font-size: 13px; overflow-wrap: anywhere; }
+@media (max-width: 640px) {
+  .ai-filter-controls { flex-wrap: wrap; }
+  .ai-filter-controls .input { flex-basis: 100%; }
+  .ai-filter-controls [data-ui='button'].btn { min-height: 44px; flex: 1; }
+}
