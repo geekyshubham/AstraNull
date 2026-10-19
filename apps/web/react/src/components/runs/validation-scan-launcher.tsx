@@ -63,14 +63,18 @@ export type ValidationScanLauncherProps = {
   checks: DataItem[];
   targets?: DataItem[];
   initialTargets?: DataItem[];
+  /** Reviewed assistant proposal only; opening never submits or schedules a scan. */
+  initialSelection?: { targetIds: string[]; checkIds: string[] };
   onClose: () => void;
   onScheduled: (scan: DataItem, mode: ScanLauncherMode) => void;
   onStarted?: (scan: DataItem) => void;
 };
 
-function initialForm(mode: ScanLauncherMode, scan: DataItem | null | undefined): ScanForm {
+function initialForm(mode: ScanLauncherMode, scan: DataItem | null | undefined, selection?: ValidationScanLauncherProps['initialSelection']): ScanForm {
   if ((mode === 'edit' || mode === 'reschedule') && scan) return scanFormFromScan(scan, mode);
-  return emptyScanForm();
+  const form = emptyScanForm();
+  if (mode === 'create' && selection) return { ...form, targetIds: [...selection.targetIds], checkIds: [...selection.checkIds] };
+  return form;
 }
 
 export function ValidationScanLauncher({
@@ -82,11 +86,12 @@ export function ValidationScanLauncher({
   checks,
   targets: declaredTargets,
   initialTargets,
+  initialSelection,
   onClose,
   onScheduled,
   onStarted
 }: ValidationScanLauncherProps) {
-  const [form, setForm] = useState<ScanForm>(() => initialForm(mode, scan));
+  const [form, setForm] = useState<ScanForm>(() => initialForm(mode, scan, initialSelection));
   const [targets, setTargets] = useState<DataItem[]>(initialTargets ? activeTargets(initialTargets) : []);
   const [targetsLoading, setTargetsLoading] = useState(false);
   const [targetsError, setTargetsError] = useState('');
@@ -104,12 +109,12 @@ export function ValidationScanLauncher({
 
   useEffect(() => {
     if (!open) return;
-    setForm(initialForm(mode, scan));
+    setForm(initialForm(mode, scan, initialSelection));
     setFieldErrors({});
     setError('');
     setReviewing(false);
     setBusy(false);
-  }, [open, mode, scan]);
+  }, [open, mode, scan, initialSelection]);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -201,6 +206,10 @@ export function ValidationScanLauncher({
       return;
     }
     if (selectedTargets.length !== form.targetIds.length) { setFieldErrors({ target_ids: 'Remove unavailable domains before reviewing this assessment.' }); return; }
+    if (initialSelection && (form.targetIds.some((id) => !Array.isArray(catalogByTarget[id])) || selectedChecks.length !== form.checkIds.length)) {
+      setFieldErrors({ check_ids: 'Some proposed checks are no longer eligible or their current eligibility is still loading. Review and remove unavailable checks before continuing.' });
+      return;
+    }
     if (summary.stepCount === 0) {
       setFieldErrors({ check_ids: 'None of the selected checks apply to the targets in this scope.' });
       return;

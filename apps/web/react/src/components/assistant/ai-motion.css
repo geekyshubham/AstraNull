@@ -1,29 +1,14 @@
 /* Shared motion and AI affordances for assistant features. Final states render immediately under reduced motion. */
 
-.ai-reveal {
-  animation: ai-reveal var(--motion-enter, 360ms) var(--ease-out-soft) both;
-  animation-delay: calc(var(--i, 0) * 60ms);
-}
-@keyframes ai-reveal {
-  from { opacity: 0; transform: translateY(10px) scale(0.98); }
-  to { opacity: 1; transform: none; }
-}
-
-.ai-fade { animation: ai-fade var(--motion-base, 220ms) var(--ease-out) both; }
+/* Console content is immediately visible; only deliberate result changes fade. */
+.ai-reveal { opacity: 1; }
+.ai-fade { animation: ai-fade var(--motion-base, 200ms) var(--ease-out) both; }
 @keyframes ai-fade {
   from { opacity: 0; }
   to { opacity: 1; }
 }
 
-.ai-draw {
-  stroke-dasharray: var(--ai-draw-length, 400);
-  stroke-dashoffset: var(--ai-draw-length, 400);
-  animation: ai-draw 700ms var(--ease-out-soft) forwards;
-  animation-delay: calc(var(--i, 0) * 140ms + 120ms);
-}
-@keyframes ai-draw {
-  to { stroke-dashoffset: 0; }
-}
+.ai-draw { stroke-dashoffset: 0; }
 
 .ai-shimmer {
   border-radius: var(--radius-md);
@@ -36,25 +21,8 @@
   to { background-position: -100% 0; }
 }
 
-.ai-glow { position: relative; isolation: isolate; }
-.ai-glow::before {
-  content: '';
-  position: absolute;
-  inset: -1px;
-  z-index: -1;
-  border-radius: inherit;
-  background: conic-gradient(from var(--ai-angle, 0deg), transparent 0 70%, color-mix(in srgb, var(--accent) 70%, transparent) 85%, transparent 100%);
-  opacity: 0.55;
-  animation: ai-orbit 3.2s linear infinite;
-}
-@property --ai-angle {
-  syntax: '<angle>';
-  inherits: false;
-  initial-value: 0deg;
-}
-@keyframes ai-orbit {
-  to { --ai-angle: 360deg; }
-}
+.ai-glow { position: relative; }
+.ai-glow::before { content: none; }
 
 .ai-pulse {
   display: inline-block;

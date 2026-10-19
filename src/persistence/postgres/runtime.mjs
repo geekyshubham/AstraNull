@@ -19,6 +19,7 @@ import { ownershipParentFor, subdomainParentId } from '../../lib/subdomainEnumer
 import { ownershipProofFromStates } from '../../lib/ownershipPolicy.mjs';
 import { readDeclaredHostAnalytics } from './declaredHostAnalyticsRepository.mjs';
 import { createAuditRepository } from './auditRepository.mjs';
+import { createAssistantWidgetRepository } from './assistantWidgetRepository.mjs';
 import { createAuthTokenRepository } from './authTokenRepository.mjs';
 import { createPasswordAuthRepository } from './passwordAuthRepository.mjs';
 import { createPasswordRecoveryDelivery } from './passwordRecoveryDelivery.mjs';
@@ -572,6 +573,7 @@ export async function createPostgresRuntime(env = process.env, options = {}) {
         ),
       },
       audit: repositories.audit,
+      assistantWidgets: createAssistantWidgetRepository(pool, { auditRepository: repositories.audit }),
     };
 
     const health = async () => {

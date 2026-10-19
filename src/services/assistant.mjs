@@ -289,6 +289,7 @@ export function createAssistantStore({ now = () => Date.now() } = {}) {
         job.updated_at = iso();
         delete job.prompt;
         delete job.ctx;
+        delete job.validation;
       }
       if (t - Date.parse(job.created_at) > ttl) jobs.delete(id);
     }
@@ -325,6 +326,7 @@ export function createAssistantStore({ now = () => Date.now() } = {}) {
   function findOwned(ctx, id) {
     const job = jobs.get(text(id));
     if (!job || job.tenant_id !== ctx?.tenantId || job.user_id !== ctx?.userId) return null;
+    if (job.required_permissions?.some((permission) => !requirePermission(ctx, permission).ok)) return null;
     return job;
   }
 
@@ -403,10 +405,30 @@ export function createAssistantStore({ now = () => Date.now() } = {}) {
    * Queues a structured single-answer job (a registered purpose). The prompt is built by the
    * caller from server-computed data; the parsed reply lands in response[responseKey].
    */
-  async function createStructuredJob(ctx, { purpose, prompt, context = {} }, runtimeConfig, deps = {}) {
+  async function createStructuredJob(ctx, { purpose, prompt, context = {}, validation = {}, requiredPermissions = [], requiredAccess = {} }, runtimeConfig, deps = {}) {
     sweep(runtimeConfig);
     const spec = STRUCTURED_PURPOSES.get(purpose);
     if (!spec) return fail(400, 'unknown_purpose');
+    // Keep evidence bindings private and independent of caller-owned mutable data.
+    let snapshot;
+    try {
+      if (!validation || typeof validation !== 'object' || Array.isArray(validation)) throw new Error('invalid');
+      const serialized = JSON.stringify(validation);
+      if (Buffer.byteLength(serialized, 'utf8') > 64 * 1024) throw new Error('oversized');
+      snapshot = JSON.parse(serialized);
+    } catch {
+      return fail(400, 'invalid_validation_snapshot');
+    }
+    if (!Array.isArray(requiredPermissions) || requiredPermissions.length > 12 || requiredPermissions.some((permission) => typeof permission !== 'string' || !/^[a-z_]+:[a-z_]+$/.test(permission))) return fail(400, 'invalid_required_permissions');
+    if (!requiredAccess || typeof requiredAccess !== 'object' || Array.isArray(requiredAccess) || Object.keys(requiredAccess).some((key) => !['finding_ids', 'target_ids', 'run_ids'].includes(key))) return fail(400, 'invalid_required_access');
+    const access = {};
+    for (const [key, ids] of Object.entries(requiredAccess)) {
+      if (!Array.isArray(ids) || ids.length > 200 || ids.some((id) => typeof id !== 'string' || !/^[A-Za-z0-9_.:-]{1,128}$/.test(id))) return fail(400, 'invalid_required_access');
+      access[key] = [...new Set(ids)];
+    }
+    if (Object.values(access).reduce((sum, ids) => sum + ids.length, 0) > 400) return fail(400, 'invalid_required_access');
+    const permissions = [...new Set(['finding:read', ...requiredPermissions, ...(access.target_ids?.length ? ['target_group:read'] : []), ...(access.run_ids?.length ? ['test_run:read'] : [])])];
+    if (permissions.some((permission) => !requirePermission(ctx, permission).ok)) return fail(403, 'forbidden');
     const cfg = runtimeConfig?.assistant ?? {};
     if (!cfg.enabled || !assistantEnabledForTenant(runtimeConfig, ctx)) return fail(403, 'assistant_not_enabled_for_tenant');
     if (!cfg.runnerToken || !runnerOnline()) return fail(503, 'assistant_runner_offline');
@@ -427,10 +449,12 @@ export function createAssistantStore({ now = () => Date.now() } = {}) {
       tool_calls: 0,
       data_results: [],
       context: safeContext,
+      validation: snapshot,
+      required_permissions: permissions,
+      required_access: access,
       created_at: iso(),
       updated_at: iso(),
     };
-    jobs.set(job.id, job);
     await deps.recordAudit?.({
       tenant_id: ctx.tenantId,
       actor_user_id: ctx.userId,
@@ -440,6 +464,7 @@ export function createAssistantStore({ now = () => Date.now() } = {}) {
       resource_id: job.id,
       metadata: { job_id: job.id, purpose, ...safeContext },
     });
+    jobs.set(job.id, job);
     return { job_id: job.id, status: job.status };
   }
 
@@ -454,6 +479,39 @@ export function createAssistantStore({ now = () => Date.now() } = {}) {
     return job ? publicJob(job) : null;
   }
 
+  /** Re-resolve source identities at the HTTP boundary, not only when the job was queued. */
+  async function authorizeJobAccess(ctx, id, runtimeConfig, deps = {}) {
+    sweep(runtimeConfig);
+    const job = findOwned(ctx, id);
+    if (!job) return false;
+    // Queued/running states disclose no result. Re-read bounded sources once a result exists.
+    if (!job.response) return true;
+    const access = { ...job.required_access };
+    // A filter job may choose an entity only after completion; check that actual selection.
+    const filters = job.purpose === 'filters' ? job.response?.filters?.filters : null;
+    if (filters?.target_id) access.target_ids = [...(access.target_ids ?? []), filters.target_id];
+    if (filters?.test_run_id) access.run_ids = [...(access.run_ids ?? []), filters.test_run_id];
+    if (filters?.check_id && !requirePermission(ctx, 'check:read').ok) return false;
+    for (const [key, permission, read] of [
+      ['finding_ids', 'finding:read', deps.getFinding],
+      ['target_ids', 'target_group:read', deps.getTarget],
+      ['run_ids', 'test_run:read', (caller, value) => deps.resolveEntity?.(caller, 'run', value)],
+    ]) {
+      const ids = [...new Set(access[key] ?? [])];
+      if (!ids.length) continue;
+      if (!requirePermission(ctx, permission).ok || typeof read !== 'function') return false;
+      try {
+        for (const sourceId of ids) {
+          const row = await read(ctx, sourceId);
+          if (!row || row.error || row.deleted_at || row.archived_at || row.id !== sourceId || (row.tenant_id && row.tenant_id !== ctx.tenantId)) return false;
+        }
+      } catch {
+        return false;
+      }
+    }
+    return Boolean(findOwned(ctx, id));
+  }
+
   function cancelJob(ctx, id, runtimeConfig) {
     sweep(runtimeConfig);
     const job = findOwned(ctx, id);
@@ -463,6 +521,7 @@ export function createAssistantStore({ now = () => Date.now() } = {}) {
       job.updated_at = iso();
       delete job.prompt;
       delete job.ctx;
+      delete job.validation;
     }
     return publicJob(job);
   }
@@ -515,7 +574,7 @@ export function createAssistantStore({ now = () => Date.now() } = {}) {
     if (result.status === 'done' && structured) {
       let parsed = null;
       try {
-        parsed = structured.parse(result.content, { sources: result.sources });
+        parsed = structured.parse(result.content, { sources: result.sources, context: job.context, validation: job.validation });
       } catch {
         parsed = null;
       }
@@ -539,6 +598,7 @@ export function createAssistantStore({ now = () => Date.now() } = {}) {
       job.error = result.error;
     }
     delete job.ctx;
+    delete job.validation;
     return { ok: true, job_id: job.id, status: job.status };
   }
 
@@ -580,7 +640,7 @@ export function createAssistantStore({ now = () => Date.now() } = {}) {
     runnerSeenAt = 0;
   }
 
-  return { status, createJob, createStructuredJob, createInsightJob, getJob, cancelJob, leaseJob, completeJob, runJobTool, markRunnerSeen, sweep, _jobs: jobs, _reset };
+  return { status, createJob, createStructuredJob, createInsightJob, getJob, authorizeJobAccess, cancelJob, leaseJob, completeJob, runJobTool, markRunnerSeen, sweep, _jobs: jobs, _reset };
 }
 
 export const assistantStore = createAssistantStore();

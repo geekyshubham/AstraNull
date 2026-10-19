@@ -9,7 +9,9 @@ import { DataTable, type TableColumn } from '../../components/ui/table';
 import { Toast } from '../../components/ui/toast';
 import { VariantSwitch } from '../../components/ui/variant-switch';
 import { useInspectorRef, useListReturnState, useOpenInspector, useRestoreListPosition } from '../../components/evidence/use-inspector';
-import { getRouteParam, replaceRouteParams } from '../../lib/route-params';
+import { getFindingsRouteFilters, replaceRouteParams } from '../../lib/route-params';
+import { FiltersPreview } from '../../components/assistant/filters-preview';
+import type { AssistantFindingFilters } from '../../lib/assistant-filters.mjs';
 import { navScopeKey } from '../../lib/nav-state.mjs';
 import { useInteractionHold, useStableList } from '../../components/evidence/use-stable-list';
 import type { DesignVariant } from '../../lib/design-variant';
@@ -237,20 +239,16 @@ export function FindingsRefined(props: FindingsRefinedProps) {
   const { data, message, error, session, config } = props;
   const { initial, save } = useListReturnState(session, 'findings');
   // An explicit address predicate (for example a dashboard count) wins over remembered filters.
-  const urlStatus = getRouteParam('status');
-  const urlSeverity = getRouteParam('severity');
-  // Exact-domain links override remembered filters.
-  const urlTargetRaw = getRouteParam('target_id') || getRouteParam('target');
-  const urlTarget = /^[A-Za-z0-9_.:-]{1,128}$/.test(urlTargetRaw) ? urlTargetRaw : '';
-  // A linked count opens exactly its own predicate, so remembered search, filters and page do not mix in.
-  const [urlPredicate] = useState(() => Boolean(urlStatus || urlSeverity || urlTarget));
-  const initialFilters: Record<string, string> = urlPredicate
-    ? { ...(urlStatus ? { status: urlStatus } : {}), ...(urlSeverity ? { severity: urlSeverity } : {}), ...(urlTarget ? { target: urlTarget } : {}) }
-    : { ...(initial.filters ?? {}) };
+  const urlFilters = getFindingsRouteFilters();
+  // A linked predicate opens exactly its own filters, never a mixture with remembered filters.
+  const [urlPredicate] = useState(() => Object.keys(urlFilters).length > 0);
+  const initialFilters: Record<string, string> = urlPredicate ? urlFilters : { ...(initial.filters ?? {}) };
   const [view, setView] = useState<ViewMode>(() => (initial.view === 'all' || initial.view === 'grouped' ? initial.view : readStoredView()));
   const [statusFilter, setStatusFilter] = useState<StatusFilter>(() => initialStatus(initialFilters.status, urlPredicate));
   const [severityFilter, setSeverityFilter] = useState(() => severityChoice(initialFilters.severity));
   const [targetFilter, setTargetFilter] = useState(initialFilters.target ?? 'all');
+  const [checkFilter, setCheckFilter] = useState(initialFilters.check_id ?? '');
+  const [runFilter, setRunFilter] = useState(initialFilters.test_run_id ?? '');
   const [search, setSearch] = useState(initialFilters.q ?? '');
   const [debouncedSearch, setDebouncedSearch] = useState((initialFilters.q ?? '').trim());
   const [sort, setSort] = useState<FindingGroupSortKey>(() => (SORT_KEYS.includes(initial.sort as FindingGroupSortKey) ? initial.sort as FindingGroupSortKey : 'severity'));
@@ -273,22 +271,21 @@ export function FindingsRefined(props: FindingsRefinedProps) {
 
   // A new linked predicate while this page is open (for example from the inspector) replaces the
   // current filters the same way a cold link does; other address changes leave them alone.
-  const linkedRef = useRef(urlPredicate ? `${urlStatus}|${urlSeverity}|${urlTarget}` : '');
+  const linkedRef = useRef(urlPredicate ? JSON.stringify(urlFilters) : '');
   useEffect(() => {
     function onHashChange() {
-      const status = getRouteParam('status');
-      const severity = getRouteParam('severity');
-      const rawTarget = getRouteParam('target_id') || getRouteParam('target');
-      const target = /^[A-Za-z0-9_.:-]{1,128}$/.test(rawTarget) ? rawTarget : '';
-      if (!status && !severity && !target) return;
-      const linked = `${status}|${severity}|${target}`;
+      const filters = getFindingsRouteFilters();
+      if (!Object.keys(filters).length) return;
+      const linked = JSON.stringify(filters);
       if (linked === linkedRef.current) return;
       linkedRef.current = linked;
-      setStatusFilter(initialStatus(status, true));
-      setSeverityFilter(severityChoice(severity));
-      setTargetFilter(target || 'all');
-      setSearch('');
-      setDebouncedSearch('');
+      setStatusFilter(initialStatus(filters.status, true));
+      setSeverityFilter(severityChoice(filters.severity));
+      setTargetFilter(filters.target || 'all');
+      setCheckFilter(filters.check_id || '');
+      setRunFilter(filters.test_run_id || '');
+      setSearch(filters.q || '');
+      setDebouncedSearch(filters.q || '');
     }
     window.addEventListener('hashchange', onHashChange);
     return () => window.removeEventListener('hashchange', onHashChange);
@@ -303,16 +300,16 @@ export function FindingsRefined(props: FindingsRefinedProps) {
     setPage(1);
     setGroupPage(0);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [view, statusFilter, severityFilter, targetFilter, debouncedSearch, pageSize]);
+  }, [view, statusFilter, severityFilter, targetFilter, checkFilter, runFilter, debouncedSearch, pageSize]);
 
   // Once the predicate itself changes (not the view or page size), the linked one no longer describes
   // the address; a repeat link applies again.
-  const predicateKey = `${statusFilter}|${severityFilter}|${targetFilter}|${debouncedSearch}`;
+  const predicateKey = JSON.stringify([statusFilter, severityFilter, targetFilter, checkFilter, runFilter, debouncedSearch]);
   const shownPredicate = useRef(predicateKey);
   useEffect(() => {
     if (shownPredicate.current === predicateKey) return;
     shownPredicate.current = predicateKey;
-    replaceRouteParams({ status: null, severity: null, target_id: null, target: null });
+    replaceRouteParams({ status: null, severity: null, target_id: null, target: null, q: null, check_id: null, test_run_id: null });
     linkedRef.current = '';
   }, [predicateKey]);
 
@@ -326,9 +323,9 @@ export function FindingsRefined(props: FindingsRefinedProps) {
       sort,
       page,
       pageSize,
-      filters: { status: statusFilter, severity: severityFilter, target: targetFilter, q: debouncedSearch },
+      filters: { status: statusFilter, severity: severityFilter, target: targetFilter, q: debouncedSearch, check_id: checkFilter, test_run_id: runFilter },
     });
-  }, [save, view, sort, page, pageSize, statusFilter, severityFilter, targetFilter, debouncedSearch]);
+  }, [save, view, sort, page, pageSize, statusFilter, severityFilter, targetFilter, checkFilter, runFilter, debouncedSearch]);
 
   // Every count and list below is a server predicate. The same filters drive the status totals,
   // the paged list and the grouped read, so a count always opens the rows it reports.
@@ -336,9 +333,11 @@ export function FindingsRefined(props: FindingsRefinedProps) {
     q: debouncedSearch,
     severity: severityFilter === 'all' ? '' : severityFilter,
     target_id: targetFilter === 'all' ? '' : targetFilter,
-  }), [debouncedSearch, severityFilter, targetFilter]);
+    check_id: checkFilter,
+    test_run_id: runFilter,
+  }), [debouncedSearch, severityFilter, targetFilter, checkFilter, runFilter]);
   const listFilters = useMemo(() => ({ ...baseFilters, status: statusFilter === 'all' ? '' : statusFilter }), [baseFilters, statusFilter]);
-  const filtered = Boolean(baseFilters.q || baseFilters.severity || baseFilters.target_id);
+  const filtered = Boolean(baseFilters.q || baseFilters.severity || baseFilters.target_id || baseFilters.check_id || baseFilters.test_run_id);
   const statusTotals = useFindingStatusTotals(config, session, baseFilters, reloadKey);
   const legacyAcceptedShownRef = useRef<boolean | null>(null);
   // The summary strip is the whole tenant; it needs its own read only while a filter is applied.
@@ -618,11 +617,29 @@ export function FindingsRefined(props: FindingsRefinedProps) {
     };
   }
 
+  function applyAssistantFilters(filters: AssistantFindingFilters) {
+    setStatusFilter(filters.status ?? 'all');
+    setSeverityFilter(filters.severity ?? 'all');
+    setTargetFilter(filters.target_id ?? 'all');
+    setCheckFilter(filters.check_id ?? '');
+    setRunFilter(filters.test_run_id ?? '');
+    setSearch(filters.q ?? '');
+    setDebouncedSearch(filters.q ?? '');
+    setPage(1);
+    setGroupPage(0);
+    changeView('all');
+  }
+
   function clearFilters() {
     setStatusFilter('all');
     setSeverityFilter('all');
     setTargetFilter('all');
+    setCheckFilter('');
+    setRunFilter('');
     setSearch('');
+    setDebouncedSearch('');
+    setPage(1);
+    setGroupPage(0);
   }
 
   const estateEmpty = estateTotals.totals.all === 0;
@@ -654,7 +671,7 @@ export function FindingsRefined(props: FindingsRefinedProps) {
     || (estateTotals.state === 'ready'
       ? legacyAcceptedShownRef.current === true
       : estateTotals.state === 'loading' && legacyAcceptedShownRef.current !== null ? legacyAcceptedShownRef.current : true);
-  const activeFilterCount = [search.trim() !== '', severityFilter !== 'all', targetFilter !== 'all'].filter(Boolean).length;
+  const activeFilterCount = [search.trim() !== '', severityFilter !== 'all', targetFilter !== 'all', Boolean(checkFilter), Boolean(runFilter)].filter(Boolean).length;
   const statusSegments = STATUS_SEGMENTS.map((segment) => (segment.id === 'accepted_risk' && !showLegacyAccepted
     ? { ...segment, statuses: segment.statuses.filter((status) => status !== 'accepted') }
     : segment));
@@ -669,11 +686,16 @@ export function FindingsRefined(props: FindingsRefinedProps) {
     search.trim() ? { key: 'search', label: `Search: ${search.trim()}`, clear: () => setSearch('') } : null,
     severityFilter !== 'all' ? { key: 'severity', label: `Severity: ${FINDING_SEVERITY_CLASS_LABELS[severityFilter as keyof typeof FINDING_SEVERITY_CLASS_LABELS] ?? severityFilter}`, clear: () => setSeverityFilter('all') } : null,
     targetFilter !== 'all' ? { key: 'target', label: `Target: ${targetLabel}`, clear: () => setTargetFilter('all') } : null,
+    checkFilter ? { key: 'check', label: `Check: ${checkFilter}`, clear: () => setCheckFilter('') } : null,
+    runFilter ? { key: 'run', label: `Run: ${runFilter}`, clear: () => setRunFilter('') } : null,
   ].filter((chip): chip is { key: string; label: string; clear: () => void } => chip !== null);
   const clearRefinements = () => {
     setSearch('');
+    setDebouncedSearch('');
     setSeverityFilter('all');
     setTargetFilter('all');
+    setCheckFilter('');
+    setRunFilter('');
   };
 
   return (
@@ -825,6 +847,15 @@ export function FindingsRefined(props: FindingsRefinedProps) {
             <Select label="Target" value={targetFilter} options={targetOptions} onChange={setTargetFilter} />
             {view === 'grouped' ? <Select label="Sort groups" value={sort} options={SORT_OPTIONS} onChange={(value) => setSort(value as FindingGroupSortKey)} /> : null}
           </div>
+          {data.deploymentFeatures?.assistant === true && session.principal !== 'staff' ? (
+            <FiltersPreview
+              config={config}
+              session={session}
+              scopeKey={JSON.stringify([predicateKey, search, view, page, pageSize])}
+              onApply={applyAssistantFilters}
+              onClear={clearFilters}
+            />
+          ) : null}
           {activeChips.length ? (
             <div className="rf-active-filters" role="group" aria-label="Active filters">
               {activeChips.map((chip) => (

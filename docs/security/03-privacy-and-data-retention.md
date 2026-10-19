@@ -8,6 +8,16 @@ Mandatory capture redaction cannot be disabled by `redact_headers_by_default: fa
 
 The implemented `DEFAULT_PRIVACY.metadata_retention_days` is **365 days**, not the historical suggested 90-day value below. This documentation correction does not change any tenant's configured retention.
 
+## Assistant advisory data and personal definitions (2026-10-19)
+
+See [ADR-0039](../adr/0039-assistant-advisory-snapshots-and-personal-widgets.md). Provider packs, risk stories, validation proposals, exact filters and personal widgets use bounded allowlisted metadata, not captured HTTP exchanges, credentials, raw packets or unrestricted workspace exports. Inputs are secret-redacted and fenced as untrusted data. Redaction is not a guarantee that arbitrary prose contains no sensitive information; the widget editor warns against entering secrets. Provider/deployment retention, regional processing and contractual privacy review remain prerequisites for production AI enablement. This implementation does not change the configured model provider or enable production processing.
+
+Private validation snapshots are JSON-cloned and limited to 64 KiB per structured job, inaccessible through public job output, leases and audit metadata. They are discarded on completion, cancellation or runner timeout. Separately retained required read rights and source identity bindings prevent retrieval after tenant/user/scope or source-access loss. The dated result is not automatically regenerated when evidence changes. Jobs, outputs and bindings live in control-plane process memory for the existing one-hour TTL, are lost on restart and are not durable audit evidence.
+
+Widget **definitions**, unlike AI output, are durable personal configuration: bounded name/question, predefined template and exact target/severity filters. They survive reload in the development store or PostgreSQL `assistant_widgets` with tenant+user FORCE RLS, same-tenant FKs and version conflicts. They persist until explicitly removed (or the owning PostgreSQL user is deleted); the existing metadata expiry job does not purge these definitions. User removal deletes the live definition and keeps only its ordinary mutation audit. This is not a claim of backup/archive erasure or an implementation of whole-tenant destruction/legal-hold workflows. Computed rows and model commentary are not saved in the definition table or browser storage. Reload re-reads deterministic data; only explicit Ask AI sends the saved question plus the bounded snapshot for commentary.
+
+Widget create/update/delete audit metadata contains identity/version/template and an optional declared target ID, never the question, evidence body or commentary. Definition mutation and chained audit commit together, with no PostgreSQL-to-development fallback. Invalid or expired job output does not change findings, verdicts, schedules or scores. The existing runner's post-event rejection cannot establish that a forbidden network operation was prevented before it began; runner-policy changes and operational acceptance are separately permission-gated.
+
 ## Data minimization
 
 AstraNull should collect the minimum evidence needed to prove readiness.

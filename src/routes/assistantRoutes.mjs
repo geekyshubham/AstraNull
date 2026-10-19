@@ -130,12 +130,14 @@ export async function tryHandleAssistantRoutes(req, res, url, ctx, runtimeConfig
     return true;
   }
   if (jobMatch && method === 'GET') {
-    const job = assistantStore.getJob(ctx, jobMatch[1], runtimeConfig);
+    const accessible = await assistantStore.authorizeJobAccess(ctx, jobMatch[1], runtimeConfig, deps);
+    const job = accessible ? assistantStore.getJob(ctx, jobMatch[1], runtimeConfig) : null;
     json(res, job ? 200 : 404, job ?? { error: 'not_found' });
     return true;
   }
   if (jobMatch && method === 'DELETE') {
-    const job = assistantStore.cancelJob(ctx, jobMatch[1], runtimeConfig);
+    const accessible = await assistantStore.authorizeJobAccess(ctx, jobMatch[1], runtimeConfig, deps);
+    const job = accessible ? assistantStore.cancelJob(ctx, jobMatch[1], runtimeConfig) : null;
     json(res, job ? 200 : 404, job ?? { error: 'not_found' });
     return true;
   }

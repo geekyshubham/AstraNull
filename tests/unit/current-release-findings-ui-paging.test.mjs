@@ -122,14 +122,15 @@ describe('findings list envelope: totals are the server predicate, never the pag
 
 describe('findings page: a linked predicate is exact', () => {
   it('replaces remembered filters and page with the linked predicate', () => {
-    assert.match(findingsPage, /const \[urlPredicate\] = useState\(\(\) => Boolean\(urlStatus \|\| urlSeverity \|\| urlTarget\)\)/);
+    assert.match(findingsPage, /const urlFilters = getFindingsRouteFilters\(\)/);
+    assert.match(findingsPage, /const \[urlPredicate\] = useState\(\(\) => Object\.keys\(urlFilters\)\.length > 0\)/);
     assert.match(findingsPage, /urlPredicate \? 1 : Math\.max\(1, initial\.page \?\? 1\)/);
   });
 
   it('clears the linked predicate from the address only when the predicate itself changes', () => {
-    assert.match(findingsPage, /const predicateKey = `\$\{statusFilter\}\|\$\{severityFilter\}\|\$\{targetFilter\}\|\$\{debouncedSearch\}`;/);
+    assert.match(findingsPage, /const predicateKey = JSON\.stringify\(\[statusFilter, severityFilter, targetFilter, checkFilter, runFilter, debouncedSearch\]\)/);
     assert.match(findingsPage, /if \(shownPredicate\.current === predicateKey\) return;/);
-    assert.match(findingsPage, /replaceRouteParams\(\{ status: null, severity: null, target_id: null, target: null \}\)/);
+    assert.match(findingsPage, /replaceRouteParams\(\{ status: null, severity: null, target_id: null, target: null, q: null, check_id: null, test_run_id: null \}\)/);
   });
 
   it('keeps a linked group visible in the group filter even when it is not in the loaded list', () => {
