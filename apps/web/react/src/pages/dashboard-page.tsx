@@ -398,37 +398,29 @@ function CoverageRow({ family, result, onRetry }: { family: CoverageFamily; resu
       </div>
     );
   }
-  const detected = buckets.parts.find((part) => part.group === 'detected');
-  const notDetected = buckets.parts.find((part) => part.group === 'not_detected');
-  const unknownParts = buckets.parts.filter((part) => part.group !== 'detected' && part.group !== 'not_detected' && part.count > 0);
-  const unknownCount = unknownParts.reduce((sum, part) => sum + part.count, 0);
-  const segments = [
-    { key: 'detected', label: 'Detected', count: detected?.count ?? 0, href: detected?.href ?? '' },
-    { key: 'not_detected', label: 'Not detected', count: notDetected?.count ?? 0, href: notDetected?.href ?? '' },
-    { key: 'unmeasured', label: 'Unknown', count: unknownCount, href: unknownParts.length === 1 ? unknownParts[0].href : '' }
-  ];
-  const unknownDetail = unknownParts.map((part) => `${part.label} ${formatNumber(part.count)}`).join(' · ');
+  const segments = buckets.parts.filter((part) => part.count > 0 || part.group === 'detected' || part.group === 'not_detected');
+  const unitLabel = buckets.unit === 'target' ? 'declared target records' : 'distinct hostnames';
   return (
     <div className="coverage-row">
       <span className="coverage-title">{title}</span>
-      <span className="coverage-bar" role="img" aria-label={`${title}: ${segments.map((part) => `${part.label} ${part.count}`).join(', ')}, of ${buckets.denominator} hosts`}>
-        {segments.filter((part) => part.count > 0).map((part) => <span key={part.key} className="coverage-seg" data-segment={part.key} style={{ flexGrow: part.count }} />)}
+      <span className="coverage-bar" role="img" aria-label={`${title}: ${segments.map((part) => `${part.label} ${part.count}`).join(', ')}, of ${buckets.denominator} ${unitLabel}`}>
+        {segments.filter((part) => part.count > 0).map((part) => <span key={part.key} className="coverage-seg" data-segment={part.group} style={{ flexGrow: part.count }} title={`${part.label}: ${formatNumber(part.count)} ${unitLabel}`} />)}
       </span>
       <ul className="coverage-stats">
         {segments.map((part) => {
           const body = (
             <>
-              <span className="coverage-swatch" data-segment={part.key} aria-hidden="true" />
+              <span className="coverage-swatch" data-segment={part.group} aria-hidden="true" />
               <strong className="tabular-nums">{formatNumber(part.count)}</strong>
               <span>{part.label}</span>
             </>
           );
           return (
-            <li key={part.key} data-segment={part.key}>
+            <li key={part.key} data-segment={part.group}>
               {part.href && part.count > 0 ? (
-                <a href={part.href} aria-label={`${title} ${part.label.toLowerCase()}: ${formatNumber(part.count)} hosts. Open the list.`}>{body}</a>
+                <a href={part.href} aria-label={`${title} observations ${part.label.toLowerCase()}: ${formatNumber(part.count)} ${unitLabel}. Open the matching list.`}>{body}</a>
               ) : (
-                <span title={part.key === 'unmeasured' && unknownDetail ? unknownDetail : undefined}>{body}</span>
+                <span>{body}</span>
               )}
             </li>
           );
@@ -474,11 +466,13 @@ function finiteCount(value: unknown) {
 }
 
 function DeclaredHostCoverage({ waf, cdn, total, onRetry }: { waf: CoverageResult; cdn: CoverageResult; total: number | null; onRetry: () => void }) {
+  const unit = waf.state === 'ready' ? familyCoverageBuckets(waf.payload).unit : '';
+  const unitLabel = unit === 'target' ? 'declared target records' : 'distinct hostnames';
   return (
     <section className="declared-coverage" aria-labelledby="declared-coverage-title">
       <div className="declared-coverage-head">
         <h2 id="declared-coverage-title">WAF and CDN detection</h2>
-        <p>{total !== null ? `Across ${formatNumber(total)} declared ${pluralize(total, 'host')}` : 'Across your declared hosts'}</p>
+        <p>{total !== null ? `Across ${formatNumber(total)} ${unitLabel}` : 'Across your declared hosts'}</p>
       </div>
       <CoverageRow family="waf" result={waf} onRetry={onRetry} />
       <CoverageRow family="cdn" result={cdn} onRetry={onRetry} />

@@ -49,11 +49,12 @@ test.beforeEach(async ({ page }) => {
     const pathname = new URL(route.request().url()).pathname;
     const json = pathname === '/v1/tenants/current' ? { id: 'ten_demo', name: 'Synthetic public-auth fixture' }
       : pathname === '/v1/state' ? { tenant_id: 'ten_demo' }
-        : pathname === '/v1/tenant/deployment-features' ? { connectors: false, waf_posture: false, external_discovery: false }
-          : pathname === '/v1/analytics/declared-hosts' ? { total: 0, items: [] }
-            : pathname === '/v1/subscription/current' ? {}
-              : pathname === '/v1/notifications' ? { rules: [], events: [] }
-                : emptyLists.has(pathname) ? { items: [] } : null;
+        : pathname === '/v1/tenant/deployment-features' ? { connectors: false, waf_posture: false, external_discovery: false, assistant: false }
+          : pathname === '/v1/assistant/status' ? { enabled: false, tenant_enabled: false, runner_online: false, reason: 'disabled' }
+            : pathname === '/v1/analytics/declared-hosts' ? { total: 0, items: [] }
+              : pathname === '/v1/subscription/current' ? {}
+                : pathname === '/v1/notifications' ? { rules: [], events: [] }
+                  : emptyLists.has(pathname) ? { items: [] } : null;
     return json ? route.fulfill({ status: 200, json }) : route.fallback();
   });
 });

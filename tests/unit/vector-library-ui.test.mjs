@@ -101,6 +101,18 @@ describe('portal vector-library truth and target selection', () => {
     assert.equal(countCompatibleSafeChecks(undefined, undefined), 0);
   });
 
+  it('excludes declarations known only to the full catalog from distinct compatible runnable totals', () => {
+    const catalog = [
+      safeCheck,
+      { check_id: 'e1', safety_class: 'safe', evidence_tier: 'E1' },
+      { check_id: 'metadata', safety_class: 'safe', probe_profile: { kind: 'metadata_marker' } },
+      { check_id: 'soc', safety_class: 'soc_gated' },
+    ];
+    const pairs = catalog.map((check) => ({ check_id: check.check_id, catalog: { safety_class: check.safety_class } }));
+    pairs.push(pairs[0]);
+    assert.equal(countCompatibleSafeChecks(pairs, catalog), 1);
+  });
+
   it('orders vectors by fit for the chosen target and keeps catalog order within each fit', () => {
     const rows = [
       vector({ vector_id: 'SOC-1', execution_disposition: 'soc_gated_only' }),

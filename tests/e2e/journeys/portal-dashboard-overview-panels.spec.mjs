@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test';
 import { applyPortalBaselineReadinessBoost } from '../../fixtures/portal-baseline/readiness.mjs';
 import { PORTAL_BASELINE_IDS } from '../../fixtures/portal-baseline/seed.mjs';
 import { plainInlineText } from '../../../apps/web/react/src/lib/plain-language.mjs';
+import { collectPortalBrowserFailures } from '../../helpers/portal-browser-failures.mjs';
 import {
   isPortalScaleEnabled,
   PORTAL_SCALE_PROFILE,
@@ -204,6 +205,56 @@ test.describe('portal dashboard overview panels', () => {
     expect(overflow, 'no horizontal page scroll at 375px').toBeLessThanOrEqual(0);
   });
 
+  for (const [unit, noun] of [['hostname', 'distinct hostnames'], ['target', 'declared target records']]) {
+    test(`coverage retains each server status and exact link in ${noun}`, async ({ page }, testInfo) => {
+      await restartPortalPlaywrightServer({ mutate: applyPortalBaselineReadinessBoost });
+      const baseUrl = getPortalPlaywrightBaseUrl();
+      const diagnostics = await collectPortalBrowserFailures(page, baseUrl);
+      const statuses = [
+        ['detected', 'Detected'], ['not_detected', 'Not detected in the last observation'],
+        ['not_checked', 'Not checked'], ['not_recorded', 'Not recorded'],
+        ['inconclusive', 'Inconclusive'], ['stale', 'Stale observation'],
+        ['conflict', 'Conflicting signals'], ['unknown', 'Unknown'],
+      ].map(([key, label], index) => ({ key, label, count: index + 1 + (unit === 'target' ? 1 : 0) }));
+      await page.route('**/v1/analytics/declared-hosts?**', (route) => {
+        if (route.request().method() !== 'GET') return route.fallback();
+        const family = new URL(route.request().url()).searchParams.get('family');
+        const query = { family, unit };
+        return route.fulfill({ json: {
+          canonical_unit: unit, complete: true, scope: 'current', historical: false,
+          as_of: PORTAL_BASELINE_IDS.frozenAt,
+          denominator: statuses.reduce((sum, part) => sum + part.count, 0),
+          units: { target_records: 44, normalized_hosts: 36 },
+          list_query: { query },
+          segments: statuses.filter((part) => part.key !== 'unknown').map((part) => ({
+            key: part.key, count: part.count, list_query: { query: { ...query, family_status: part.key } },
+          })),
+          unknown_count: statuses.find((part) => part.key === 'unknown').count,
+        } });
+      });
+      await page.setViewportSize({ width: 375, height: 812 });
+      await injectPortalDevHeadersSession(page);
+      await gotoPortalRoute(page, 'dashboard', baseUrl);
+      const denominator = statuses.reduce((sum, part) => sum + part.count, 0);
+      await expect(page.locator('.declared-coverage-head')).toContainText(`Across ${denominator} ${noun}`);
+      for (const family of ['waf', 'cdn']) {
+        for (const part of statuses) {
+          const link = page.getByRole('link', { name: `${family.toUpperCase()} observations ${part.label.toLowerCase()}: ${part.count} ${noun}. Open the matching list.`, exact: true });
+          await expect(link).toBeVisible();
+          await expect(link).toHaveAttribute('href', `#targets?family=${family}&family_status=${part.key}&unit=${unit}`);
+          await expect(link).toContainText(part.label);
+          await expect(link.locator('strong')).toHaveText(String(part.count));
+        }
+      }
+      expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(0);
+      await page.screenshot({ path: testInfo.outputPath(`coverage-${unit}.png`), fullPage: true, animations: 'disabled' });
+      await page.setViewportSize({ width: 1440, height: 1000 });
+      expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(0);
+      await page.screenshot({ path: testInfo.outputPath(`coverage-${unit}-desktop.png`), fullPage: true, animations: 'disabled' });
+      diagnostics.assertClean();
+    });
+  }
+
   test('FT-DASH-04 served bundle counts the scale estate from server totals and links each count to its exact list', async ({ page }) => {
     test.skip(!isPortalScaleEnabled(), 'Set ASTRANULL_PORTAL_SCALE=1 for the full served-DOM scale assertion.');
     test.setTimeout(300_000);
@@ -223,6 +274,8 @@ test.describe('portal dashboard overview panels', () => {
     expect(state.open_findings).toBe(33_334);
     expect(state).not.toHaveProperty('targets');
     expect(state).not.toHaveProperty('target_count');
+
+    const diagnostics = await collectPortalBrowserFailures(page, baseUrl);
 
     // The rows agree with the rollup: the open list total is the full predicate, not a page.
     const openPage = await read('/v1/findings?status=open&limit=50');
@@ -272,5 +325,6 @@ test.describe('portal dashboard overview panels', () => {
     await page.getByRole('button', { name: 'Each finding' }).click();
     await expect(page.locator('.rf-pager > .rf-pager-info')).toHaveText('Showing 1 to 25 of 33,334 findings');
     await expect(page.locator('.rf-pager .rf-toolbar .rf-pager-info')).toHaveText(`Page 1 of ${Math.ceil(33_334 / 25).toLocaleString('en-US')}`);
+    diagnostics.assertClean();
   });
 });

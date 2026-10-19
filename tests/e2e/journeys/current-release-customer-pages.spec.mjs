@@ -5,7 +5,10 @@ import { createPortalSourceServer as createViteServer } from '../../helpers/port
 import { applyPortalBaselineReadinessBoost } from '../../fixtures/portal-baseline/readiness.mjs';
 import { PORTAL_BASELINE_IDS } from '../../fixtures/portal-baseline/seed.mjs';
 import { checkPresentation } from '../../../src/lib/checkPresentation.mjs';
+import { isDeclarationOnlyCheck } from '../../../src/contracts/checkClassification.mjs';
+import { collectPortalBrowserFailures } from '../../helpers/portal-browser-failures.mjs';
 import {
+  portalOwnerHeaders,
   startPortalPlaywrightServer,
   stopPortalPlaywrightServer,
 } from '../../helpers/portal-playwright-server.mjs';
@@ -677,10 +680,21 @@ test.describe('current-release customer pages', () => {
   });
 
   test('check library: target-first deep link, separate counts, no design switch', async ({ page }) => {
+    const diagnostics = await collectPortalBrowserFailures(page, sourceBaseUrl);
     await injectPortalDevHeadersSession(page);
     const fit = page.waitForResponse((response) => new URL(response.url()).pathname === `/v1/targets/${PORTAL_BASELINE_IDS.targetId}/compatible-checks`);
+    const catalog = await page.request.get(`${sourceBaseUrl}/v1/checks?scope=all`, { headers: portalOwnerHeaders() });
+    expect(catalog.ok()).toBe(true);
+    const catalogById = new Map(((await catalog.json()).items ?? []).map((check) => [check.check_id, check]));
     await page.goto(`${sourceBaseUrl}/app#checks?target=${PORTAL_BASELINE_IDS.targetId}`, { waitUntil: 'networkidle' });
-    const serverChecks = ((await (await fit).json()).checks ?? []).filter((check) => (check.catalog?.safety_class ?? check.safety_class) === 'safe');
+    expect(catalogById.size).toBeGreaterThan(0);
+    // Compatibility pairs omit probe profiles; declaration status must also come from the full catalog.
+    const serverChecks = ((await (await fit).json()).checks ?? []).filter((check) => {
+      const full = catalogById.get(check.check_id);
+      expect(full, `catalog metadata for ${check.check_id}`).toBeDefined();
+      return (check.catalog?.safety_class ?? full.safety_class) === 'safe'
+        && !isDeclarationOnlyCheck(check.catalog) && !isDeclarationOnlyCheck(full);
+    });
     expect(serverChecks.length).toBeGreaterThan(0);
     const distinctServerChecks = new Set(serverChecks.map((check) => check.check_id)).size;
     await expect(page.locator('.design-variant-switch')).toHaveCount(0);
@@ -690,6 +704,7 @@ test.describe('current-release customer pages', () => {
     await expect(facts).toContainText('Fit this target');
     await expect(facts.locator('div').filter({ hasText: 'Fit this target' }).locator('dd').first()).toHaveText(String(distinctServerChecks));
     await expect(page.locator('.vector-target-chip')).toContainText('checkout.acme.com');
+    diagnostics.assertClean();
   });
 
   test('check detail: exact read with server compatibility for the caller target; unknown check is not substituted', async ({ page }) => {
