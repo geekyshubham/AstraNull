@@ -38,6 +38,23 @@ test('only the exact shell stylesheet GET uses the explicit local system-font fi
   assert.doesNotMatch(route.responses[0].body, /url\(|@import|https?:|@font-face/i);
 });
 
+test('only favicon image GETs on the dedicated origin use the icon fixture', async () => {
+  const page = new Page();
+  await installPortalBrowserResources(page);
+  const [{ match, handler }] = page.registrations;
+  const url = 'https://icons.duckduckgo.com/ip3/example.com.ico';
+  assert.equal(match(new URL(url)), true);
+  const route = requestRoute({ url, type: 'image' });
+  await handler(route);
+  assert.equal(route.responses[0].contentType, 'image/svg+xml');
+  for (const options of [{ method: 'POST', type: 'image' }, { type: 'fetch' }, { url: `${url}?unexpected=1`, type: 'image' }, { url: 'https://example.test/ip3/example.com.ico', type: 'image' }]) {
+    const other = requestRoute({ url, ...options });
+    await handler(other);
+    assert.equal(other.fallbacks, 1);
+    assert.deepEqual(other.responses, []);
+  }
+});
+
 for (const url of [
   PORTAL_FONT_STYLESHEET.replace('fonts.googleapis.com', 'example.test'),
   `${PORTAL_FONT_STYLESHEET}&unexpected=1`,
