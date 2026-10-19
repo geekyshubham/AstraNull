@@ -1,5 +1,9 @@
 # AstraNull Progress Tracker
 
+## Demo production login repair (2026-10-19)
+
+- [x] Recognize the actual public demo login (`ten_demo` + `usr_admin`) in feature projection and both run-admission paths. Previous selection coverage incorrectly used a synthetic tenant identity. The corrected browser regression selects and submits all 18 reported exploit, delivery-pattern and high-scale checks; 100 focused Node tests and the real PostgreSQL regression pass, with other users/tenants and kill-switch denial retained. [ADR-0016 correction](docs/adr/0016-demo-tenant-ownership-auto-verify.md#production-login-identity-correction-2026-10-19). The live pre-release bundle hash differed from the committed portal and still contained the old redacted 2-KiB capture; deployment must update the control plane and workers together. CI and deployment provide release evidence for this commit.
+
 ## Target workspace and WAF/CDN legend redesign (2026-10-18)
 
 - [x] Dashboard WAF/CDN detection: three count tiles (Detected, Not detected, Unknown) with distinct colours; the unknown breakdown stays in a tooltip.

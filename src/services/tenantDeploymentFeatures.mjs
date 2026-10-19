@@ -9,7 +9,7 @@ import {
 
 // Tenant-scoped deployment feature flags for authenticated portal UI.
 export function getTenantDeploymentFeatures(ctx, runtimeConfig) {
-  const isDemo = isExplicitDemoTenant(ctx?.tenantId);
+  const isDemo = isExplicitDemoTenant(ctx);
   return {
     demo_tenant: isDemo,
     waf_posture: wafPostureEnabledFor(runtimeConfig, ctx?.tenantId),

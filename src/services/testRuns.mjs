@@ -657,7 +657,7 @@ export function startTestRun(ctx, body, runtimeConfig = { probeMode: 'simulation
     };
   }
 
-  const isDemo = isExplicitDemoTenant(ctx.tenantId);
+  const isDemo = isExplicitDemoTenant(ctx);
   const nowMs = Date.now();
   const safeWindowBypassed = isDemo && (group.safe_test_windows ?? []).length > 0 && !isWithinSafeTestWindowRaw(group, nowMs);
   if (!isDemo && (group.safe_test_windows ?? []).length > 0 && !isWithinSafeTestWindow(group, nowMs, { tenantId: ctx.tenantId })) {
@@ -674,7 +674,7 @@ export function startTestRun(ctx, body, runtimeConfig = { probeMode: 'simulation
   const normalMaxRuns = group.safety_policy?.max_runs_per_hour ?? DEFAULT_MAX_RUNS_PER_HOUR;
   const runsLastHour = countCustomerRunnableRunsLastHour(ctx.tenantId, nowMs);
   const hourlyCapBypassed = isDemo && (runsLastHour >= normalMaxRuns);
-  const groupPolicy = normalizeSafetyPolicy(group.safety_policy, { tenantId: ctx.tenantId });
+  const groupPolicy = normalizeSafetyPolicy(group.safety_policy, { tenantId: ctx });
   if (runsLastHour >= groupPolicy.max_runs_per_hour) {
     return denySafeStart(
       ctx,
@@ -831,7 +831,7 @@ export function startTestRun(ctx, body, runtimeConfig = { probeMode: 'simulation
   const openWindowEnds = (group.safe_test_windows ?? []).filter((window) =>
     new Date(window.start_at).getTime() <= Date.now() && new Date(window.end_at).getTime() >= Date.now())
     .map((window) => new Date(window.end_at).getTime());
-  const safetyConstraints = { ...effectiveSafetyConstraints(check, group),
+  const safetyConstraints = { ...effectiveSafetyConstraints(check, group, { tenantId: ctx }),
     assurance_scope: deriveAssuranceScope({ target, policy: policyBinding.policy ?? null, targetGroup: group }),
     ...(openWindowEnds.length ? { safe_window_not_after: new Date(Math.max(...openWindowEnds)).toISOString() } : {}) };
   const runId = newId('run');

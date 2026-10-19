@@ -70,3 +70,12 @@ When a customer-runnable check lacks genuine required input (e.g. no declared de
 - `explanation`: Plain message naming the missing requirement (e.g. "No denied port is declared, so there was nothing to probe.")
 - `requests_sent: 0` (zero probe traffic sent; never errors).
 
+
+
+## Production login identity correction (2026-10-19)
+
+The public password login resolves to the authenticated stored pair `tenantId: ten_demo`, `userId: usr_admin`. Demo execution recognition now accepts that exact pair, including the snake-case session form, rather than requiring an email-shaped user ID or a legacy synthetic tenant ID. Neither `ten_demo` alone nor `usr_admin` in another tenant grants the account exception. The existing explicit tenant allowlist continues to apply independently.
+
+Deployment-feature projection and both dev-store/PostgreSQL run admission pass the authenticated context through demo recognition and policy normalization. The existing SOC-gate bypass audit remains attached to request-marker runs. The kill switch, suspension, concurrent-run guard, destination checks and per-check traffic ceilings remain enforced. High-scale catalog entries still use request markers; no traffic generator or governed adapter bypass is introduced.
+
+The browser regression uses the actual production tenant/user pair and submits exactly the 6 exploit, 7 delivery-pattern and 5 high-scale definitions. Separate regressions check other users/tenants, all 18 individual starts, audit records and the production PostgreSQL admission path. No schema migration or API shape changes are required.

@@ -526,7 +526,7 @@ describe('Ticket R7: demo tenant runs every customer check with no access or inp
 
     // Generic demo tenant user is blocked by SOC gate
     const genericDemoRes = await request(baseUrl, 'POST', '/v1/test-runs', {
-      headers: demoHeaders('admin', DEMO_TENANT),
+      headers: demoHeaders('admin', DEMO_TENANT, 'usr_generic_demo'),
       body: {
         target_group_id: DEMO_GROUP,
         target_id: DEMO_TARGET,

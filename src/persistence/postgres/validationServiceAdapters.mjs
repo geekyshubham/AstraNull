@@ -1769,7 +1769,7 @@ export function createPostgresValidationServices(repositories, options = {}) {
         };
       }
 
-      const isDemo = isExplicitDemoTenant(ctx.tenantId);
+      const isDemo = isExplicitDemoTenant(ctx);
       const now = nowFn();
       const nowMs = now.getTime();
       const safeWindowBypassed = isDemo && (group.safe_test_windows ?? []).length > 0 && !isWithinSafeTestWindowRaw(group, nowMs);
@@ -1784,7 +1784,7 @@ export function createPostgresValidationServices(repositories, options = {}) {
         );
       }
 
-      const groupPolicy = effectiveSafetyConstraints(check, group, { tenantId: ctx.tenantId });
+      const groupPolicy = effectiveSafetyConstraints(check, group, { tenantId: ctx });
       const usage = typeof validationEvidence.readSafeAdmissionUsage === 'function'
         ? await validationEvidence.readSafeAdmissionUsage(ctx, { now: now.toISOString(), targetId, targetGroupId,
           customerCheckIds: CHECK_CATALOG.filter(isCustomerRunnable).map((item) => item.check_id) })
@@ -1967,7 +1967,7 @@ export function createPostgresValidationServices(repositories, options = {}) {
       const openWindowEnds = (group.safe_test_windows ?? []).filter((window) =>
         new Date(window.start_at).getTime() <= nowMs && new Date(window.end_at).getTime() >= nowMs)
         .map((window) => new Date(window.end_at).getTime());
-      const safetyConstraints = { ...effectiveSafetyConstraints(check, group),
+      const safetyConstraints = { ...effectiveSafetyConstraints(check, group, { tenantId: ctx }),
         ...(openWindowEnds.length ? { safe_window_not_after: new Date(Math.max(...openWindowEnds)).toISOString() } : {}) };
       const runId = newId('run');
       const runRecord = {

@@ -5,7 +5,7 @@ import { PORTAL_FONT_STYLESHEET } from '../../helpers/portal-browser-resources.m
 import AxeBuilder from '@axe-core/playwright';
 import { assessmentChecks, targetCheckAvailability, withTargetRunnableChecks } from '../../../apps/web/react/src/lib/domain-checks.mjs';
 import { targetRunnableIndex } from '../../../apps/web/react/src/lib/control-declarations.mjs';
-import { DEMO_ACCOUNT_TENANT_ID } from '../../../src/lib/demoAutoVerify.mjs';
+import { DEMO_LOGIN_TENANT_ID, DEMO_LOGIN_USER_ID } from '../../../src/lib/demoAutoVerify.mjs';
 import { PORTAL_BASELINE_IDS } from '../../fixtures/portal-baseline/seed.mjs';
 import { applyPortalBaselineReadinessBoost } from '../../fixtures/portal-baseline/readiness.mjs';
 import {
@@ -360,16 +360,16 @@ test.describe('target workspace: recorded attribution, checks and reviewed runs 
 
   test('demo account can select and submit every exploit, delivery-pattern and high-scale check', async ({ page }) => {
     seedPortalPlaywrightStore((store) => {
-      // Use the real demo identity with the existing isolated portal fixture.
+      // Use the actual stored identity returned by production password login.
       for (const rows of Object.values(store).filter(Array.isArray)) {
         for (const row of rows) {
-          if (row.id === PORTAL_BASELINE_IDS.tenantId) row.id = DEMO_ACCOUNT_TENANT_ID;
-          if (row.tenant_id === PORTAL_BASELINE_IDS.tenantId) row.tenant_id = DEMO_ACCOUNT_TENANT_ID;
-          for (const target of row.targets ?? []) target.tenant_id = DEMO_ACCOUNT_TENANT_ID;
+          if (row.id === PORTAL_BASELINE_IDS.tenantId) row.id = DEMO_LOGIN_TENANT_ID;
+          if (row.tenant_id === PORTAL_BASELINE_IDS.tenantId) row.tenant_id = DEMO_LOGIN_TENANT_ID;
+          for (const target of row.targets ?? []) target.tenant_id = DEMO_LOGIN_TENANT_ID;
         }
       }
     });
-    await injectPortalDevHeadersSession(page, { ...PORTAL_SESSION, tenant_id: DEMO_ACCOUNT_TENANT_ID });
+    await injectPortalDevHeadersSession(page, { ...PORTAL_SESSION, tenant_id: DEMO_LOGIN_TENANT_ID, user_id: DEMO_LOGIN_USER_ID });
     await page.goto(`${getPortalPlaywrightBaseUrl()}/app#target-detail?id=${VERIFIED_FRESH_TARGET}&tab=validate`);
     const panel = page.locator('.td-checks');
     const selected = [];

@@ -13,6 +13,8 @@ export const DEMO_AUTO_VERIFY_AUDIT_ACTION = 'target.ownership_demo_auto_verifie
 
 export const DEMO_ACCOUNT_TENANT_ID = 'Astra-D1TrtI4HMTSrwKRW-9';
 export const DEMO_ADMIN_EMAIL = 'admin@demo.astranull.local';
+export const DEMO_LOGIN_TENANT_ID = 'ten_demo';
+export const DEMO_LOGIN_USER_ID = 'usr_admin';
 
 export function matchesDemoAccount(tenantOrCtx) {
   if (!tenantOrCtx) return false;
@@ -24,6 +26,9 @@ export function matchesDemoAccount(tenantOrCtx) {
     const tid = String(tenantOrCtx.tenantId ?? tenantOrCtx.tenant_id ?? tenantOrCtx.id ?? '').trim();
     if (tid === DEMO_ACCOUNT_TENANT_ID) return true;
     const uid = String(tenantOrCtx.userId ?? tenantOrCtx.user_id ?? '').trim();
+    // Password login resolves the public demo credentials to these stored IDs.
+    // Neither ID alone grants the exception to another account or tenant.
+    if (tid === DEMO_LOGIN_TENANT_ID && uid === DEMO_LOGIN_USER_ID) return true;
     if (uid === DEMO_ACCOUNT_TENANT_ID || uid.toLowerCase() === DEMO_ADMIN_EMAIL.toLowerCase()) return true;
     const email = String(tenantOrCtx.email ?? tenantOrCtx.user?.email ?? tenantOrCtx.principal?.email ?? '').trim().toLowerCase();
     if (email === DEMO_ADMIN_EMAIL.toLowerCase()) return true;

@@ -21,7 +21,7 @@ import {
 
 const APP_ROLE_NAME = 'astranull_app';
 const APP_ROLE_PASSWORD = 'astranull_app_local_dev';
-const DEMO_TENANT = 'ten_r7_pg_demo';
+const DEMO_TENANT = 'ten_demo';
 const PROD_TENANT = 'ten_r7_pg_prod';
 const DEMO_GROUP = 'tg_r7_pg_demo';
 const PROD_GROUP = 'tg_r7_pg_prod';
@@ -29,7 +29,7 @@ const DEMO_TARGET = 'tgt_r7_pg_demo_fqdn';
 const PROD_TARGET = 'tgt_r7_pg_prod_fqdn';
 const SECRET = randomBytes(32).toString('hex');
 
-const demoAdmin = () => demoHeaders('admin', DEMO_TENANT, 'admin@demo.astranull.local');
+const demoAdmin = () => demoHeaders('admin', DEMO_TENANT, 'usr_admin');
 const prodAdmin = () => demoHeaders('admin', PROD_TENANT, 'usr_r7_prod_admin');
 
 async function seed(ownerPool) {
@@ -120,7 +120,7 @@ async function withR7PostgresServer(t, callback) {
 
     const runtime = await createPostgresRuntime(env, { createPool: () => appPool, closePool: async () => {} });
     const server = createServer({ runtimeConfig: loadRuntimeConfig(env), env, services: runtime.services, runtimeHealth: runtime.health });
-    server.listen(0);
+    await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
     const baseUrl = `http://127.0.0.1:${server.address().port}`;
 
     try {
@@ -367,7 +367,7 @@ describe('Ticket R7: demo tenant runs every customer check with no access or inp
 
       // Generic user in demo tenant without admin identity is blocked by SOC gate
       const demoGenericRes = await request(baseUrl, 'POST', '/v1/test-runs', {
-        headers: demoHeaders('admin', DEMO_TENANT),
+        headers: demoHeaders('admin', DEMO_TENANT, 'usr_generic_demo'),
         body: {
           target_group_id: DEMO_GROUP,
           target_id: DEMO_TARGET,
@@ -495,18 +495,18 @@ describe('Ticket R7: demo tenant runs every customer check with no access or inp
       // Wildcard demo does not bypass feature gates in Postgres mode
       process.env.ASTRANULL_DEMO_AUTO_VERIFY_TENANTS = '*';
       try {
-        const wildcardPlans = await request(baseUrl, 'GET', '/v1/waf/validation-plans', { headers: demoAdmin() });
+        const wildcardPlans = await request(baseUrl, 'GET', '/v1/waf/validation-plans', { headers: demoHeaders('admin', DEMO_TENANT, 'usr_generic_demo') });
         assert.equal(wildcardPlans.status, 404);
         assert.equal(wildcardPlans.json?.error, 'waf_feature_disabled');
 
         const wildcardBulk = await request(baseUrl, 'POST', `/v1/target-groups/${DEMO_GROUP}/targets:bulk-import`, {
-          headers: demoAdmin(),
+          headers: demoHeaders('admin', DEMO_TENANT, 'usr_generic_demo'),
           body: { connector_id: 'conn_test', targets: [] },
         });
         assert.equal(wildcardBulk.status, 404);
         assert.equal(wildcardBulk.json?.error, 'connector_feature_disabled');
 
-        const wildcardFeat = await request(baseUrl, 'GET', '/v1/tenant/deployment-features', { headers: demoAdmin() });
+        const wildcardFeat = await request(baseUrl, 'GET', '/v1/tenant/deployment-features', { headers: demoHeaders('admin', DEMO_TENANT, 'usr_generic_demo') });
         assert.equal(wildcardFeat.status, 200);
         assert.deepEqual(wildcardFeat.json, {
           demo_tenant: false,
