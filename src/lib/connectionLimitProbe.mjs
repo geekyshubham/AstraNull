@@ -42,7 +42,7 @@ function tryConnect(connectFn, address, port, timeoutMs, deps, onReserved) {
     const socket = startProbeIoAttempt(
       deps,
       'tcp_connect',
-      () => connectFn({ host: address, port }),
+      () => connectFn({ host: address, port, signal: deps.jobDeadlineSignal }),
       onReserved,
     );
     const finish = (result) => {

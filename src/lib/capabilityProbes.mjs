@@ -719,7 +719,7 @@ function tcpConnectProbe(host, port, timeoutMs, connectFn = net.connect, deps = 
     const socket = startProbeIoAttempt(
       deps,
       'tcp_connect',
-      () => connectFn({ host, port, timeout: timeoutMs }),
+      () => connectFn({ host, port, timeout: timeoutMs, signal: deps.jobDeadlineSignal }),
       onReserved,
     );
     const timer = setTimeout(() => {
