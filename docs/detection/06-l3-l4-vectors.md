@@ -122,3 +122,7 @@ During approved high-scale tests, collect external availability, adapter/provide
 ## Completion criteria
 
 L3/L4 detection is complete when safe checks can expose a declared-deny violation, firewall-change can distinguish reject evidence from silent drop, IPv4/IPv6 and perspectives are recorded, and SOC-gated scenarios remain the only path to resilience evidence.
+
+### Customer wording: blocked ports
+
+The network coverage rows are named **Blocked TCP ports** and **Blocked UDP ports**. When the target has no network policy, the row says **Set blocked ports** and links to the existing network controls form. The customer chooses the ports their firewall should block; AstraNull cannot infer intent from a reachable service. A failed connection or silent UDP service alone never proves enforcement. This copy change does not change admission, traffic bounds or verdict rules.

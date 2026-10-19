@@ -1,3 +1,4 @@
+- [x] Clarify network coverage prerequisites: name blocked TCP/UDP ports, explain why intended rules are needed, and show “Set blocked ports” with the existing controls link. Preserve exposure-only conclusions and policy admission. Scan regression covers immediately completed children sharing a tick while preserving plan order and a single active run.
 # AstraNull Progress Tracker
 
 ## Demo production login repair (2026-10-19)

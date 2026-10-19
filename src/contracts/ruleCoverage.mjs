@@ -287,8 +287,8 @@ export const NFW_RULE_CATEGORIES = Object.freeze([
   {
     id: 'inbound_tcp_deny',
     layer: 'nfw',
-    name: 'Inbound TCP allow and deny',
-    description: 'Can only find violations: a declared deny that still completes a TCP handshake from a non-CDN address is exposed. Outside-in evidence can never prove the port is protected.',
+    name: 'Blocked TCP ports',
+    description: 'Choose the TCP ports your firewall should block, for example SSH on port 22 if you do not allow public SSH access. AstraNull tries to connect from outside your network. A connection to a port you marked as blocked is an exposure. Without your expected rules, an open port could be intentional. A failed connection alone does not prove the firewall blocked it.',
     check_ids: ['nfw.declared_deny_tcp.safe', 'l3.forbidden_tcp_port.safe', 'l3.basic_deny_rule.safe'],
     required_declarations: ['network_policy'],
     forced_assurance: 'violation_only',
@@ -296,8 +296,8 @@ export const NFW_RULE_CATEGORIES = Object.freeze([
   {
     id: 'inbound_udp_deny',
     layer: 'nfw',
-    name: 'Inbound UDP allow and deny',
-    description: 'Can only find violations: a declared deny that still returns a genuine service reply is exposed. Silence is recorded as an observation only.',
+    name: 'Blocked UDP ports',
+    description: 'Choose the UDP ports your firewall should block. AstraNull sends a small service request from outside your network. A valid reply from a port you marked as blocked is an exposure. Without your expected rules, a reply could be intentional. No reply alone does not prove the firewall blocked the request.',
     check_ids: ['nfw.declared_deny_udp.safe', 'l3.forbidden_udp_port.safe'],
     required_declarations: ['network_policy'],
     forced_assurance: 'violation_only',

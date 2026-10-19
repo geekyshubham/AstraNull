@@ -143,8 +143,8 @@ describe('rule coverage view model', () => {
     });
     assert.equal(model.freshnessDays, 7);
     const tcp = model.categories.find((category) => category.id === 'inbound_tcp_deny');
-    assert.equal(tcp.statusLabel, 'Needs declaration');
-    assert.equal(tcp.ctas[0].cta, 'Declare a denied port');
+    assert.equal(tcp.statusLabel, 'Set blocked ports');
+    assert.equal(tcp.ctas[0].cta, 'Set blocked ports');
     assert.equal(tcp.ctas[0].section, 'network');
     assert.match(model.categories.find((category) => category.id === 'allowlists_geo').reason, /two registered probe source locations/);
     assert.deepEqual(sortCoverageForAttention(model.categories).map((category) => category.id), ['xss', 'inbound_tcp_deny', 'sqli', 'allowlists_geo']);

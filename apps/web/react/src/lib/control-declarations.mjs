@@ -17,7 +17,7 @@ const ABSOLUTE_PATH = /^\/(?!\/)[^\s?#]*$/;
 export const DECLARATION_KEYS = Object.freeze({
   network_policy: Object.freeze({
     label: 'Network policy',
-    cta: 'Declare a denied port',
+    cta: 'Set blocked ports',
     section: 'network',
     unlocks: 'Declare which ports should be closed so AstraNull can report a firewall exposure when one answers.',
   }),

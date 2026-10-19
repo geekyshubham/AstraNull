@@ -203,9 +203,10 @@ describe('validation scans API', () => {
     const created = await request(baseUrl, 'POST', '/v1/validation-scans', { headers: engineer, body: { target_id: target.id, check_ids: checkIds } });
     assert.equal(created.status, 201, JSON.stringify(created.json));
     assert.deepEqual(created.json.steps.map((step) => step.check_id), checkIds);
-    for (let index = 0; index < checkIds.length; index += 1) {
-      assert.deepEqual(getStore().testRuns.map((run) => run.check_id), checkIds.slice(0, index + 1));
-      assert.equal(getStore().testRuns.filter((run) => ['queued', 'running', 'collecting'].includes(run.status)).length, 1, 'only one child holds the execution slot');
+    for (let tick = 0; tick < checkIds.length && getStore().validationScans.find((scan) => scan.id === created.json.id).status !== 'completed'; tick += 1) {
+      const started = getStore().testRuns;
+      assert.deepEqual(started.map((run) => run.check_id), checkIds.slice(0, started.length), 'immediately completed steps may share a tick, but never overtake the plan');
+      assert.ok(started.filter((run) => ['queued', 'running', 'collecting'].includes(run.status)).length <= 1, 'at most one child holds the execution slot');
       // Advance only the simulation clock; production quotas and signed probe caps stay unchanged.
       t.mock.timers.tick(61 * 60 * 1000);
       expireCollectionWindows();
@@ -226,7 +227,7 @@ describe('validation scans API', () => {
 
   it('enforces RBAC and refuses SOC-gated or unknown checks for the whole request', async () => {
     const viewer = demoHeaders('viewer', 'ten_demo', 'usr_viewer');
-    const engineer = demoHeaders('engineer');
+    const engineer = demoHeaders('engineer', 'ten_demo', 'usr_generic_demo');
     const forbidden = await request(baseUrl, 'POST', '/v1/validation-scans', {
       headers: viewer,
       body: { target_group_id: 'tg_1', check_ids: ['origin.leak_scan.safe'] },
@@ -336,7 +337,7 @@ describe('validation scans API', () => {
     assert.ok(checks.json.items.some((check) => check.section_id === 'A3'));
     const socGated = checks.json.items.filter((check) => check.safety_class === 'soc_gated');
     assert.ok(socGated.length > 0);
-    const engineer = demoHeaders('engineer');
+    const engineer = demoHeaders('engineer', 'ten_demo', 'usr_generic_demo');
     const refused = await request(baseUrl, 'POST', '/v1/validation-scans', {
       headers: engineer,
       body: { target_group_id: 'tg_1', check_ids: [socGated[0].check_id] },

@@ -92,6 +92,7 @@ export function normalizeRuleCoverage(payload) {
     const required = list(category.required_declarations).map(text).filter(Boolean);
     const reasonCode = text(category.not_runnable_reason);
     const reason = text(category.out_of_scope_reason) || text(category.not_assessable_reason) || NOT_RUNNABLE_REASON_COPY[reasonCode] || '';
+    const needsBlockedPorts = status === 'needs_declaration' && ['inbound_tcp_deny', 'inbound_udp_deny'].includes(text(category.id)) && missing.includes('network_policy');
     const assuranceReason = assurance === 'partial' || assurance === 'observation' ? text(category.assurance_reason) : '';
     return {
       id: text(category.id),
@@ -102,7 +103,7 @@ export function normalizeRuleCoverage(payload) {
       assuranceLabel: assuranceMeta(assurance).label,
       assuranceReason: sentence(assuranceReason),
       status,
-      statusLabel: status ? coverageStatusMeta(status).label : '',
+      statusLabel: needsBlockedPorts ? 'Set blocked ports' : status ? coverageStatusMeta(status).label : '',
       statusTone: status ? coverageStatusMeta(status).tone : 'muted',
       reason,
       requiredDeclarations: required,
