@@ -40,7 +40,8 @@ test('additive 0083 to 0084 upgrade preserves stored responses, reprovisions lea
   const availability = await resolvePostgresHarnessAvailability(localEnv(), { tryDocker: false });
   if (!availability.available) return t.skip(availability.reason);
   await withEphemeralPostgres(async (owner, { databaseName }) => {
-    const files = listMigrationFiles(MIGRATIONS_DIR);
+    const files = listMigrationFiles(MIGRATIONS_DIR).filter((file) => file.version <= '0084_origin_clue_retention');
+    assert.equal(files.at(-1).version, '0084_origin_clue_retention');
     const oldFiles = files.filter((file) => file.version <= '0083_origin_clues');
     assert.equal(oldFiles.at(-1).version, '0083_origin_clues');
     await runMigrations(owner, { migrationsDir: MIGRATIONS_DIR, files: oldFiles });
