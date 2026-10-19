@@ -13,6 +13,9 @@ import {
   ShieldCheck
 } from 'lucide-react';
 import { DomainPicker } from '../../components/targets/domain-picker';
+import { ScheduleCheckPicker } from '../../components/policies/schedule-check-picker';
+import { isPolicyTargetCompatible } from '../../lib/policy-targets';
+import type { ScheduleCheckEntry } from '../../lib/schedule-checks.mjs';
 import { Badge } from '../../components/ui/badge';
 import { CheckClassChips } from '../../components/checks/check-class-chips';
 import { AnchorButton, Button } from '../../components/ui/button';
@@ -44,7 +47,7 @@ export interface PolicyCreateFormModel {
   selectionReady: boolean;
   selectedCheck: DataItem | null;
   checkId: string;
-  checkOptions: SelectOption[];
+  checkEntries: ScheduleCheckEntry[];
   onCheckChange: (checkId: string) => void;
   cadence: string;
   cadenceOptions: SelectOption[];
@@ -744,7 +747,6 @@ function CreateSchedulePanel({
   const cadenceSectionId = useId();
   const reviewSectionId = useId();
   const headingRef = useRef<HTMLHeadingElement>(null);
-  const [checkQuery, setCheckQuery] = useState('');
   const noTargets = form.targets.length === 0;
   const noChecks = safeCheckCount === 0;
   const selectedCount = form.selectedTargetIds.length;
@@ -755,16 +757,13 @@ function CreateSchedulePanel({
     headingRef.current?.focus();
   }, []);
 
-  const query = checkQuery.trim().toLowerCase();
-  const filteredCheckOptions = query
-    ? form.checkOptions.filter((option) => !option.value || option.value === form.checkId || `${option.label} ${option.value}`.toLowerCase().includes(query))
-    : form.checkOptions;
-  const matchCount = filteredCheckOptions.filter((option) => option.value).length;
+  const incompatibleReason = (target: DataItem) => (form.selectedCheck && !isPolicyTargetCompatible(form.selectedCheck, target) ? 'Not supported by this check' : '');
+  const gatedCount = form.checkEntries.filter((entry) => !entry.selectable).length;
 
   const readiness = noTargets
     ? 'Declare a domain before creating a schedule.'
     : noChecks
-      ? 'No customer-runnable checks are available to schedule.'
+      ? 'No checks can be scheduled in this workspace.'
       : !form.checkId
         ? 'Select a check to continue.'
         : selectedCount === 0
@@ -786,9 +785,7 @@ function CreateSchedulePanel({
       <div className="rf-create-head">
         <div className="rf-create-heading">
           <h2 id={headingId} ref={headingRef} tabIndex={-1}>New validation schedule</h2>
-          <p>
-            Bind a customer-runnable check to the declared domains you select. Schedules are written one at a time, and failed domains stay selected for retry.
-          </p>
+          <p>Run one check on a cadence against the domains you pick. Each domain gets its own schedule.</p>
         </div>
         <Button type="button" size="sm" variant="ghost" disabled={busy !== ''} onClick={form.onClose}>Cancel</Button>
       </div>
@@ -802,31 +799,10 @@ function CreateSchedulePanel({
         <div className="rf-form-section">
           <div className="rf-form-intro">
             <h3 id={checkSectionId}><span className="rf-step" aria-hidden="true">1</span>Check</h3>
-            <p>Only customer-runnable checks can be scheduled. The check decides which target kinds can be bound.</p>
+            <p>{gatedCount ? 'What to run. Locked checks need an approved SOC request.' : 'What to run. Every check can be scheduled here.'}</p>
           </div>
-          <fieldset className="rf-form-fields" aria-labelledby={checkSectionId}>
-            <label className="full">
-              <span>Find a check</span>
-              <input
-                type="search"
-                value={checkQuery}
-                onChange={(event) => setCheckQuery(event.target.value)}
-                placeholder="Name or check ID"
-                autoComplete="off"
-                disabled={noChecks}
-                aria-describedby={`${checkSectionId}-matches`}
-              />
-              <span className="muted small" id={`${checkSectionId}-matches`} aria-live="polite">
-                {query ? `${formatNumber(matchCount)} of ${formatNumber(safeCheckCount)} runnable checks match` : `${formatNumber(safeCheckCount)} runnable checks`}
-              </span>
-            </label>
-            <Select
-              label="Check"
-              value={form.checkId}
-              options={filteredCheckOptions}
-              disabled={noChecks}
-              onChange={form.onCheckChange}
-            />
+          <div className="rf-form-fields" role="group" aria-labelledby={checkSectionId}>
+            <ScheduleCheckPicker entries={form.checkEntries} value={form.checkId} onChange={form.onCheckChange} disabled={noChecks || busy !== ''} />
             <Select
               label="Expected verdict"
               value={form.expectedVerdict}
@@ -834,29 +810,36 @@ function CreateSchedulePanel({
               hint={isObservationOnlyCheck(form.selectedCheck) ? OBSERVATION_ONLY_HINT : undefined}
               onChange={form.onExpectedVerdictChange}
             />
-            <p className="rf-help full">
-              The expected verdict is a declaration. It is compared against external probe evidence once a run records it.
-              {form.checkId ? <> <a href={`${buildDetailHref('check-detail', form.checkId)}`}>Review this check</a>.</> : null}
-              {noChecks ? <> <a href="#checks">Review the check catalog</a>.</> : null}
+            <p className="rf-help rf-help-inline">
+              A declaration compared with what the probes record.
+              {form.checkId ? <> <a href={`${buildDetailHref('check-detail', form.checkId)}`}>Review this check</a></> : null}
             </p>
-          </fieldset>
+            {noChecks ? <p className="rf-help full">No checks are available. <a href="#checks">Open the check library</a>.</p> : null}
+          </div>
         </div>
 
         <div className="rf-form-section">
           <div className="rf-form-intro">
-            <h3 id={scopeSectionId}><span className="rf-step" aria-hidden="true">2</span>Scope</h3>
-            <p>Select one or more declared domains directly. The bound identity cannot change after creation.</p>
+            <h3 id={scopeSectionId}><span className="rf-step" aria-hidden="true">2</span>Domains</h3>
+            <p>Where it runs. A domain can't be changed after the schedule is created.</p>
           </div>
-          <fieldset className="rf-form-fields" aria-labelledby={scopeSectionId}>
-            <DomainPicker targets={form.targets} selectedIds={form.selectedTargetIds} onChange={form.onTargetsChange} disabled={noTargets || busy !== ''} />
+          <div className="rf-form-fields" role="group" aria-labelledby={scopeSectionId}>
+            <DomainPicker
+              targets={form.targets}
+              selectedIds={form.selectedTargetIds}
+              onChange={form.onTargetsChange}
+              disabled={noTargets || busy !== ''}
+              label="Declared domains"
+              incompatibleReason={form.selectedCheck ? incompatibleReason : undefined}
+            />
             {noTargets ? <p className="rf-help full">No active domains are declared. <a href="#targets">Declare a target</a> first.</p> : null}
-          </fieldset>
+          </div>
         </div>
 
         <div className="rf-form-section">
           <div className="rf-form-intro">
             <h3 id={cadenceSectionId}><span className="rf-step" aria-hidden="true">3</span>Timing</h3>
-            <p>How often the check runs, in which timezone, and optionally when runs may start.</p>
+            <p>How often it runs, in which timezone, and an optional safe window.</p>
           </div>
           <fieldset className="rf-form-fields" aria-labelledby={cadenceSectionId}>
             <Select
@@ -904,7 +887,7 @@ function CreateSchedulePanel({
           <div className="rf-form-section rf-review" aria-labelledby={reviewSectionId}>
             <div className="rf-form-intro">
               <h3 id={reviewSectionId}><span className="rf-step" aria-hidden="true">4</span>Review</h3>
-              <p>Exactly these records are written. The scheduler computes each first run after creation.</p>
+              <p>One schedule per domain. The first run time is set after creation.</p>
             </div>
             <div className="rf-form-fields">
               <ul className="rf-review-list full" aria-label="Schedules to create">

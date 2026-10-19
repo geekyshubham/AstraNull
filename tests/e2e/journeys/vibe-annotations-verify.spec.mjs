@@ -113,7 +113,7 @@ test.describe('Vibe annotations verification', () => {
       await expect(page.locator('#portal-main a.td-back')).toHaveCount(0);
       const cluster = page.locator('.td-title-cluster');
       await expect(cluster.getByRole('heading', { level: 1, name: 'checkout.acme.com' })).toBeVisible();
-      await expect(cluster).toContainText('Validation unlocked');
+      await expect(cluster).toContainText('Ownership verified');
 
       // Unified workspace geometry: one column; title, then tabs, then the panel, all on the same
       // left edge and inside the viewport. Target facts live in the header, not a trailing table.

@@ -3842,7 +3842,7 @@ function CheckDetailPage({
           <div>
             <p className="check-fact-label">How it works</p>
             <p className="check-detail-text">{presentation.mechanism}</p>
-            <p className="muted small">{execution.cap}{probeTimeout ? ` · ${formatNumber(probeTimeout)} ms timeout` : ''}</p>
+            <p className="muted small"><span>{execution.cap}</span>{probeTimeout && execution.kind === 'Bounded live probe' ? <span>{` · ${formatNumber(probeTimeout)} ms timeout`}</span> : null}</p>
           </div>
           <div>
             <p className="check-fact-label">Limits</p>

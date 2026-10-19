@@ -87,6 +87,15 @@ async function chooseCustomSelect(scope, label, option) {
   return trigger;
 }
 
+async function chooseScheduleCheck(scope, checkId) {
+  const picker = scope.locator('.rf-check-picker, .rf-check-summary').first();
+  await expect(picker).toBeVisible({ timeout: 10_000 });
+  if (await scope.locator('.rf-check-summary').count()) await scope.locator('.rf-check-summary').getByRole('button', { name: 'Change' }).click();
+  await scope.getByRole('searchbox', { name: 'Find a check' }).fill(checkId);
+  await scope.getByRole('radio', { name: new RegExp(checkId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')) }).click();
+  await expect(scope.locator('.rf-check-summary')).toContainText(checkId);
+}
+
 test.describe('schedule form controls', () => {
   test.beforeAll(async () => {
     const { baseUrl: apiBaseUrl } = await startPortalPlaywrightServer({ mutate: applyScheduleControlFixture });
@@ -185,10 +194,10 @@ test.describe('schedule form controls', () => {
     await gotoPortalRoute(page, 'test-policies', sourceBaseUrl);
     await page.locator('.rf-header-actions').getByRole('button', { name: 'Create schedule' }).click();
     const panel = page.locator('section.rf-create');
-    await chooseCustomSelect(panel, 'Check', URL_ONLY_CHECK);
+    await chooseScheduleCheck(panel, 'ui.url_only_schedule.safe');
     await panel.locator('.domain-picker-option').filter({ hasText: 'https://checkout.acme.com/health' }).getByRole('checkbox').check();
     await expect(panel.getByRole('button', { name: 'Create schedule', exact: true })).toBeEnabled();
-    await chooseCustomSelect(panel, 'Check', HOST_CHECK);
+    await chooseScheduleCheck(panel, 'l3.firewall_exposure_scan.safe');
     await expect(panel.getByRole('button', { name: 'Create schedule', exact: true })).toBeDisabled();
     await expect(panel.locator('.rf-readiness')).toContainText('Select active domains compatible with this check.');
     await expect(panel.locator('.domain-picker-option').filter({ hasText: 'https://checkout.acme.com/health' }).getByRole('checkbox')).toBeChecked();

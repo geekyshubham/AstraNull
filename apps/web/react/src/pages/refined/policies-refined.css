@@ -551,3 +551,44 @@
   .refined.rf-policies td a,
   .refined.rf-policies .rf-cell-meta a { display: inline-flex; align-items: center; min-height: 44px; }
 }
+
+/* Check picker: every catalog check, searchable; locked checks stay visible. */
+.refined.rf-policies .rf-check-picker { display: flex; min-width: 0; flex-direction: column; overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface); }
+.refined.rf-policies .rf-check-picker-tools { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); padding: var(--space-3) var(--space-4); }
+.refined.rf-policies .rf-check-search { display: flex; flex: 1 1 260px; min-width: 0; min-height: 40px; align-items: center; gap: var(--space-2); padding: 0 var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-sunk); color: var(--fg-2); font-weight: 400; }
+.refined.rf-policies .rf-check-search:focus-within { border-color: var(--focus-color); box-shadow: var(--focus-ring); }
+.refined.rf-policies .rf-check-search svg { flex: none; }
+.refined.rf-policies .rf-check-search input { flex: 1 1 auto; min-width: 0; min-height: 38px; padding: 0; border: 0; outline: 0; background: transparent; color: var(--fg); font: inherit; font-size: var(--text-sm); box-shadow: none; }
+.refined.rf-policies .rf-check-count { color: var(--fg-2); font-family: var(--font-mono); font-size: var(--text-xs); font-variant-numeric: tabular-nums; }
+.refined.rf-policies .rf-check-categories { display: flex; flex-wrap: wrap; gap: var(--space-1-5); padding: 0 var(--space-4) var(--space-3); border-bottom: 1px solid var(--border-soft); }
+.refined.rf-policies .rf-check-categories button { display: inline-flex; min-height: 30px; align-items: center; gap: var(--space-1-5); padding: 0 var(--space-3); border: 1px solid var(--border-soft); border-radius: var(--radius-pill); background: transparent; color: var(--fg-2); font: inherit; font-size: var(--text-xs); cursor: pointer; }
+.refined.rf-policies .rf-check-categories button span { color: var(--meta); font-family: var(--font-mono); }
+.refined.rf-policies .rf-check-categories button:hover { color: var(--fg); border-color: var(--border-strong); }
+.refined.rf-policies .rf-check-categories button[aria-pressed='true'] { border-color: color-mix(in oklab, var(--accent), transparent 45%); background: var(--surface-selected); color: var(--fg); }
+.refined.rf-policies .rf-check-categories button:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.refined.rf-policies .rf-check-options { display: flex; max-height: 320px; flex-direction: column; padding: var(--space-1) 0; overflow-y: auto; overscroll-behavior: contain; }
+.refined.rf-policies .rf-check-option { display: flex; min-height: 48px; align-items: center; gap: var(--space-3); padding: var(--space-2) var(--space-4); color: var(--fg); font-weight: 400; cursor: pointer; transition: background-color var(--motion-fast) var(--ease-out-soft); }
+.refined.rf-policies .rf-check-option:hover { background: var(--surface-hover); }
+.refined.rf-policies .rf-check-option:has(input:checked) { background: var(--surface-selected); }
+.refined.rf-policies .rf-check-option[data-gated] { cursor: not-allowed; }
+.refined.rf-policies .rf-check-option input { flex: none; inline-size: 16px; block-size: 16px; min-height: 0; margin: 0; padding: 0; accent-color: var(--accent); }
+.refined.rf-policies .rf-check-option input:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.refined.rf-policies .rf-check-option-copy { display: flex; min-width: 0; flex: 1 1 auto; flex-direction: column; gap: 2px; }
+.refined.rf-policies .rf-check-option-copy strong { overflow: hidden; color: var(--fg); font-size: var(--text-sm); font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.refined.rf-policies .rf-check-option-copy code,
+.refined.rf-policies .rf-check-summary-copy code { overflow: hidden; color: var(--meta); font-family: var(--font-mono); font-size: var(--text-xs); text-overflow: ellipsis; white-space: nowrap; }
+.refined.rf-policies .rf-check-option[data-gated] .rf-check-option-copy strong { color: var(--fg-2); }
+.refined.rf-policies .rf-check-gated { display: inline-flex; flex: none; align-items: center; gap: var(--space-1); padding: 2px var(--space-2); border: 1px dashed var(--border-strong); border-radius: var(--radius-pill); color: var(--fg-2); font-size: var(--text-xs); white-space: nowrap; }
+.refined.rf-policies .rf-check-empty { margin: 0; padding: var(--space-4); color: var(--fg-2); font-size: var(--text-sm); }
+.refined.rf-policies .rf-check-cancel { align-self: flex-start; margin: 0 var(--space-4) var(--space-3); }
+.refined.rf-policies .rf-check-summary { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-3); padding: var(--space-3) var(--space-4); border: 1px solid color-mix(in oklab, var(--accent), transparent 55%); border-radius: var(--radius-md); background: var(--surface-selected); }
+.refined.rf-policies .rf-check-summary-copy { display: flex; min-width: 0; flex: 1 1 260px; flex-direction: column; gap: var(--space-1); }
+.refined.rf-policies .rf-check-summary-label { color: var(--fg-2); font-size: var(--text-xs); }
+.refined.rf-policies .rf-check-summary-copy strong { color: var(--fg); font-size: var(--text-base); font-weight: 600; }
+.refined.rf-policies .rf-help-inline { align-self: end; padding-bottom: var(--space-2); }
+.refined.rf-policies .rf-form-fields[role='group'] { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr)); align-content: start; gap: var(--space-4); min-width: 0; }
+@media (pointer: coarse) {
+  .refined.rf-policies .rf-check-option input { width: 20px; height: 20px; }
+  .refined.rf-policies .rf-check-categories button { min-height: 44px; }
+}
+@media (prefers-reduced-motion: reduce) { .refined.rf-policies .rf-check-option { transition: none; } }

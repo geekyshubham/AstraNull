@@ -201,7 +201,7 @@ export function addWafNfwDemoEvidence(store, ids = PORTAL_DEMO_IDS) {
         ports_probed: [22, 3389],
         unprobed_deny_ports: [5900],
         ...UNAUTHENTICATED_PERSPECTIVE,
-        requests_sent: 2, safety_attestation: { requests_sent: 2 }, external_result: 'connected',
+        requests_sent: 2, safety_attestation: { requests_sent: 2, probe_requests_sent: 2 }, external_result: 'connected',
       },
       verdictExtra: {
         port_results: [

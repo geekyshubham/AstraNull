@@ -46,10 +46,11 @@ test.describe('default-off origin associations stay passive without rejected hyd
     const calls = track(page);
     await injectPortalDevHeadersSession(page);
     await page.goto(`${disabledBase}/app#target-detail?id=${ids.targetId}&tab=overview`, { waitUntil: 'networkidle' });
-    await expect(region(page)).toContainText('not enabled for this tenant');
-    await expect(region(page).getByRole('button', { name: 'Review DNS collection' })).toHaveCount(0);
-    await expect(region(page).getByRole('button', { name: 'Import records', exact: true })).toHaveCount(0);
-    await expect(region(page).getByRole('heading', { name: 'No associations recorded' })).toHaveCount(0);
+    await expect(page.getByRole('heading', { level: 1, name: 'checkout.acme.com' })).toBeVisible();
+    // A disabled tenant feature hides the section entirely instead of explaining it on every target.
+    await expect(region(page)).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Review DNS collection' })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Import records', exact: true })).toHaveCount(0);
     expect(calls.filter((call) => call.path.includes('/origin-clues'))).toEqual([]);
     expect(writes(calls)).toEqual([]);
     diagnostics.assertClean();
@@ -102,12 +103,12 @@ test.describe('target Overview origin associations (isolated fixtures; no extern
       await page.getByRole('button', { name: /Role \(dev\)/ }).click();
       await page.getByRole('option', { name: /viewer/i }).click();
       await expect.poll(() => replacementFeatureReads).toBeGreaterThan(0);
-      await expect(region(page).getByRole('heading', { name: 'Origin exposure', exact: true })).toBeVisible();
       expect(replacementReads).toEqual([]);
-      await expect(region(page)).toContainText('not enabled for this tenant');
       expect(writes(calls)).toEqual([]);
     } finally { release(); }
-    await expect(region(page)).toContainText('not enabled for this tenant');
+    // The replacement session is not opted in, so the section disappears and nothing was read for it.
+    await expect(region(page)).toHaveCount(0);
+    expect(replacementReads).toEqual([]);
   });
 
   test('forbidden associations show a permission state rather than an empty safe result', async ({ page }) => {
@@ -199,6 +200,7 @@ test.describe('target Overview origin associations (isolated fixtures; no extern
       return route.fulfill({ json: { anchor_target_id: ids.targetId, primary_entry_path_id: entry.id, plan_digest: digest, expectation: body.expectation, items: [{ entry_path_id: entry.id, target_id: entry.entry_target_id, check_id: body.expectation.scenario, check_version: '1.0.0', eligible: true, paired_plan: incomplete ? null : pair, origin_binding_id: entry.origin_binding_id }], expectation_conflicts: [], limitations: ['external_only'] } });
     });
     await open(page);
+    await page.locator('#portal-main details.td-fold > summary', { hasText: 'Setup' }).click();
     const panel = page.getByRole('region', { name: 'Entry-path comparisons', exact: true });
     await panel.getByRole('button', { name: 'Plan a comparison', exact: true }).click();
     await panel.getByLabel('Comparison mode', { exact: true }).selectOption(`origin.identity_pair.${method.toLowerCase()}.v1`);

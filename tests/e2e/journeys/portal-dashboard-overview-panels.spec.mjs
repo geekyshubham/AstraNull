@@ -181,7 +181,7 @@ test.describe('portal dashboard overview panels', () => {
     await expect(alert).toContainText('Paused');
     await expect(alert.getByTitle(/kill_switch\.updated_at/)).toBeVisible();
   });
-  test('FT-DASH-05 at 375px the recorded verdict, verdict and time stay on screen with no page overflow', async ({ page }) => {
+  test('FT-DASH-05 at 375px the recorded verdict and ownership stay on screen with no page overflow', async ({ page }) => {
     await restartPortalPlaywrightServer({ mutate: applyPortalBaselineReadinessBoost });
     const baseUrl = getPortalPlaywrightBaseUrl();
     await page.setViewportSize({ width: 375, height: 812 });
@@ -189,9 +189,9 @@ test.describe('portal dashboard overview panels', () => {
     await gotoPortalRoute(page, 'dashboard', baseUrl);
 
     const posture = page.locator('.dash-area-targets');
-    const activity = page.locator('.dash-area-activity');
     await expect(posture.locator('td[data-label="Recorded verdict"]').first()).toBeVisible();
-    for (const [card, label] of [[posture, 'Recorded verdict'], [activity, 'Verdict'], [activity, 'When']]) {
+    await expect(page.locator('.dash-area-activity'), 'the recent activity widget was removed').toHaveCount(0);
+    for (const [card, label] of [[posture, 'Recorded verdict'], [posture, 'Ownership']]) {
       const cell = card.locator(`td[data-label="${label}"]`).first();
       await cell.scrollIntoViewIfNeeded();
       await expect(cell, `${label} cell is visible at 375px`).toBeVisible();

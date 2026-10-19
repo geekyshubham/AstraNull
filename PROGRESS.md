@@ -1,6 +1,13 @@
 - [x] Clarify network coverage prerequisites: name blocked TCP/UDP ports, explain why intended rules are needed, and show “Set blocked ports” with the existing controls link. Preserve exposure-only conclusions and policy admission. Scan regression covers immediately completed children sharing a tick while preserving plan order and a single active run.
 # AstraNull Progress Tracker
 
+## Targets, provider tiles and schedule form polish (2026-10-19)
+
+- [x] Targets table: quieter rows with a status dot instead of an orange badge per row, aligned numeric columns, and cards at 700px or narrower.
+- [x] Target detail provider list: a named-area grid so long states such as "Not detected in this observation" truncate inside the row, with the full text in the tooltip.
+- [x] New validation schedule form: rebuilt domain picker and a grouped check picker that can select every check the account may run (`lib/schedule-checks.mjs` mirrors the server `isCustomerRunnable`; SOC-gated checks stay excluded except for the demo account via `all_checks_customer_runnable`).
+- [x] Spec upkeep plus real fixes found on the way: dashboard ownership chip clipping at 1024px, the partial-groups notice made visible again, the restored WAF rule-token honesty statement, probe timeout only for live probes, the check library following `?target=` changes, the demo NFW seed attestation, and light-theme chip count contrast. Full Playwright run: 630 passed; the 8 failures were from a DNS outage and pass on rerun.
+
 ## Demo production login repair (2026-10-19)
 
 - [x] Recognize the actual public demo login (`ten_demo` + `usr_admin`) in feature projection and both run-admission paths. Previous selection coverage incorrectly used a synthetic tenant identity. The corrected browser regression selects and submits all 18 reported exploit, delivery-pattern and high-scale checks; 100 focused Node tests and the real PostgreSQL regression pass, with other users/tenants and kill-switch denial retained. [ADR-0016 correction](docs/adr/0016-demo-tenant-ownership-auto-verify.md#production-login-identity-correction-2026-10-19). The live pre-release bundle hash differed from the committed portal and still contained the old redacted 2-KiB capture; deployment must update the control plane and workers together. CI and deployment provide release evidence for this commit.

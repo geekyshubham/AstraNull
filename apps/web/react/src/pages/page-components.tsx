@@ -1,5 +1,6 @@
 import { checkPresentation } from '../lib/check-presentation.mjs';
-import { Fragment, useEffect, useRef, useState, type ComponentPropsWithoutRef, type CSSProperties, type FormEvent, type HTMLAttributes, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
+import { scheduleCheckEntries } from '../lib/schedule-checks.mjs';
+import { Fragment, useEffect, useMemo, useRef, useState, type ComponentPropsWithoutRef, type CSSProperties, type FormEvent, type HTMLAttributes, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
 import {
   Activity,
   Bot,
@@ -2362,15 +2363,9 @@ export function PolicyPage({
     targetId: getHashQueryParam('target')
   }));
   const canWritePolicies = sessionHasPermission(session, 'test_policy:write');
-  const safeChecks = data.checks.filter((check) => getString(check, ['safety_class']) === 'safe');
-  const policyCheckOptions: SelectOption[] = [
-    { value: '', label: 'Select check' },
-    ...safeChecks.map((check) => ({
-      value: getString(check, ['check_id']),
-      label: checkPresentation(check).name,
-      description: getString(check, ['check_id'])
-    }))
-  ];
+  const allChecksRunnable = data.deploymentFeatures?.all_checks_customer_runnable === true;
+  const policyCheckEntries = useMemo(() => scheduleCheckEntries(data.checks, { allChecksRunnable }), [data.checks, allChecksRunnable]);
+  const safeChecks = useMemo(() => policyCheckEntries.filter((entry) => entry.selectable).map((entry) => entry.check), [policyCheckEntries]);
   const selectedPolicyCheck = safeChecks.find(
     (check) => getString(check, ['check_id', 'id'], '') === policyCheckId
   ) ?? null;
@@ -2547,7 +2542,7 @@ export function PolicyPage({
       selectionReady: policySelectionReady,
       selectedCheck: selectedPolicyCheck,
       checkId: policyCheckId,
-      checkOptions: policyCheckOptions,
+      checkEntries: policyCheckEntries,
       onCheckChange: handlePolicyCheckChange,
       cadence: policyCadence,
       cadenceOptions: POLICY_CADENCE_OPTIONS,

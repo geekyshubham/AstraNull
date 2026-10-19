@@ -89,7 +89,8 @@
 }
 
 .refined .rf-status-chip[aria-pressed='true'] .rf-tab-count {
-  color: var(--accent);
+  color: var(--fg);
+  font-weight: 600;
 }
 
 .refined .rf-status-sub {

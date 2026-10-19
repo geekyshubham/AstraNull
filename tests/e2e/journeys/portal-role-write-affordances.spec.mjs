@@ -86,7 +86,7 @@ test.describe('portal mutation affordances follow backend RBAC', () => {
     await expectNoButton(page, 'Detect again');
     await page.getByRole('tab', { name: /^Validate/ }).click();
     const validatePanel = page.locator('#td-panel-validate');
-    await expect(validatePanel.getByText('Read-only role', { exact: true })).toBeVisible();
+    await expect(validatePanel.getByText(/^Read-only role\b/)).toBeVisible();
     for (const label of ['Run selected check', 'Start check', 'Start all checks', 'Start detection']) await expectNoButton(page, label);
     await expect(validatePanel.getByRole('button', { name: /^(Review|Run|Start)\b/ })).toHaveCount(0);
     await expect(page.locator('dialog[open]')).toHaveCount(0);

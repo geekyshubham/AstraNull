@@ -57,6 +57,7 @@ test.describe('WAF/NFW truthful results, declarations and rule coverage (T8)', (
   test('efficacy separates managed rule markers from custom canary rules and never claims attack classes', async ({ page }) => {
     await open(page, `target-detail?id=${TARGET}`);
     const efficacy = page.locator('.td-efficacy');
+    await efficacy.getByText('Rule details', { exact: true }).click();
     await expect(efficacy.getByText('Managed rules enforced:')).toBeVisible();
     await expect(efficacy.getByText('Custom canary rules enforced:')).toHaveCount(0);
     await expect(efficacy).toContainText('inconclusive');
@@ -153,7 +154,7 @@ test.describe('WAF/NFW truthful results, declarations and rule coverage (T8)', (
     await expect(panel.getByRole('row', { name: /Egress filtering/ })).toContainText('Out of scope');
     const cta = panel.getByRole('link', { name: 'Declare a rate-limit canary route' });
     await expect(cta).toHaveAttribute('href', new RegExp(`id=${TARGET}&tab=controls&section=rate_limit`));
-    await expect(panel.getByRole('row', { name: /Inbound TCP allow and deny/ })).toContainText('Fail');
+    await expect(panel.getByRole('row', { name: /Blocked TCP ports/ })).toContainText('Fail');
     await expectNoAxeViolations(page, '.rc-panel');
   });
 
