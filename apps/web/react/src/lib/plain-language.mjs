@@ -1,3 +1,4 @@
+import { checkPresentation } from './check-presentation.mjs';
 const EVIDENCE_TIERS = Object.freeze([
   Object.freeze({
     code: 'E1',
@@ -226,7 +227,7 @@ export function plainFindingTitle(value, targets = [], checks = []) {
     || targetId;
   const checkId = recordString(finding, ['check_id']);
   const check = (Array.isArray(checks) ? checks : []).map(asRecord).find((entry) => recordString(entry, ['check_id', 'id']) === checkId);
-  const checkName = plainCheckName(recordString(check, ['name', 'title']) || checkId);
+  const checkName = checkPresentation(checkId).name;
 
   if (generated || (!rawTitle && verdict)) {
     const outcome = plainVerdictLabel(verdict || generated?.[1]);

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { describe, it } from 'node:test';
 import { CHECK_CATALOG } from '../../src/contracts/checks.mjs';
-import { CHECK_PRESENTATION_IDS, checkPresentation } from '../../src/lib/checkPresentation.mjs';
+import { CHECK_PRESENTATION_IDS, checkPresentation, plainCheckExplanation } from '../../src/lib/checkPresentation.mjs';
 import { canonicalDefinitionDigest } from '../../src/lib/checkDefinitionVersion.mjs';
 import { CHECK_DELIVERY_INVENTORY } from '../fixtures/check-delivery-coverage.mjs';
 
@@ -31,11 +31,38 @@ describe('presentation-only exact runtime catalog registry', () => {
       assert.deepEqual(audit.evidence_requirements, check.evidence_required ?? []);
     }
   });
+  it('gives every check distinct plain-language fields rather than a repeated template', () => {
+    for (const field of ['name', 'purpose', 'mechanism', 'limitations', 'next_step']) {
+      const values = CHECK_PRESENTATION_IDS.map((id) => checkPresentation(id)[field]);
+      assert.equal(new Set(values).size, CHECK_PRESENTATION_IDS.length, `Every ${field} must be individually authored`);
+      for (const value of values) assert.doesNotMatch(value, /\b(?:benign|inert|bounded|graded|prerequisite|semantic|posture|supported)\b/i);
+    }
+    for (const id of CHECK_PRESENTATION_IDS) {
+      const entry = checkPresentation(id);
+      assert.notEqual(entry.purpose, `${entry.name}: ${entry.mechanism}.`, id);
+      assert.notEqual(entry.purpose, entry.mechanism, id);
+    }
+    const base64 = checkPresentation('waf.evasion_base64_wrap.safe');
+    assert.match(base64.purpose, /letters, numbers and symbols/);
+    assert.match(base64.mechanism, /ordinary request.*original test text.*Base64/);
+    assert.match(base64.limitations, /original text must be blocked/);
+    assert.match(checkPresentation('waf.evasion_parser_json_dup.safe').mechanism, /does not send/);
+    assert.match(checkPresentation('exploit.teardrop.posture').mechanism, /declaration/);
+  });
+  it('explains historical comparison wording without changing the underlying record', () => {
+    const record = { explanation: 'The baseline harmless marker was allowed. Requests were sent, but evasion or inspection-limit resistance cannot be assessed without a blocked baseline.' };
+    const before = JSON.stringify(record);
+    assert.match(plainCheckExplanation(record.explanation), /site allowed the original test text/);
+    assert.doesNotMatch(plainCheckExplanation(record.explanation), /baseline|inert|benign|evasion/);
+    assert.equal(JSON.stringify(record), before);
+    assert.equal(plainCheckExplanation('A specific server error'), 'A specific server error');
+    assert.equal(plainCheckExplanation(null), '');
+  });
   it('never trusts caller-supplied names and handles hostile/unknown IDs', () => {
     const expected = checkPresentation('waf.http_method_policy_marker.safe');
     assert.equal(checkPresentation({ check_id: 'waf.http_method_policy_marker.safe', name: 'Attack proved' }), expected);
-    assert.equal(expected.name, 'HTTP-policy token observation');
-    assert.match(expected.limitations, /No attack-method test/);
+    assert.equal(expected.name, 'Response to an HTTP-method test label');
+    assert.match(expected.limitations, /No TRACE request/);
     for (const id of [null, undefined, '__proto__', 'constructor', 'not-a-check']) assert.equal(checkPresentation(id).name, 'Unknown check');
   });
   it('stays outside execution definitions and has no module/network dependencies', async () => {

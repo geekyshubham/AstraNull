@@ -27,6 +27,9 @@ test('signed activity is lease-bound, immutable, tenant-scoped, read-only, and r
     capture_version: 'http-exchange.v1', exchange_id: 'exchange_api', attempt_id: 'attempt_api', operation_id: 'operation_api', http_version: '1.1',
     request_headers: [{ name: 'content-type', value: 'application/json' }, { name: 'authorization', value: 'Bearer private' }],
     request_content_type: 'application/json', request_payload_preview: '{"marker":"inert","password":"private-password"}' }] };
+  body.items[0].body_bytes = Buffer.byteLength(body.items[0].request_payload_preview);
+  body.items.push({ sequence: 2, at, stage: 'request_payload', capture_version: 'http-exchange.v1', exchange_id: 'exchange_api',
+    request_payload_offset: 0, request_payload_encoding: 'base64', request_payload_preview: Buffer.from(body.items[0].request_payload_preview).toString('base64') });
   const post = (payload = body, workerId = 'worker_activity', tenantId = 'ten_demo') => request(base, 'POST', path, { body: payload,
     headers: probeWorkerAuthHeaders(workerId, { method: 'POST', path, bodyText: JSON.stringify(payload), tenantId }, SECRET) });
   try {
@@ -40,12 +43,16 @@ test('signed activity is lease-bound, immutable, tenant-scoped, read-only, and r
     const read = await request(base, 'GET', '/v1/test-runs/run_activity/activity', { headers: demoHeaders('viewer') });
     assert.equal(read.status, 200);
     assert.ok(read.json.items.some((item) => item.method === 'GET'));
-    const exchange = read.json.items.find((item) => item.exchange_id === 'exchange_api');
+    const exchange = read.json.items.find((item) => item.exchange_id === 'exchange_api' && item.stage === 'request_started');
     assert.equal(exchange.source_context.job_id, 'job_activity');
     assert.equal(exchange.source_context.leased_at, at);
-    assert.equal(exchange.request_headers.find((header) => header.name === 'authorization').value, '[redacted]');
+    assert.equal(exchange.request_headers.find((header) => header.name === 'authorization').value, 'Bearer private');
     assert.ok(read.json.items.some((item) => item.request_payload_preview?.includes('inert')));
-    assert.equal(JSON.stringify(read.json).includes('private'), false);
+    assert.equal(exchange.url, 'https://owned.test/path?key=private');
+    assert.equal(exchange.request_payload_preview, body.items[0].request_payload_preview);
+    const chunk = read.json.items.find((item) => item.stage === 'request_payload');
+    assert.equal(chunk.request_payload_offset, 0);
+    assert.equal(Buffer.from(chunk.request_payload_preview, 'base64').toString(), body.items[0].request_payload_preview);
     assert.equal(store.testRuns[0].status, 'collecting');
     assert.deepEqual({ events: store.events.length, runs: store.testRuns.length, audits: store.auditLog.length }, before);
     assert.equal((await request(base, 'GET', '/v1/test-runs/run_activity/activity', { headers: demoHeaders('admin', 'ten_other') })).status, 404);

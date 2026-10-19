@@ -1,3 +1,4 @@
+import { checkPresentation } from '../../lib/check-presentation.mjs';
 import type { FindingRuleGroup } from '../../lib/findings-helpers';
 import { findingRuleDetailHash, previewRuleAssets } from '../../lib/findings-helpers';
 import type { DataItem } from '../../lib/types';
@@ -8,8 +9,7 @@ import './findings-groups.css';
 
 function checkLabel(checkId: string, checks: DataItem[]) {
   if (!checkId) return '';
-  const check = checks.find((entry) => String(entry.check_id ?? entry.id ?? '') === checkId);
-  const name = check ? String(check.name ?? check.title ?? '') : '';
+  const name = checkPresentation(checkId).name;
   return plainCheckName(name || checkId);
 }
 

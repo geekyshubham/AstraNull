@@ -1,3 +1,4 @@
+import { checkPresentation } from '../../lib/check-presentation.mjs';
 import { useEffect, useId, useMemo, useState, type FormEvent } from 'react';
 import { CalendarClock } from 'lucide-react';
 import { requestJson } from '../../lib/api';
@@ -246,7 +247,7 @@ export function ValidationScanLauncher({
   }
 
   const scheduledIso = form.schedule === 'later' ? localDatetimeToIso(form.scheduledForLocal) : '';
-  const firstNames = selectedChecks.slice(0, 5).map((check) => getString(check, ['name', 'check_id']));
+  const firstNames = selectedChecks.slice(0, 5).map((check) => checkPresentation(check).name);
   const moreCount = Math.max(0, selectedChecks.length - firstNames.length);
 
   return (

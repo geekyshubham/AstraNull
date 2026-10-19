@@ -1,3 +1,4 @@
+import { plainCheckExplanation } from './checkPresentation.mjs';
 import { externalObservationLabel, originObservationOf } from './externalObservationOutcomes.mjs';
 
 /** Explain an inconclusive attempt without upgrading it to a protection claim. */
@@ -18,10 +19,10 @@ export function inconclusiveReason({ probeKind, externalResult, metadata = {} } 
     return {
       reason: 'baseline_comparison_unavailable',
       label: 'Blocking comparison unavailable',
-      next_step: 'Review the baseline marker evidence and configure a rule that blocks that harmless marker, then rerun the comparison.',
+      next_step: 'Confirm that the intended firewall rule blocks the original test text, then run the comparison again.',
       explanation: metadata.baseline_blocked === false
-        ? 'The baseline harmless marker was allowed. Requests were sent, but evasion or inspection-limit resistance cannot be assessed without a blocked baseline.'
-        : 'A complete blocked-baseline comparison was not recorded. Evasion or inspection-limit resistance remains unassessed.',
+        ? plainCheckExplanation('The baseline harmless marker was allowed. Requests were sent, but evasion or inspection-limit resistance cannot be assessed without a blocked baseline.')
+        : plainCheckExplanation('A complete blocked-baseline comparison was not recorded. Evasion or inspection-limit resistance remains unassessed.'),
     };
   }
   if (

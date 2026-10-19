@@ -36,7 +36,7 @@ test('an allowed baseline remains inconclusive but explains the observed blocker
   const result = correlateExternalOnlyVerdict({ probeKind: 'waf_evasion_marker_probe', externalResult: 'not_run', probeIoObserved: true, probeMetadata: { baseline_blocked: false } });
   assert.equal(result.verdict, 'inconclusive');
   assert.equal(result.createsFinding, false);
-  assert.match(result.explanation, /baseline harmless marker was allowed/);
+  assert.match(result.explanation, /site allowed the original test text/);
   assert.doesNotMatch(result.explanation, /was not run|transport failure/);
 });
 

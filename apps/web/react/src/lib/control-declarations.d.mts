@@ -71,7 +71,7 @@ export function targetFixableReason(reason: unknown): boolean;
 export function needsTargetAnswer(check: unknown): boolean;
 export type ServerRunnableAnswer = { runnable: boolean; reason: string };
 export function targetRunnableIndex(items: unknown): Map<string, ServerRunnableAnswer>;
-export function checkPrerequisite(check: unknown, context?: { declarations?: unknown; perspectiveCount?: number; target?: DataItem | null; serverRunnable?: boolean | ServerRunnableAnswer; serverRunnableIndex?: Map<string, ServerRunnableAnswer | boolean> | null }): CheckPrerequisite;
+export function checkPrerequisite(check: unknown, context?: { declarations?: unknown; perspectiveCount?: number; target?: DataItem | null; serverRunnable?: boolean | ServerRunnableAnswer; serverRunnableIndex?: Map<string, ServerRunnableAnswer | boolean> | null; serverSuppliesInput?: boolean }): CheckPrerequisite;
 export function prerequisiteCta(prerequisite: CheckPrerequisite | null | undefined): string;
 export function prerequisiteTone(prerequisite: CheckPrerequisite | null | undefined): 'muted' | 'warn';
 export function prerequisiteSection(prerequisite: CheckPrerequisite | null | undefined): string;

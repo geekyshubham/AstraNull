@@ -5,6 +5,7 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { checkPresentation } from '../src/lib/checkPresentation.mjs';
 import { CHECK_CATALOG } from '../src/contracts/checks.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -28,7 +29,7 @@ const PROBE_KINDS = {
   dns_resolve: 'Single DNS lookup for declared name.',
   metadata_marker: 'No live network I/O — records declared intent only (deferred checks).',
   udp_probe: 'One labeled UDP datagram (no amplification).',
-  quic_reachability: 'HTTPS Alt-Svc read plus one UDP/443 datagram.',
+  quic_reachability: 'Reads the website’s Alt-Svc announcement; does not send a QUIC exchange.',
   alert_webhook_ping: 'One POST to declared alert webhook; expects HTTP 2xx.',
   ops_readiness: 'Validates runbook/kill-switch evidence metadata (no traffic to customer edge).',
   ownership_challenge: 'Bounded HEAD with challenge nonce for ownership verification.',
@@ -39,15 +40,15 @@ const PROBE_KINDS = {
   origin_identity_pair: 'Two separately reviewed HEAD or bounded GET requests with shared nonce: protected baseline and verified bound origin, preserving Host/SNI. E2 identity observation only; no readiness or general WAF-bypass assurance.',
   port_scan_bounded: 'TCP connect to capped port list on declared host.',
   rate_limit_sequence: 'Up to 5 spaced HEAD requests to observe 429/challenge.',
-  waf_enforcement_probe: 'Harmless marker request; blocked/challenged = WAF enforcing.',
+  waf_enforcement_probe: 'Records the response to a custom firewall test label; does not prove an installed rule works.',
   dnssec_posture: 'DNSKEY/DS lookups for DNSSEC signals.',
   dns_open_recursion: 'Single recursion test via declared resolver.',
   dns_failover_posture: 'NS count and secondary NS reachability.',
   dns_axfr_leak: 'One TCP-53 AXFR attempt; leak if zone transfers when unauthorized.',
-  tls_audit: 'Full TLS handshake audit (version, cipher, cert expiry).',
+  tls_audit: 'Records the sampled TLS connection and certificate details; not a complete cipher or version audit.',
   cache_abuse_probe: 'Bounded cache-bust HEAD sequence.',
   api_surface_scan: 'HEAD on declared/common API doc paths.',
-  cors_posture_probe: 'OPTIONS with foreign Origin; weak ACAO = finding.',
+  cors_posture_probe: 'Records cross-site access headers for policy review; headers alone do not prove private data access.',
   bot_challenge_probe: 'Cookie-less client; expects bot challenge or block.',
   graphql_posture_probe: 'Bounded GraphQL endpoint posture (no deep queries).',
   websocket_upgrade_posture: 'Single WebSocket upgrade request; classifies 101/403/426.',
@@ -57,10 +58,10 @@ const PROBE_KINDS = {
   slow_header_probe: 'One incomplete harmless header connection held for at most the signed timeout; no concurrent holds.',
   http2_frame_probe: 'Bounded HTTP/2 SETTINGS read with optional ping/single reset according to the signed cap; HPACK mode uses SETTINGS only.',
   http3_control_probe: 'One HTTPS HEAD reads Alt-Svc only; it does not establish QUIC control-stream or SETTINGS posture.',
-  waf_inspection_limit_probe: 'Baseline plus bounded inert marker variants; no verdict without a usable blocked baseline.',
+  waf_inspection_limit_probe: 'Request-body inspection comparison is unavailable without an approved body-receiving endpoint.',
   waf_class_marker_probe: 'Bounded inert WAF class markers; no functional exploit payloads.',
-  waf_evasion_marker_probe: 'Bounded inert baseline/variant comparison for a named normalization transform.',
-  l7_resource_posture_probe: 'Tiny inert declared-shape requests; never sends resource-exhaustion payloads.',
+  waf_evasion_marker_probe: 'Compares original and changed test text, with ordinary requests before and after; unavailable request formats are not sent.',
+  l7_resource_posture_probe: 'Samples one roughly 1-KiB URL parameter; compressed request bodies are unavailable.',
   outside_in_waf_scan: 'Up to 13 pre-reserved, destination-pinned HTTP probes: WAF fingerprint, benign markers, evasion variants, origin bypass; no redirects or standalone DNS/TLS hints.',
 };
 
@@ -89,38 +90,6 @@ function esc(s) {
     .replace(/"/g, '&quot;');
 }
 
-function detectSummary(check) {
-  const kind = check.probe_profile?.kind ?? 'none';
-  const tier = check.evidence_tier ?? (kind === 'none' ? 'E4' : 'E0');
-  const maxReq = check.probe_profile?.max_requests ?? 1;
-  if (tier === 'E1') {
-    return 'E1 declared only. No live network I/O and no live-test verdict; customer-provided control evidence or a SOC-governed test is required.';
-  }
-  const parts = [`${tier}: ${PROBE_KINDS[kind] ?? `Probe kind: ${kind}`}`];
-  if (kind !== 'ops_readiness' && maxReq > 0) {
-    parts.push(`Max ${maxReq} request(s), timeout ≤ ${check.probe_profile?.timeout_ms ?? 5000}ms.`);
-  }
-  if (tier === 'E2') {
-    parts.push('Observation only: this transport result remains inconclusive for readiness.');
-  } else {
-    parts.push('Verdict is limited to the bounded semantic fact described above.');
-  }
-  return parts.join(' ');
-}
-
-function whatWeDetect(check) {
-  const id = check.check_id;
-  const hints = {
-    'origin.leak_scan.safe': 'Leaked origin IPs, stale subdomains, IPv6-only DNS paths that bypass CDN.',
-    'waf.fingerprint.safe': 'WAF vendor fingerprint, benign SQLi/XSS/path markers blocked or not, evasion bypass, posture label.',
-    'dns.zone_transfer_exposure.safe': 'Unauthorized AXFR (full zone download) on declared zone.',
-    'l7.cors_posture.safe': 'Overly permissive CORS (wildcard ACAO on preflight).',
-    'protocol.grpc_reflection_stream.safe': 'One bounded gRPC health/reflection reachability request (metadata-only result, no stream pressure).',
-  };
-  if (hints[id]) return hints[id];
-  return check.verdict_logic || check.description;
-}
-
 const safe = CHECK_CATALOG.filter((c) => c.safety_class === 'safe');
 const soc = CHECK_CATALOG.filter((c) => c.safety_class === 'soc_gated');
 const uncategorized = CHECK_CATALOG.filter((c) => !['safe', 'soc_gated'].includes(c.safety_class));
@@ -138,6 +107,7 @@ for (const c of safe) {
 const familyOrder = ['origin', 'l3_l4', 'path', 'dns', 'waf', 'l7', 'tls', 'protocol', 'reflection', 'amplification', 'exploit', 'pattern', 'operations'];
 
 function renderCheckCard(c) {
+  const copy = checkPresentation(c);
   const setup = (c.required_customer_setup ?? []).map((s) => `<li>${esc(s)}</li>`).join('');
   const evidence = (c.evidence_required ?? []).map(esc).join(', ');
   const stops = (c.stop_conditions ?? []).map(esc).join(', ');
@@ -151,16 +121,18 @@ function renderCheckCard(c) {
   return `
     <article class="check" id="${esc(c.check_id)}">
       <header>
-        <h3>${esc(c.name)}</h3>
+        <h3>${esc(copy.name)}</h3>
         <code class="check-id">${esc(c.check_id)}</code>
         <span class="badge ${esc(c.safety_class)}">${esc(c.safety_class)}</span>
       </header>
-      <p class="desc">${esc(c.description)}</p>
+      <p class="desc">${esc(copy.purpose)}</p>
       <dl>
-        <dt>What we detect</dt>
-        <dd>${esc(whatWeDetect(c))}</dd>
-        <dt>How we detect</dt>
-        <dd>${esc(detectSummary(c))}</dd>
+        <dt>How it works</dt>
+        <dd>${esc(copy.mechanism)}</dd>
+        <dt>Limits</dt>
+        <dd>${esc(copy.limitations)}</dd>
+        <dt>Next step</dt>
+        <dd>${esc(copy.next_step)}</dd>
         <dt>Probe kind</dt>
         <dd><code>${esc(c.probe_profile?.kind ?? 'none')}</code></dd>
         <dt>Evidence tier</dt>

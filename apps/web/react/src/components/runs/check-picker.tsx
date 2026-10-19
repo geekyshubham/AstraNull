@@ -1,3 +1,4 @@
+import { checkPresentation } from '../../lib/check-presentation.mjs';
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { Search, ShieldOff } from 'lucide-react';
 import { Badge } from '../ui/badge';
@@ -260,7 +261,7 @@ export function CheckPicker({
                       />
                       <span className="check-picker-row-copy">
                         <span className="check-picker-row-title">
-                          <strong>{getString(row.check, ['name'], row.id)}</strong>
+                          <strong>{checkPresentation(row.check).name}</strong>
                           {tier ? <Badge tone="muted" mono>{tier}</Badge> : null}
                           <CheckClassChips check={row.check} />
                           {row.prerequisite ? <Badge tone={prerequisiteTone(row.prerequisite)} title={row.prerequisite.detail}>{row.prerequisite.label}</Badge> : null}

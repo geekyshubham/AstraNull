@@ -1,9 +1,11 @@
+import { checkPresentation } from '../../../src/lib/checkPresentation.mjs';
 import { expect, test } from '@playwright/test';
 import { assertPortalInitialLoad, collectPortalBrowserFailures } from '../../helpers/portal-browser-failures.mjs';
 import { PORTAL_FONT_STYLESHEET } from '../../helpers/portal-browser-resources.mjs';
 import AxeBuilder from '@axe-core/playwright';
 import { assessmentChecks, targetCheckAvailability, withTargetRunnableChecks } from '../../../apps/web/react/src/lib/domain-checks.mjs';
 import { targetRunnableIndex } from '../../../apps/web/react/src/lib/control-declarations.mjs';
+import { DEMO_ACCOUNT_TENANT_ID } from '../../../src/lib/demoAutoVerify.mjs';
 import { PORTAL_BASELINE_IDS } from '../../fixtures/portal-baseline/seed.mjs';
 import { applyPortalBaselineReadinessBoost } from '../../fixtures/portal-baseline/readiness.mjs';
 import {
@@ -15,6 +17,7 @@ import {
 import {
   gotoPortalRoute,
   injectPortalDevHeadersSession,
+  PORTAL_SESSION,
   PORTAL_AUDITOR_SESSION,
   waitForPortalRouteSettled,
 } from '../../helpers/portal-playwright-session.mjs';
@@ -267,7 +270,7 @@ test.describe('target workspace: recorded attribution, checks and reviewed runs 
     await expect(page.locator('.td-check[data-selected="true"][data-focus-key="check-waf.fingerprint.safe"] .td-check-open')).toBeVisible();
     await expect(page.locator('.td-check[data-selected="true"][data-focus-key="check-waf.fingerprint.safe"]')).toHaveCount(1);
     await expect(page.locator('input[name=target-run-check][value="waf.fingerprint.safe"]')).not.toBeChecked();
-    await expect(page.locator('.td-checks')).toContainText('WAF and CDN Fingerprint');
+    await expect(page.locator('.td-checks')).toContainText(checkPresentation('waf.fingerprint.safe').name);
     await expect(page.getByText(/The linked check.*is not compatible/)).toHaveCount(0);
   });
 
@@ -353,6 +356,52 @@ test.describe('target workspace: recorded attribution, checks and reviewed runs 
     await dialog.getByRole('button', { name: 'Start check', exact: true }).click();
     await expect(page).toHaveURL(/ev_run=run_fx_single/);
     await expect(page.locator('.td-scan-terminal')).toHaveCount(0);
+  });
+
+  test('demo account can select and submit every exploit, delivery-pattern and high-scale check', async ({ page }) => {
+    seedPortalPlaywrightStore((store) => {
+      // Use the real demo identity with the existing isolated portal fixture.
+      for (const rows of Object.values(store).filter(Array.isArray)) {
+        for (const row of rows) {
+          if (row.id === PORTAL_BASELINE_IDS.tenantId) row.id = DEMO_ACCOUNT_TENANT_ID;
+          if (row.tenant_id === PORTAL_BASELINE_IDS.tenantId) row.tenant_id = DEMO_ACCOUNT_TENANT_ID;
+          for (const target of row.targets ?? []) target.tenant_id = DEMO_ACCOUNT_TENANT_ID;
+        }
+      }
+    });
+    await injectPortalDevHeadersSession(page, { ...PORTAL_SESSION, tenant_id: DEMO_ACCOUNT_TENANT_ID });
+    await page.goto(`${getPortalPlaywrightBaseUrl()}/app#target-detail?id=${VERIFIED_FRESH_TARGET}&tab=validate`);
+    const panel = page.locator('.td-checks');
+    const selected = [];
+    for (const [label, count] of [['Exploit classes', 6], ['Delivery patterns', 7], ['High-scale readiness', 5]]) {
+      const selectAll = panel.getByRole('checkbox', { name: `Select all in ${label}`, exact: true });
+      await expect(selectAll).toBeEnabled();
+      const group = panel.locator('.td-cat-shell').filter({ has: page.getByRole('checkbox', { name: `Select all in ${label}`, exact: true }) });
+      await group.locator('summary').click();
+      const inputs = group.locator('input[name=target-run-check]');
+      await expect(inputs).toHaveCount(count);
+      for (const input of await inputs.all()) {
+        await expect(input).toBeEnabled();
+        await input.check();
+        selected.push(await input.inputValue());
+      }
+      await expect(selectAll).toBeChecked();
+      await expect(group).not.toContainText('SOC only');
+    }
+    await expect(panel.locator('input[name=target-run-check]:checked')).toHaveCount(18);
+    await page.locator('.td-start-bar').getByRole('button', { name: 'Review and start 18', exact: true }).click();
+    const dialog = page.locator('dialog.modal-confirm[open]');
+    await expect(dialog).toContainText('Start 18 selected checks on');
+    const responsePromise = page.waitForResponse((response) => response.request().method() === 'POST' && new URL(response.url()).pathname === '/v1/validation-scans');
+    await dialog.getByRole('button', { name: 'Start 18 checks', exact: true }).click();
+    const response = await responsePromise;
+    expect(response.status()).toBe(201);
+    const submitted = response.request().postDataJSON();
+    const accepted = await response.json();
+    expect(submitted.target_id).toBe(VERIFIED_FRESH_TARGET);
+    expect([...submitted.check_ids].sort()).toEqual([...selected].sort());
+    expect(accepted.steps.map((step) => step.check_id).sort()).toEqual([...selected].sort());
+    await expect(page).toHaveURL(new RegExp(`ev_scan=${accepted.id}`));
   });
 
   test('a filtered selection starts exactly the selected checks, and category select-all stays in its category', async ({ page }) => {
@@ -609,7 +658,7 @@ test.describe('target workspace: recorded attribution, checks and reviewed runs 
     expect(accepted.steps.map((step) => step.check_id)).toEqual(body.check_ids);
     expect(new Set(accepted.steps.map((step) => step.target_id))).toEqual(new Set([PORTAL_BASELINE_IDS.targetId]));
 
-    await expect(panel.locator('.td-live-text')).toContainText(/Running 1 of \d+: WAF and CDN Fingerprint/);
+    await expect(panel.locator('.td-live-text')).toContainText(new RegExp(`Running 1 of \\d+: ${checkPresentation('waf.fingerprint.safe').name}`));
     await expect(panel.getByRole('button', { name: 'Stop scan' })).toBeVisible();
     await expect(page.locator('.td-scan-terminal')).toHaveCount(1);
     await expect(panel.locator('.td-check[data-status="running"]')).toHaveCount(1);

@@ -1,3 +1,4 @@
+import { checkPresentation } from '../../lib/check-presentation.mjs';
 import { useEffect, useRef, useState } from 'react';
 import { Square } from 'lucide-react';
 import { requestJson } from '../../lib/api';
@@ -44,7 +45,7 @@ export function ExecutionInspector({ config, session, reference, checks, onEvide
   const targetId = isScan ? selection.targetId : reference.target_id || '';
   const checkId = isScan ? selection.checkId : reference.check_id || '';
   const check = checks.find((item) => (item.check_id || item.id) === checkId);
-  const checkName = plainCheckName(str(check?.name) || checkId) as string;
+  const checkName = checkPresentation(checkId).name;
   const runActivity = useRecordedActivity({ config, session, id: scanBound ? childId : '', paused });
   const snapshot = runActivity.snapshot;
   const bound = scanBound && (!snapshot || (snapshot.run_id === childId && snapshot.target_id === targetId && snapshot.check_id === checkId));

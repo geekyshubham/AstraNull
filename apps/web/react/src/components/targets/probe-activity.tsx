@@ -18,7 +18,7 @@ const LABELS: Record<string, string> = {
   run_started: 'Run started', run_stopped: 'Cancellation recorded',
   run_created: 'Run created',
   phase_completed: 'Phase finished',
-  response_payload: 'Payload captured', response_body_completed: 'Response body read',
+  request_payload: 'Request payload captured', response_payload: 'Payload captured', response_body_completed: 'Response body read',
 };
 function text(value: unknown) { return typeof value === 'string' ? value : ''; }
 function time(value: unknown) {
@@ -44,7 +44,7 @@ function describe(item: DataItem) {
   if (item.stage === 'request_started') return `The worker started ${text(item.method) || 'a protocol request'}${item.url ? ` to ${text(item.url)}` : ''}.${identity} ${item.body_bytes != null ? `The request body contained ${String(item.body_bytes)} bytes. ` : ''}The captured query and payload preview are listed below.`;
   if (item.stage === 'response_received') return `The target returned ${item.status_code != null ? `HTTP ${String(item.status_code)}` : 'a response with no recorded HTTP status'}.${identity} ${item.response_content_type ? `Recorded format: ${text(item.response_content_type)}. ` : 'The response format was not recorded. '}${item.duration_ms != null ? `Observed request duration: ${String(item.duration_ms)} ms.` : ''}`;
   if (item.response_payload_available === false) return `This check used the recorded response headers and did not consume the response body.${identity} The HTTP status and declared format remain visible; no response payload is invented.`;
-  if (item.stage === 'response_payload' || item.stage === 'response_body_completed') return `The worker ${item.stage === 'response_body_completed' ? 'finished reading the bounded response body' : 'captured response bytes while reading the body'}.${identity} ${item.response_content_type ? `Format: ${text(item.response_content_type)}. ` : ''}${item.response_bytes_observed != null ? `${String(item.response_bytes_observed)} bytes observed. ` : ''}${item.response_payload_truncated ? 'The preview is partial.' : 'The captured preview is shown below with sensitive values redacted.'}`;
+  if (item.stage === 'response_payload' || item.stage === 'response_body_completed') return `The worker ${item.stage === 'response_body_completed' ? 'finished reading the bounded response body' : 'captured response bytes while reading the body'}.${identity} ${item.response_content_type ? `Format: ${text(item.response_content_type)}. ` : ''}${item.response_bytes_observed != null ? `${String(item.response_bytes_observed)} bytes observed. ` : ''}${item.response_payload_truncated ? 'The preview is partial.' : 'The recorded payload is shown below.'}`;
   if (item.stage === 'request_not_sent') return `This operation was not sent.${identity} Recorded reason: ${valueText(item.reason) || 'not recorded'}.`;
   if (item.stage === 'attempt_failed') return `The attempted operation failed.${identity} Recorded error: ${text(item.error_class) || 'not recorded'}.`;
   return `${stageLabel(item)}.${identity} The fields below are the recorded facts for this event.`;
@@ -70,11 +70,11 @@ export function ExchangeSide({ side, item, exchange }: { side: 'request' | 'resp
         <div><dt>Content type</dt><dd>{safeCaptureText(item[`${side}_content_type`]) || 'Not recorded'}</dd></div>
         {item.duration_ms != null ? <div><dt>Duration</dt><dd>{String(item.duration_ms)} ms</dd></div> : null}
       </dl>
-      <div className="probe-exchange-field"><h5>Headers <span>Recorded subset</span></h5>{headers === null ? <p className="probe-exchange-missing">Not recorded by worker{Array.isArray(item.header_names) ? `; header names only: ${item.header_names.map(safeCaptureText).join(', ')}` : ''}</p> : headers.length ? <dl className="probe-exchange-headers">{headers.map((header, index) => <div key={`${header.name}-${index}`}><dt>{header.name}</dt><dd>{header.value || '(empty value)'}</dd></div>)}</dl> : <p className="probe-exchange-missing">Empty recorded header set. This does not imply no headers were sent.</p>}</div>
+      <div className="probe-exchange-field"><h5>Headers <span>Recorded values</span></h5>{headers === null ? <p className="probe-exchange-missing">Not recorded by worker{Array.isArray(item.header_names) ? `; header names only: ${item.header_names.map(safeCaptureText).join(', ')}` : ''}</p> : headers.length ? <dl className="probe-exchange-headers">{headers.map((header, index) => <div key={`${header.name}-${index}`}><dt>{header.name}</dt><dd>{header.value || '(empty value)'}</dd></div>)}</dl> : <p className="probe-exchange-missing">Empty recorded header set. This does not imply no headers were sent.</p>}</div>
       {side === 'request' ? <CaptureBlock label="Query parameters" value={item.request_query_preview} empty="Empty recorded query" /> : null}
-      <div className="probe-exchange-field"><h5>Body preview <span>{partial ? 'Partial capture' : preview != null ? 'Bounded capture' : 'Not recorded'}</span></h5>
-        {available === false ? <p className="probe-exchange-missing">Not consumed by this check; no response body is inferred.</p> : encoding === 'base64' ? <p className="probe-exchange-missing">Binary preview withheld. No content is decoded or replayed.</p> : preview == null ? <p className="probe-exchange-missing">Not recorded by worker{side === 'response' && !exchange.bodyComplete ? '; body completion was not recorded' : ''}.</p> : <pre>{safeCaptureText(preview) || 'Empty recorded body'}</pre>}
-        {item[`${side}_bytes_observed`] != null ? <p className="probe-exchange-missing">{String(item[`${side}_bytes_observed`])} bytes observed{item[`${side}_bytes_captured`] != null ? `; ${String(item[`${side}_bytes_captured`])} bytes sampled` : ''}.</p> : null}
+      <div className="probe-exchange-field"><h5>Body <span>{partial ? 'Partial capture' : preview != null ? encoding === 'base64' ? 'Base64' : 'Recorded payload' : 'Not recorded'}</span></h5>
+        {available === false ? <p className="probe-exchange-missing">Not consumed by this check; no response body is inferred.</p> : preview == null ? <p className="probe-exchange-missing">Not recorded by worker{side === 'response' && !exchange.bodyComplete ? '; body completion was not recorded' : ''}.</p> : <pre>{safeCaptureText(preview) || 'Empty recorded body'}</pre>}
+        {item[`${side}_bytes_observed`] != null ? <p className="probe-exchange-missing">{String(item[`${side}_bytes_observed`])} bytes observed{item[`${side}_bytes_captured`] != null ? `; ${String(item[`${side}_bytes_captured`])} bytes captured` : ''}.</p> : null}
       </div>
     </>}
   </section>;
@@ -83,10 +83,10 @@ export function ExchangeSide({ side, item, exchange }: { side: 'request' | 'resp
 function ExchangeInspector({ exchange, open, onToggle }: { exchange: RecordedExchange; open: boolean; onToggle: () => void }) {
   const [copyState, setCopyState] = useState('');
   const heading = exchange.request ?? exchange.response ?? exchange.events[0];
-  const stateLabel = exchange.conflictFields.length ? 'Capture conflict' : { captured: 'Bounded capture', partial: 'Partial capture', failed: 'Operation failed', not_sent: 'Not sent' }[exchange.state];
+  const stateLabel = exchange.conflictFields.length ? 'Capture conflict' : { captured: 'Recorded exchange', partial: 'Partial capture', failed: 'Operation failed', not_sent: 'Not sent' }[exchange.state];
   async function copy() {
-    try { await navigator.clipboard.writeText(exchangeCopyText(exchange)); setCopyState('Sanitized exchange copied'); }
-    catch { setCopyState('Copy unavailable. Select the visible sanitized text instead.'); }
+    try { await navigator.clipboard.writeText(exchangeCopyText(exchange)); setCopyState('Exchange copied'); }
+    catch { setCopyState('Copy unavailable. Select the visible text instead.'); }
   }
   return <article className="probe-exchange" data-state={exchange.state}>
     <button type="button" className="probe-exchange-summary" aria-expanded={open} onClick={onToggle}>
@@ -102,7 +102,7 @@ function ExchangeInspector({ exchange, open, onToggle }: { exchange: RecordedExc
       {exchange.conflictFields.length ? <p className="probe-exchange-failure">Capture conflict: {exchange.conflictFields.join(', ')}. Conflicting capture withheld, not a protection verdict.</p> : null}
       {exchange.failure ? <p className="probe-exchange-failure">{stateLabel}: {safeCaptureText(exchange.failure.error_class || exchange.failure.reason) || 'Reason not recorded'}. Failure is not proof of blocking.</p> : null}
       <div className="probe-exchange-pair"><ExchangeSide side="request" item={exchange.request} exchange={exchange} /><ExchangeSide side="response" item={exchange.response} exchange={exchange} /></div>
-      <footer className="probe-exchange-footer"><span>Job <code>{text(exchange.source.job_id)}</code> · lease <code>{text(exchange.source.leased_at)}</code></span><Button size="sm" variant="ghost" onClick={() => void copy()}><Copy size={14} aria-hidden="true" />Copy sanitized exchange</Button><span role="status">{copyState}</span></footer>
+      <footer className="probe-exchange-footer"><span>Job <code>{text(exchange.source.job_id)}</code> · lease <code>{text(exchange.source.leased_at)}</code></span><Button size="sm" variant="ghost" onClick={() => void copy()}><Copy size={14} aria-hidden="true" />Copy exchange</Button><span role="status">{copyState}</span></footer>
     </div> : null}
   </article>;
 }
@@ -183,7 +183,7 @@ export function ProbeActivityView({ runId, checkName, running: fallbackRunning, 
       <details className="probe-activity-technical" open={grouped.exchanges.length === 0}><summary>Technical lifecycle events ({grouped.lifecycle.length})</summary>
       <div className="probe-activity-scroll" role="region" aria-label="Recorded request and response activity" tabIndex={0}>
         <table className="probe-activity-table" role="table">
-          <caption className="sr-only">Worker-recorded activity for {checkName || 'the selected check'}, including methods, vectors, response formats and redacted payload previews. Credentials and declared private query values are withheld.</caption>
+          <caption className="sr-only">Worker-recorded activity for {checkName || 'the selected check'}, including methods, vectors, response formats, headers, query values and payloads.</caption>
           <thead role="rowgroup"><tr role="row"><th role="columnheader" scope="col">Event</th><th role="columnheader" scope="col">Time</th><th role="columnheader" scope="col">Request / operation</th><th role="columnheader" scope="col">Response</th><th role="columnheader" scope="col"><span className="sr-only">Details</span></th></tr></thead>
           <tbody role="rowgroup">
             {items.map((item) => {
@@ -206,7 +206,7 @@ export function ProbeActivityView({ runId, checkName, running: fallbackRunning, 
         </table>
       </div>
       </details>
-      <details className="probe-activity-authority probe-activity-about"><summary>About recorded activity</summary><p>Expand an exchange or event for the recorded method, endpoint, protocol, vector, status and bounded payload. Previews retain up to 2 KiB and may be partial; credentials and declared private query values are redacted. Missing port, SNI, address family or source perspective remain not recorded. Informational activity never substitutes for verdict evidence or internal-origin visibility.</p></details>
+      <details className="probe-activity-authority probe-activity-about"><summary>About recorded activity</summary><p>Expand an exchange or event for the recorded method, endpoint, protocol, vector, status, headers, query values and payload. Capture retains up to 1 MiB of bytes consumed by the check and marks missing or partial data. Older runs may contain values redacted before storage; rerun the check to record new values. Missing port, SNI, address family or source perspective remain not recorded. Informational activity never substitutes for verdict evidence or internal-origin visibility.</p></details>
     </section>
   );
 }

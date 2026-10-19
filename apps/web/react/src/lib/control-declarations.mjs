@@ -583,12 +583,12 @@ const READY = Object.freeze({ state: 'ready', label: '', missing: [], detail: ''
  * Whether a check can run now. The server's per-target answer (`serverRunnable` or `serverRunnableIndex`) decides,
  * with its `additional_input_reason` naming what is missing. Without it, target-answered checks wait.
  */
-export function checkPrerequisite(check, { declarations, perspectiveCount = 1, serverRunnable, serverRunnableIndex = null } = {}) {
+export function checkPrerequisite(check, { declarations, perspectiveCount = 1, serverRunnable, serverRunnableIndex = null, serverSuppliesInput = false } = {}) {
   const exclusion = checkExclusionReason(check);
-  if (exclusion === 'soc_gated' || exclusion === 'not_customer_runnable') {
+  const answer = answerFrom(serverRunnable) ?? (serverRunnableIndex instanceof Map ? answerFrom(serverRunnableIndex.get(text(check?.check_id))) : null);
+  if ((exclusion === 'soc_gated' || exclusion === 'not_customer_runnable') && !(serverSuppliesInput && answer?.runnable)) {
     return { state: 'soc_only', label: 'SOC only', missing: [], detail: 'Run only by AstraNull SOC under an approved authorization. Request it through SOC; it cannot be started here.', reason: '', cta: '', section: '' };
   }
-  const answer = answerFrom(serverRunnable) ?? (serverRunnableIndex instanceof Map ? answerFrom(serverRunnableIndex.get(text(check?.check_id))) : null);
   if (answer) {
     if (answer.runnable) return { ...READY, missing: [] };
     return fromCopy(additionalInputReasonCopy(answer.reason) ?? UNKNOWN_REASON_COPY, answer.reason);

@@ -1,3 +1,4 @@
+import { checkPresentation } from '../../src/lib/checkPresentation.mjs';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
@@ -108,8 +109,8 @@ describe('groupFindings', () => {
     assert.equal(groups.length, 2);
     assert.ok(bypass);
     assert.equal(bypass.title, 'A bypass path reached your server');
-    assert.equal(bypass.checkLabel, 'Origin leak scan');
-    assert.equal(bypass.checkDescription, 'Bounded origin reachability probe.');
+    assert.equal(bypass.checkLabel, checkPresentation('origin.leak_scan.safe').name);
+    assert.equal(bypass.checkDescription, checkPresentation('origin.leak_scan.safe').purpose);
     assert.equal(bypass.vectorFamily, 'origin');
     assert.equal(bypass.representativeId, 'f1');
     assert.deepEqual(bypass.findingIds, ['f1', 'f2', 'f4']);

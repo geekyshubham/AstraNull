@@ -8,6 +8,7 @@ const STAGES = {
   request_not_sent: ['warn', 'WARN', 'Not sent'],
   phase_completed: ['recv', 'RECV', 'Phase finished'],
   probe_completed: ['verdict', 'VERDICT', 'Probe finished'],
+  request_payload: ['probe', 'PAYLOAD', 'Request payload captured'],
   response_payload: ['recv', 'PAYLOAD', 'Response payload captured'],
   response_body_completed: ['recv', 'RECV', 'Response body read'],
 };
@@ -53,7 +54,8 @@ function activityLog(id, at, data, row) {
       'request_content_type', 'response_content_type', 'request_payload_preview', 'request_query_preview',
       'response_payload_preview', 'request_payload_encoding', 'response_payload_encoding',
       'request_payload_truncated', 'response_payload_truncated', 'response_payload_available',
-      'response_bytes_observed', 'response_bytes_captured',
+      'response_bytes_observed', 'response_bytes_captured', 'request_payload_offset', 'response_payload_offset',
+      'request_headers', 'response_headers',
     ]
       .filter((key) => data[key] != null)
       .map((key) => [key, data[key]])

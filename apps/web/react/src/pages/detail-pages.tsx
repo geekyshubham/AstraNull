@@ -3680,13 +3680,6 @@ function CheckDetailPage({
   const expectedBehavior = getString(check, ['default_expected_behavior'], '');
   const evidenceTier = getString(check, ['evidence_tier'], '').toUpperCase();
   const scopedVerdict = check.produces_verdict !== false && (check.produces_verdict === true || getNestedString(check, ['probe_profile', 'kind'], '') === 'waf_method_policy_probe');
-  const observationOnly = !scopedVerdict && (check.observation_only === true || check.readiness_conclusion === false || ['E1', 'E2'].includes(evidenceTier));
-  const checkSpecificRemediation = Boolean(recordedRemediation) && recordedRemediation !== GENERIC_CHECK_REMEDIATION;
-  const tailoredRemediation = execution.kind === 'Request only' || execution.kind === 'Metadata evaluation' || execution.kind === 'Operations self-check';
-  const recordedObservationExplanation = getString(check, ['explanation_template'], '');
-  const observationExplanation = recordedObservationExplanation && recordedObservationExplanation !== GENERIC_CHECK_EXPLANATION
-    ? recordedObservationExplanation
-    : 'This check records observations only. It never reports a protection gap on its own.';
   const supportedTargets = toList(check.supported_targets);
   const prerequisites = toList(check.prerequisites);
   const customerSetup = toList(check.required_customer_setup);
@@ -3847,30 +3840,14 @@ function CheckDetailPage({
         </CardHeader>
         <CardContent className="check-explainer">
           <div>
-            <p className="check-fact-label">What is sent</p>
-            <p className="check-detail-text"><strong>{presentation.mechanism}</strong></p>
-            <p className="check-detail-text">{execution.cap}</p>
-            {probeTimeout ? <p className="muted small">{formatNumber(probeTimeout)} ms timeout</p> : null}
+            <p className="check-fact-label">How it works</p>
+            <p className="check-detail-text">{presentation.mechanism}</p>
+            <p className="muted small">{execution.cap}{probeTimeout ? ` · ${formatNumber(probeTimeout)} ms timeout` : ''}</p>
           </div>
           <div>
-            <p className="check-fact-label">What is observed</p>
-            <p className="check-detail-text">
-              {evidenceRequired.length === 1 && evidenceRequired[0] === 'probe_result' && probeKind
-                ? `${plainCodeLabel(probeKind)} probe result (transport, response and protocol facts)`
-                : evidenceRequired.length ? humanize(evidenceRequired.map(spaced).join(', ')) : 'Evidence types not recorded in the catalog.'}
-            </p>
+            <p className="check-fact-label">Limits</p>
+            <p className="check-detail-text">{presentation.limitations}</p>
           </div>
-          <div>
-            <p className="check-fact-label">How it is evaluated</p>
-            <p className="check-detail-text">
-              {verdictLogic || explanation || 'Evaluation rule not recorded.'}
-              {expectedBehavior && !observationOnly ? <> Expected behavior: <strong title={expectedBehavior}>{plainCodeLabel(expectedBehavior).toLowerCase()}</strong>.</> : null}
-            </p>
-            {expectedBehavior && observationOnly ? (
-              <p className="muted small" title={expectedBehavior}>Reference control, not verified by this check: {plainCodeLabel(expectedBehavior).toLowerCase()}.</p>
-            ) : null}
-          </div>
-          <p className="muted small full">{presentation.limitations}</p>
           <div className="full"><p className="check-fact-label">Next step</p><p className="check-detail-text">{presentation.next_step}</p></div>
           {scopedVerdict && evidenceTier === 'E2' ? <p className="muted small full">Produces a scoped verdict, with no readiness credit.</p> : null}
         </CardContent>
@@ -3949,28 +3926,6 @@ function CheckDetailPage({
         </Card>
       </div>
 
-      {observationOnly ? (
-        <Card>
-          <CardHeader>
-            <CardTitle>What this result can and cannot tell you</CardTitle>
-            <CardDescription>This check is observation only: it records what the probe saw and cannot establish a protection verdict.</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <p className="check-detail-text">{observationExplanation}</p>
-          </CardContent>
-        </Card>
-      ) : remediation && (checkSpecificRemediation || tailoredRemediation) ? (
-        <Card>
-          <CardHeader>
-            <CardTitle>If this check reports a gap</CardTitle>
-            <CardDescription>Catalog guidance for this check; inspect the specific result's evidence first.</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <p className="check-detail-text">{remediation}</p>
-          </CardContent>
-        </Card>
-      ) : null}
-
       <Card>
         <CardHeader>
           <CardTitle>Schedules bound to this check</CardTitle>
@@ -4021,7 +3976,11 @@ function CheckDetailPage({
             <div><span>Check ID</span><strong className="mono">{entityId}</strong></div>
             <div><span>Family</span><strong>{formatCheckFamilyLabel(family)}</strong></div>
             <div><span>Mode</span><strong>{formatCheckModeLabel(safetyClass)}</strong></div>
-            {explanation && verdictLogic ? <div><span>Explanation</span><strong>{explanation}</strong></div> : null}
+            {verdictLogic ? <div><span>Recorded evaluation rule</span><strong>{verdictLogic}</strong></div> : null}
+            {explanation ? <div><span>Recorded explanation template</span><strong>{explanation}</strong></div> : null}
+            {remediation ? <div><span>Recorded remediation guidance</span><strong>{remediation}</strong></div> : null}
+            {expectedBehavior ? <div><span>Expected behavior</span><strong>{plainCodeLabel(expectedBehavior)}</strong></div> : null}
+            {evidenceRequired.length ? <div><span>Required evidence types</span><strong>{evidenceRequired.join(', ')}</strong></div> : null}
           </div>
           <p className="muted small">Catalog identifiers recorded for this check. Values are shown as stored, without broadening or truncation.</p>
           {taxonomyRows.map((row) => (

@@ -126,7 +126,7 @@ describe('rule coverage view model', () => {
     assert.equal(model.categories[0].assuranceReason, 'Only custom canary tokens cover this family.');
     assert.equal(model.categories[0].reason, '', 'a partial reason never replaces the next step');
     assert.equal(model.categories[1].name, 'GraphQL and web service schema');
-    assert.equal(model.categories[1].checks[0].name, 'Web service Surface Scan (Safe)');
+    assert.equal(model.categories[1].checks[0].name, 'Responses from common API paths');
   });
 
   it('turns missing declarations into CTAs and orders failures first for a target', () => {

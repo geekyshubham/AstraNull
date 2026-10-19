@@ -2046,7 +2046,7 @@ export function TargetDetailView({
                     const section = prerequisiteSection(prerequisite);
                     return <li key={getString(check, ['check_id'], '')}>
                     <span className="td-requirement-row">
-                      <strong>{getString(check, ['name'], '')}</strong> <code>{getString(check, ['check_id'], '')}</code>
+                      <strong>{checkPresentation(check).name}</strong> <code>{getString(check, ['check_id'], '')}</code>
                       {prerequisite.state !== 'ready' ? <Badge tone={prerequisiteTone(prerequisite)}>{prerequisite.label}</Badge> : null}
                     </span>
                     <p>{targetCheckRequirement(check, target, prerequisiteContext)}</p>

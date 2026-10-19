@@ -9,14 +9,15 @@ import { countEventsForRun } from '../../src/services/safeTestPolicy.mjs';
 import { getStore } from '../../src/store.mjs';
 import { freshStore } from '../helpers/reset.mjs';
 
-test('activity retains method/path and query names without credentials, bodies, or header values', () => {
+test('activity retains the recorded HTTP URL and rejects unknown fields', () => {
   const at = new Date().toISOString();
   const job = { leased_at: at };
   const item = { sequence: 1, at, stage: 'request_started', method: 'GET', url: 'https://user:secret@owned.test/path?token=private#password' };
   const parsed = normalizeProbeActivityBatch({ leased_at: at, items: [item] }, job);
   assert.equal(parsed.items[0].method, 'GET');
-  assert.equal(parsed.items[0].url, 'https://owned.test/path?token=%5Bredacted%5D');
-  assert.equal(/private|password|user:secret/.test(JSON.stringify(parsed)), false);
+  assert.equal(parsed.items[0].url, 'https://user:secret@owned.test/path?token=private');
+  assert.equal(parsed.items[0].url.includes("user:secret"), true);
+  assert.equal(parsed.items[0].url.includes("#password"), false);
   for (const field of ['body', 'headers', 'authorization', 'nonce', 'producer_kind']) {
     assert.equal(normalizeProbeActivityBatch({ leased_at: at, items: [{ ...item, [field]: 'secret' }] }, job).error, 'invalid_probe_activity');
   }
@@ -54,7 +55,7 @@ test('final activity retains bounded protocol and port observations without expo
   assert.equal(JSON.stringify(result).includes('never-render-this'), false);
 });
 
-test('pinned HTTP logs capture actual method, MIME format, redacted payloads, and preserve the original response', async () => {
+test('pinned HTTP logs capture actual method, MIME format, unredacted payloads, and preserve the original response', async () => {
   const body = JSON.stringify({ marker: 'astranull-inert', password: 'private-password' });
   const responseBody = JSON.stringify({ message: 'Request blocked', token: 'private-token' });
   let received;
@@ -77,14 +78,14 @@ test('pinned HTTP logs capture actual method, MIME format, redacted payloads, an
     assert.equal(logs[0].body_bytes, Buffer.byteLength(body));
     assert.equal(logs[0].request_content_type, 'application/json');
     assert.match(logs[0].request_payload_preview, /astranull-inert/);
-    assert.equal(JSON.parse(logs[0].request_payload_preview).password, '[redacted]');
+    assert.equal(JSON.parse(logs[0].request_payload_preview).password, 'private-password');
     assert.equal(logs[1].status_code, 418);
     assert.equal(logs[1].response_content_type, 'application/json');
     assert.equal(JSON.parse(logs[3].response_payload_preview).message, 'Request blocked');
-    assert.equal(JSON.parse(logs[3].response_payload_preview).token, '[redacted]');
+    assert.equal(JSON.parse(logs[3].response_payload_preview).token, 'private-token');
     assert.equal(logs[3].response_payload_truncated, false);
     assert.equal(logs[3].response_bytes_observed, Buffer.byteLength(responseBody));
-    assert.equal(/hidden|Bearer secret|private-password|private-token|private=value/.test(JSON.stringify(logs)), false);
+    for (const value of ['hidden', 'Bearer secret', 'private-password', 'private-token', 'private=value']) assert.ok(JSON.stringify(logs).includes(value));
   } finally { server.closeAllConnections(); await new Promise((resolve) => server.close(resolve)); }
 });
 

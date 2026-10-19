@@ -1,3 +1,4 @@
+import { checkPresentation } from './check-presentation.mjs';
 import { vectorCheckSupportsTarget } from './vector-library.mjs';
 import { targetFixableReason } from './control-declarations.mjs';
 
@@ -117,6 +118,8 @@ export function filterChecks(checks, query) {
     check.check_id,
     check.name,
     check.description,
+    checkPresentation(check).name,
+    checkPresentation(check).purpose,
     check.vector_family,
     check.section_label,
     check.evidence_tier,
@@ -139,7 +142,7 @@ export function summarizeSelection({ checks, selectedIds, targets, targetId = nu
     if (coverage.supported === 0) {
       incompatible.push({
         check_id: text(check.check_id),
-        name: text(check.name) || text(check.check_id),
+        name: checkPresentation(check).name,
         supported_targets: Array.isArray(check.supported_targets) ? check.supported_targets.map(text) : [],
       });
       continue;

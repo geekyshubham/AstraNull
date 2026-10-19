@@ -1,3 +1,4 @@
+import { checkPresentation } from './check-presentation.mjs';
 /** Rule coverage view model: assurance is the best AstraNull can conclude; status is this target's fresh evidence. */
 import { requiredDeclarationCopy, requiredDeclarationSentence } from './control-declarations.mjs';
 
@@ -69,7 +70,7 @@ function checkRow(raw) {
   const status = text(check.status);
   return {
     checkId: text(check.check_id),
-    name: plainCoverageName(text(check.name) || text(check.check_id)),
+    name: checkPresentation(check.check_id).name,
     present: check.present !== false,
     assurance: text(check.assurance) || 'missing',
     status,

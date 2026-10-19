@@ -1,8 +1,10 @@
+import { checkPresentation } from '../../../src/lib/checkPresentation.mjs';
 import { mkdir } from 'node:fs/promises';
 import { createServer as createHttpServer } from 'node:http';
 import { getStore } from '../../../src/store.mjs';
 import { probeWorkerAuthHeaders, verifyProbeJobSignature } from '../../../src/services/probeCoordinator.mjs';
 import { processJob } from '../../../workers/probe-worker.mjs';
+import { captureResponsePayload } from '../../../src/lib/probePayloadPreview.mjs';
 import { createProbeActivityReporter } from '../../../workers/probe-activity-reporter.mjs';
 import { PORTAL_BASELINE_IDS } from '../../fixtures/portal-baseline/seed.mjs';
 import { applyPortalBaselineReadinessBoost } from '../../fixtures/portal-baseline/readiness.mjs';
@@ -158,7 +160,7 @@ test('selecting the active check shows its live window and Stop', async ({ page 
   await fixture(page);
   await page.goto(`${getPortalPlaywrightBaseUrl()}/app#target-detail?id=${TARGET}&tab=validate&check=${CHECK}`);
   const selected = page.locator('.td-check[data-selected=true]');
-  await expect(selected).toContainText('WAF and CDN Fingerprint');
+  await expect(selected).toContainText(checkPresentation('waf.fingerprint.safe').name);
   await expect(checkActivity(page)).toContainText('HTTP 418');
   await expect(selected.getByRole('button', { name: /^Stop/ })).toBeVisible();
 });
@@ -226,7 +228,8 @@ for (const width of [375, 768, 1024, 1440]) for (const theme of ['dark', 'light'
     const open = row.locator('.ual-open');
     await expect(open).toContainText('HTTP/1.1');
     await expect(open).toContainText('<script>window.captureExecuted=true</script>');
-    await expect(open).not.toContainText('must-not-leak');
+    await expect(open).toContainText('Bearer must-not-leak');
+    await expect(open).toContainText('password');
     await expect(open).not.toContainText('Not consumed by this check');
     expect(await page.evaluate(() => window.captureExecuted)).toBeUndefined();
     await expect(open.locator('script, iframe, html')).toHaveCount(0);
@@ -234,7 +237,7 @@ for (const width of [375, 768, 1024, 1440]) for (const theme of ['dark', 'light'
     await open.getByRole('button', { name: /^Copy/ }).click();
     await expect(open.getByRole('button', { name: 'Copied' })).toBeVisible();
     const copied = await page.evaluate(() => window.capturedClipboard);
-    expect(copied).toContain('Request'); expect(copied).toContain('Response'); expect(copied).not.toContain('must-not-leak');
+    expect(copied).toContain('Request'); expect(copied).toContain('Response'); expect(copied).toContain('must-not-leak');
     await line.focus(); await expect(line).toBeFocused();
     await page.keyboard.press('Enter'); await expect(line).toHaveAttribute('aria-expanded', 'false');
     await page.keyboard.press('Enter'); await expect(line).toHaveAttribute('aria-expanded', 'true');
@@ -248,6 +251,39 @@ for (const width of [375, 768, 1024, 1440]) for (const theme of ['dark', 'light'
     await panel.screenshot({ path: `output/probe-activity/exchange-${width}-${theme}.png` });
   });
 }
+
+test('full chunked response and header values are visible and copied without redaction or executable HTML', async ({ page }) => {
+  const body = `${'x'.repeat(8191)}€${'y'.repeat(20000)}<script>window.rawCaptureExecuted=true</script>token=raw-payload-token`;
+  const identity = { capture_version: 'http-exchange.v1', exchange_id: 'full_body', attempt_id: 'full_attempt', operation_id: 'full_operation',
+    method: 'GET', url: 'https://owned.example/path?an_cb=b9276787caa9&token=raw-query', http_version: '1.1',
+    source_context: EXCHANGE_LOGS[0].source_context, source: 'signed_worker', at: AT };
+  const headers = [{ name: 'set-cookie', value: 'session=raw-session' }, { name: 'x-powered-by', value: 'raw-server' },
+    { name: 'date', value: 'Sun, 18 Oct 2026 12:00:00 GMT' },
+    ...Array.from({ length: 25 }, (_, i) => ({ name: `x-custom-${i}`, value: `raw-value-${i}` }))];
+  const logs = [{ ...identity, stage: 'request_started', body_bytes: 0, request_payload_preview: '', request_query_preview: '{"token":"raw-query","an_cb":"b9276787caa9"}',
+    request_headers: [{ name: 'authorization', value: 'Bearer raw-authorization' }] }];
+  const response = { ...identity, status_code: 418, response_headers: headers, response_content_type: 'text/html; charset=UTF-8' };
+  logs.push({ ...response, stage: 'response_received' });
+  const capture = captureResponsePayload({ onProbeActivity: (item) => logs.push(item) }, response, 'text/html; charset=UTF-8');
+  capture.chunk(Buffer.from(body)); capture.complete();
+  await fixture(page, 'owner', logs.map((item, index) => ({ ...item, id: `full-${index}`, sequence: index + 1 })));
+  const panel = checkActivity(page);
+  const row = panel.locator('.ual-row').filter({ has: page.locator('.ual-line', { hasText: 'owned.example/path' }) });
+  await row.locator('.ual-line').click();
+  const open = row.locator('.ual-open');
+  const responseBody = open.locator('section[aria-label="Response capture"] .probe-exchange-field pre');
+  await expect(responseBody).toHaveText(body);
+  for (const value of ['Bearer raw-authorization', 'raw-query', 'b9276787caa9', 'session=raw-session', 'raw-server', 'raw-value-24', 'Sun, 18 Oct 2026 12:00:00 GMT']) await expect(open).toContainText(value);
+  await expect(open).not.toContainText('[redacted]');
+  await expect(open.locator('script, iframe')).toHaveCount(0);
+  expect(await page.evaluate(() => window.rawCaptureExecuted)).toBeUndefined();
+  await page.evaluate(() => { Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async (value) => { window.capturedClipboard = value; } } }); });
+  await open.getByRole('button', { name: 'Copy', exact: true }).click();
+  expect(await page.evaluate(() => window.capturedClipboard)).toContain(body);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+  await mkdir('output/probe-activity', { recursive: true });
+  await panel.screenshot({ path: 'output/probe-activity/full-unredacted-exchange.png' });
+});
 
 async function withCoarseTouchPage(browser, width, theme, run) {
   const context = await browser.newContext({ viewport: { width, height: 1100 }, hasTouch: true, isMobile: true, reducedMotion: 'reduce' });
@@ -308,12 +344,14 @@ test('target and check detail share truthful token observation names and purpose
   await injectPortalDevHeadersSession(page);
   await page.goto(`${getPortalPlaywrightBaseUrl()}/app#target-detail?id=${TARGET}&tab=validate&check=waf.jwt_tamper_marker.safe`);
   const selected = page.locator('.td-check[data-selected=true]');
-  await expect(selected).toContainText('JWT Tamper token observation');
-  await expect(selected).toContainText('GET inert-token');
+  const copy = checkPresentation('waf.jwt_tamper_marker.safe');
+  await expect(selected).toContainText(copy.name);
+  await expect(selected).toContainText(copy.mechanism);
+  await expect(selected).toContainText('without using a real account session');
   await expect(selected).not.toContainText('JWT Tamper Custom Canary Rule');
   await page.goto(`${getPortalPlaywrightBaseUrl()}/app#check-detail?id=waf.jwt_tamper_marker.safe`);
-  await expect(page.getByRole('heading', { name: 'JWT Tamper token observation', exact: true })).toBeVisible();
-  await expect(page.getByText('No exact installed-token rule binding exists in current declarations.', { exact: false })).toBeVisible();
+  await expect(page.getByRole('heading', { name: copy.name, exact: true })).toBeVisible();
+  await expect(page.getByText(copy.limitations, { exact: true })).toBeVisible();
 });
 
 test('exchange inspector distinguishes missing, unconsumed, empty, withheld, failed and conflicting capture', async ({ page }) => {
@@ -874,7 +912,7 @@ async function leasedLocal(run) {
   return job;
 }
 
-test('connected reviewed Play observes real loopback HTTP through signed worker capture and final evidence, with secret redaction', async ({ page }) => {
+test('connected reviewed Play observes real loopback HTTP through signed worker capture and final evidence, with complete recorded values', async ({ page }) => {
   test.setTimeout(60000);
   const run = await startLocalReviewed(page); const job = await leasedLocal(run);
   const reporter = createProbeActivityReporter(job, (body) => signed('POST', `/internal/probe/jobs/${job.id}/activity`, body));
@@ -895,14 +933,15 @@ test('connected reviewed Play observes real loopback HTTP through signed worker 
   await expect(inspector.locator('.probe-exchanges')).toContainText('HTTP 403');
   await expect(inspector.locator('.probe-activity-status')).toContainText(`${result.safety_attestation.requests_sent} logical operations (attested)`);
   const activity = await fetch(`${apiBase}/v1/test-runs/${run.id}/activity?limit=256`, { headers: { 'x-tenant-id': PORTAL_BASELINE_IDS.tenantId, 'x-user-id': 'usr_owner', 'x-role': 'owner' } }).then((response) => response.json());
-  expect(JSON.stringify(activity)).not.toMatch(/local-customer-secret-123|private-response-password/);
+  expect(JSON.stringify(activity)).toMatch(/local-customer-secret-123/);
+  expect(JSON.stringify(activity)).toMatch(/private-response-password/);
   const payload = activity.items.find((item) => item.response_payload_preview?.includes('local-wire-observed')); expect(payload).toBeTruthy();
   const capture = inspector.locator('.probe-exchange').filter({ has: page.locator('.probe-exchange-summary', { hasText: 'HTTP 403' }) }).first();
   const captureSummary = capture.locator('.probe-exchange-summary');
   if (await captureSummary.getAttribute('aria-expanded') !== 'true') await captureSummary.click();
   await expect(capture).toContainText('local-wire-observed');
-  await expect(inspector).not.toContainText('private-response-password');
-  await expect(inspector).not.toContainText('local-customer-secret-123');
+  await expect(inspector).toContainText('private-response-password');
+  await expect(inspector).toContainText('local-customer-secret-123');
   await expect(inspector).toContainText('worker_browser_local');
   await expect(inspector.locator('.ei-evidence-list, .ei-ids, a[href*="evidence-detail"]')).not.toHaveCount(0, { timeout: 15000 });
   expect(activity.source_context.worker_id).toBe('worker_browser_local');

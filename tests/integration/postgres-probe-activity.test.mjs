@@ -60,23 +60,30 @@ test('Postgres activity replays immutably under RLS, never publishes a verdict, 
         capture_version: 'http-exchange.v1', exchange_id: 'exchange_pg', attempt_id: 'attempt_pg', operation_id: 'operation_pg', http_version: '1.1',
         request_headers: [{ name: 'Content-Type', value: 'application/json' }, { name: 'Cookie', value: 'session=hidden' }],
         request_content_type: 'application/json', request_payload_preview: '{"marker":"inert","token":"hidden-token"}' }] };
+      body.items[0].body_bytes = Buffer.byteLength(body.items[0].request_payload_preview);
+      body.items.push({ sequence: 2, at: now.toISOString(), stage: 'request_payload', capture_version: 'http-exchange.v1', exchange_id: 'exchange_pg',
+        request_payload_offset: 0, request_payload_encoding: 'base64', request_payload_preview: Buffer.from(body.items[0].request_payload_preview).toString('base64') });
       const accepted = await jobs.ingestProbeActivity(ctx, job.id, body);
-      assert.equal(accepted.accepted, 1, JSON.stringify(accepted));
+      assert.equal(accepted.accepted, 2, JSON.stringify(accepted));
       assert.equal((await jobs.ingestProbeActivity(ctx, job.id, body)).accepted, 0);
       assert.equal((await jobs.ingestProbeActivity(ctx, job.id, { ...body, items: [{ ...body.items[0], method: 'GET' }] })).status, 409);
       assert.equal((await jobs.ingestProbeActivity({ ...ctx, tenantId: 'ten_other' }, job.id, body)).status, 404);
       const read = await validation.testRuns.getRunActivity(ctx, run.id);
       assert.ok(read.items.some((item) => item.method === 'POST'));
-      const exchange = read.items.find((item) => item.exchange_id === 'exchange_pg');
+      const exchange = read.items.find((item) => item.exchange_id === 'exchange_pg' && item.stage === 'request_started');
       assert.equal(exchange.source_context.job_id, job.id);
       assert.equal(exchange.source_context.leased_at, job.leased_at);
-      assert.equal(exchange.request_headers.find((header) => header.name === 'cookie').value, '[redacted]');
+      assert.equal(exchange.request_headers.find((header) => header.name === 'cookie').value, 'session=hidden');
       assert.ok(read.items.some((item) => item.vector_family === 'waf'));
       assert.ok(read.items.some((item) => item.request_payload_preview?.includes('inert')));
-      assert.equal(JSON.stringify(read).includes('hidden'), false);
+      assert.equal(exchange.url, 'https://owned.example.test/path?credential=hidden');
+      assert.equal(exchange.request_payload_preview, body.items[0].request_payload_preview);
+      const chunk = read.items.find((item) => item.stage === 'request_payload');
+      assert.equal(chunk.request_payload_offset, 0);
+      assert.equal(Buffer.from(chunk.request_payload_preview, 'base64').toString(), body.items[0].request_payload_preview);
       assert.equal(await validation.testRuns.getRunActivity({ ...ctx, tenantId: 'ten_other' }, run.id), null);
       const counts = await owner.query(`SELECT (SELECT count(*) FROM verdicts)::int AS verdicts, (SELECT count(*) FROM evidence_vault)::int AS evidence, (SELECT count(*) FROM events WHERE signal_type = 'probe_activity')::int AS activity`);
-      assert.deepEqual(counts.rows[0], { verdicts: 0, evidence: 0, activity: 1 });
+      assert.deepEqual(counts.rows[0], { verdicts: 0, evidence: 0, activity: 2 });
       await assert.rejects(owner.query(`INSERT INTO events (id, tenant_id, signal_type, producer_kind, timestamp) VALUES ('spoof_activity', 'ten_activity', 'probe_activity', 'public_api', now())`), /events_probe_activity_producer_check/);
       const stopped = await validation.testRuns.cancelTestRun(ctx, run.id, { reason: 'Stop from execution activity' });
       assert.equal(stopped.run.status, 'cancelled');

@@ -1,3 +1,4 @@
+import { checkPresentation } from '../../lib/check-presentation.mjs';
 import { findingStatus } from '../../lib/finding-lifecycle.mjs';
 import { buildDetailHref } from '../../lib/route-params';
 import type { DataItem } from '../../lib/types';
@@ -35,7 +36,7 @@ export function FindingCard({
   const verdict = getString(finding, ['verdict'], '');
   const checkId = getString(finding, ['check_id', 'check'], '');
   const check = checkId ? checks.find((entry) => getString(entry, ['check_id', 'id']) === checkId) : undefined;
-  const checkLabel = checkId ? plainCheckName(getString(check ?? {}, ['name', 'title'], checkId)) : '';
+  const checkLabel = checkId ? checkPresentation(checkId).name : '';
   const missingControlSource = [finding.missing_control, check?.missing_control]
     .find((value) => value && typeof value === 'object' && !Array.isArray(value)) as DataItem | undefined;
   const missingControl = missingControlSource ? getString(missingControlSource, ['control_label'], '') : '';

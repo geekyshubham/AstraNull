@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { CHECK_CATALOG, customerSelectableChecks, checkRequiresAdditionalInput } from '../../src/contracts/checks.mjs';
+import { DEMO_ACCOUNT_TENANT_ID } from '../../src/lib/demoAutoVerify.mjs';
 import { coverageFrom } from '../../src/lib/protectionCoverage.mjs';
 import { targetRunnableIndex } from '../../apps/web/react/src/lib/control-declarations.mjs';
 import { MAX_SCAN_CHECKS, MAX_SCAN_STEPS, planScanSteps, projectScanStep } from '../../src/contracts/validationScanManagement.mjs';
@@ -29,6 +30,7 @@ import {
   targetCheckAvailability,
   countRowStatuses,
   shouldAutoDetectEdge,
+  withTargetRunnableChecks,
 } from '../../apps/web/react/src/lib/domain-checks.mjs';
 
 const CATALOG = customerSelectableChecks(CHECK_CATALOG);
@@ -123,7 +125,7 @@ describe('per-check status rows', () => {
     const jwt = byId('waf.jwt_tamper_marker.safe');
     assert.match(jwt.name, /Custom Canary Rule/);
     const [rendered] = buildCheckRows({ checks: [jwt] });
-    assert.match(rendered.name, /JWT.*token observation/i);
+    assert.match(rendered.name, /sign-in-token test label/i);
     assert.equal(rendered.producesVerdict, false);
     assert.equal(rendered.readinessCapable, false);
     assert.doesNotMatch(rendered.name, /waf_class_marker/i);
@@ -418,6 +420,40 @@ it('full assessments include every compatible automatic network check, while rea
 
 describe('complete target catalog inventory is separate from execution', () => {
   const full = CHECK_CATALOG.map((check) => ({ ...check, requires_additional_input: checkRequiresAdditionalInput(check) }));
+
+  it('lets the demo account select and assess all 18 exploit, delivery-pattern and high-scale checks', () => {
+    const catalog = CHECK_CATALOG.map((check) => ({ ...check, requires_additional_input: checkRequiresAdditionalInput(check, { tenantId: DEMO_ACCOUNT_TENANT_ID }) }));
+    const context = { serverSuppliesInput: true, serverRunnableIndex: targetRunnableIndex(catalog) };
+    const reported = catalog.filter((check) => ['exploit', 'pattern', 'high_scale'].includes(check.vector_family));
+    assert.equal(reported.length, 18);
+    const expanded = withTargetRunnableChecks(CATALOG, catalog, context);
+    const individual = new Set(individualChecks(expanded, DOMAIN, context).map((check) => check.check_id));
+    const assessment = new Set(assessmentChecks(expanded, DOMAIN, context).map((check) => check.check_id));
+    for (const check of reported) {
+      assert.equal(targetCheckAvailability(check, DOMAIN, context).state, 'ready', check.check_id);
+      assert.equal(targetCheckRequirement(check, DOMAIN, context), '', check.check_id);
+      assert.ok(individual.has(check.check_id), check.check_id);
+      assert.ok(assessment.has(check.check_id), check.check_id);
+      assert.notEqual(targetCheckAvailability(check, DOMAIN, { ...context, serverSuppliesInput: false }).state, 'ready', check.check_id);
+      assert.notEqual(targetCheckAvailability(check, DOMAIN, { ...context, serverRunnableIndex: new Map() }).state, 'ready', check.check_id);
+    }
+    const rows = buildCheckRows({ checks: reported });
+    assert.ok(rows.every((row) => row.status === 'not_run' && !row.producesVerdict));
+    assert.equal(assessEdgeEfficacy({ rows }).waf.tested, 0);
+    assert.equal(assessEdgeEfficacy({ rows }).cdn.tested, 0);
+  });
+
+  it('keeps target compatibility, unsupported delivery and server input refusals in demo mode', () => {
+    const base = { ...byId(EDGE_DETECTION_CHECK_ID), requires_additional_input: false };
+    for (const override of [{ supported_targets: ['ip'] }, { mechanism_supported: false }, { evidence_tier: 'E5' }]) {
+      const check = { ...base, ...override };
+      const context = { serverSuppliesInput: true, serverRunnableIndex: targetRunnableIndex([check]) };
+      assert.notEqual(targetCheckAvailability(check, DOMAIN, context).state, 'ready');
+      assert.deepEqual(individualChecks([check], DOMAIN, context), []);
+    }
+    const check = { ...base, requires_additional_input: true, additional_input_reason: 'origin_binding_required' };
+    assert.notEqual(targetCheckAvailability(check, DOMAIN, { serverSuppliesInput: true, serverRunnableIndex: targetRunnableIndex([check]) }).state, 'ready');
+  });
 
   it('keeps every definition and reconciles categories and results with empty, short and bounded history', () => {
     const expectedIds = CHECK_CATALOG.map((check) => check.check_id).sort();

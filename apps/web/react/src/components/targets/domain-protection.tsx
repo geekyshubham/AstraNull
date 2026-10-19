@@ -32,7 +32,7 @@ import { formatDate } from '../../lib/utils';
 import { plainVerdictLabel, plainVerdictShortLabel } from '../../lib/plain-language.mjs';
 import { verdictTone } from '../../lib/status-tone';
 import { buildDetailHref } from '../../lib/route-params';
-import { formatStepRequest, formatStepResponse, humanizeReason } from '../../lib/validation-scan.mjs';
+import { formatStepResponse, humanizeReason } from '../../lib/validation-scan.mjs';
 import {
   MAX_SCAN_CHECKS,
 } from '../../lib/validation-scan.mjs';
@@ -92,11 +92,6 @@ const STATUS_ICONS: Record<RowStatus, LucideIcon> = {
   skipped: CircleMinus,
   cancelled: CircleMinus,
   not_run: CircleDashed,
-};
-
-const TIER_COPY: Record<string, string> = {
-  E2: 'Connection observed',
-  E3: 'Behavior observed',
 };
 
 type QueueFilter = 'all' | 'verdict' | RowStatus;
@@ -290,11 +285,19 @@ export function ProviderObservations({ rows, effectiveness, evaluating, note, ac
 }
 
 function rowRequestLine(row: CheckRow) {
-  if (row.request) return formatStepRequest(row.request);
-  const parts = [humanizeReason(row.probeKind)];
-  if (row.maxRequests !== null) parts.push(`at most ${row.maxRequests} request${row.maxRequests === 1 ? '' : 's'}`);
-  if (row.timeoutMs !== null) parts.push(`${row.timeoutMs} ms timeout`);
-  return parts.filter(Boolean).join(' · ') || 'Bounded probe profile not recorded';
+  if (row.probeKind === 'metadata_marker') return 'No traffic; records your statement.';
+  if (row.probeKind === 'ops_readiness') return 'No target traffic; reviews recorded operational information.';
+  if (!row.probeKind) return 'No traffic from this entry; limits are agreed for any separate approved test.';
+  const requests = typeof row.request?.max_requests === 'number' ? row.request.max_requests : row.maxRequests;
+  const timeout = typeof row.request?.timeout_ms === 'number' ? row.request.timeout_ms : row.timeoutMs;
+  return [requests !== null ? `At most ${requests} request${requests === 1 ? '' : 's'}` : '',
+    timeout !== null ? `${timeout / 1000} second${timeout === 1000 ? '' : 's'} time limit` : ''].filter(Boolean).join(' · ') || 'Request limit not recorded';
+}
+
+function expectationLabel(value: string) {
+  return ({ must_block_before_origin: 'The test request should be rejected before reaching your application server.',
+    must_reach_canary: 'The request should reach your declared test URL.',
+    soc_approval_required: 'A separately approved security-team assessment is required.' } as Record<string, string>)[value] || humanizeReason(value);
 }
 
 function rowSentLine(row: CheckRow) {
@@ -443,11 +446,11 @@ function CheckQueueRow({
             {row.mechanism ? <div><dt>How it works</dt><dd>{row.mechanism}</dd></div> : null}
             {row.limitations ? <div><dt>Limits</dt><dd>{row.limitations}</dd></div> : null}
             {row.nextStep ? <div><dt>Next step</dt><dd>{row.nextStep}</dd></div> : null}
-            <div><dt>Result type</dt><dd>{row.producesVerdict ? row.readinessCapable ? 'Produces a readiness verdict' : 'Produces a scoped policy verdict; no readiness credit' : 'Observation only; no readiness credit'}{TIER_COPY[row.tier] ? ` · ${TIER_COPY[row.tier]}` : ''}</dd></div>
-            {row.expectedBehavior ? <div><dt>Expectation</dt><dd>{humanizeReason(row.expectedBehavior)}</dd></div> : null}
+            <div><dt>Result type</dt><dd>{row.producesVerdict ? row.readinessCapable ? 'Can assess the protection behavior in the tested requests.' : 'Can assess the stated policy for the sampled requests only.' : 'Records information; does not rate protection.'}</dd></div>
+            {row.expectedBehavior ? <div><dt>Expectation</dt><dd>{expectationLabel(row.expectedBehavior)}</dd></div> : null}
             <div><dt>Upper bound</dt><dd>{rowRequestLine(row)}</dd></div>
             {sent ? <div><dt>Logical operations</dt><dd className="tabular-nums">{sent}{row.requestsSimulated ? '' : ' (attested)'}</dd></div> : null}
-            {row.response ? <div><dt>Response</dt><dd>{formatStepResponse(row.response)}</dd></div> : null}
+            {row.response ? <div><dt>Response</dt><dd>{row.requestsSent && row.response.external_result === 'not_run' ? 'No conclusion from the recorded requests' : formatStepResponse(row.response)}</dd></div> : null}
             {row.status === 'not_run' ? null : <div>
               <dt>Result</dt>
               <dd>

@@ -1,3 +1,4 @@
+import { checkPresentation } from '../../lib/check-presentation.mjs';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Check, ChevronLeft, ChevronRight, Circle, CircleAlert, CircleDashed, Lock, RefreshCw, SearchX, ShieldCheck, TriangleAlert, X } from 'lucide-react';
 import { requestJson } from '../../lib/api';
@@ -280,8 +281,7 @@ function StateNotice({ state, permission, onRetry, entry, runArtifacts = 0 }: { 
 
 function nameForCheck(checks: DataItem[], checkId: string) {
   if (!checkId) return '';
-  const check = checks.find((item) => str(item, ['check_id', 'id']) === checkId);
-  return plainCheckName(str(check, ['name', 'title']) || checkId) as string;
+  return checkPresentation(checkId).name;
 }
 
 function nameForTarget(targets: DataItem[], targetId: string, fallback = '') {

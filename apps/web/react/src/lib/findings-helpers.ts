@@ -1,3 +1,4 @@
+import { checkPresentation } from './check-presentation.mjs';
 import {
   SLA_ACTIVE_STATUSES,
   findingStatus as normalizeFindingStatus,
@@ -302,7 +303,7 @@ export function findingRuleTitle(finding: DataItem, checks: DataItem[] = []) {
   if (rawTitle) return plainCheckName(rawTitle);
   const checkId = getString(finding, ['check_id', 'check'], '');
   const check = checks.find((entry) => getString(entry, ['check_id', 'id'], '') === checkId);
-  const checkName = plainCheckName(getString(check ?? null, ['name', 'title'], checkId));
+  const checkName = checkPresentation(checkId).name;
   return checkName || 'Evidence-backed finding';
 }
 

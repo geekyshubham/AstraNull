@@ -1,543 +1,1948 @@
-/** Presentation only: no execution definitions, digest input or network behavior.
- * Every shipped runtime ID has an explicit short name and mechanism template.
- */
-const TEMPLATES = [
-  {
-    "mechanism": "One declared-address HTTP Host/SNI observation",
-    "limitations": "Shows the response from a bounded external sample. A confirmed reply can reveal an exposed service or a declared deny that was not enforced; a timeout or silence cannot prove blocking. No readiness or capacity assurance.",
-    "next_step": "Review the recorded response and confirm the endpoint and expected behaviour. Retest only within the approved scope."
-  },
-  {
-    "mechanism": "Bounded declared-host DNS and HTTP observations",
-    "limitations": "Shows the response from a bounded external sample. A confirmed reply can reveal an exposed service or a declared deny that was not enforced; a timeout or silence cannot prove blocking. No readiness or capacity assurance.",
-    "next_step": "Review the recorded response and confirm the endpoint and expected behaviour. Retest only within the approved scope."
-  },
-  {
-    "mechanism": "Bounded TCP connects to catalogued or declared ports",
-    "limitations": "Shows the response from a bounded external sample. A confirmed reply can reveal an exposed service or a declared deny that was not enforced; a timeout or silence cannot prove blocking. No readiness or capacity assurance.",
-    "next_step": "Review the recorded response and confirm the endpoint and expected behaviour. Retest only within the approved scope."
-  },
-  {
-    "mechanism": "One HTTP HEAD response observation",
-    "limitations": "Shows the response from a bounded external sample. A confirmed reply can reveal an exposed service or a declared deny that was not enforced; a timeout or silence cannot prove blocking. No readiness or capacity assurance.",
-    "next_step": "Review the recorded response and confirm the endpoint and expected behaviour. Retest only within the approved scope."
-  },
-  {
-    "mechanism": "Bounded TCP connection samples",
-    "limitations": "Shows the response from a bounded external sample. A confirmed reply can reveal an exposed service or a declared deny that was not enforced; a timeout or silence cannot prove blocking. No readiness or capacity assurance.",
-    "next_step": "Review the recorded response and confirm the endpoint and expected behaviour. Retest only within the approved scope."
-  },
-  {
-    "mechanism": "Bounded UDP service samples",
-    "limitations": "Shows the response from a bounded external sample. A confirmed reply can reveal an exposed service or a declared deny that was not enforced; a timeout or silence cannot prove blocking. No readiness or capacity assurance.",
-    "next_step": "Review the recorded response and confirm the endpoint and expected behaviour. Retest only within the approved scope."
-  },
-  {
-    "mechanism": "Bounded DNS wire query",
-    "limitations": "Shows the response from a bounded external sample. A confirmed reply can reveal an exposed service or a declared deny that was not enforced; a timeout or silence cannot prove blocking. No readiness or capacity assurance.",
-    "next_step": "Review the recorded response and confirm the endpoint and expected behaviour. Retest only within the approved scope."
-  },
-  {
-    "mechanism": "One query to a declared resolver",
-    "limitations": "Shows the response from a bounded external sample. A confirmed reply can reveal an exposed service or a declared deny that was not enforced; a timeout or silence cannot prove blocking. No readiness or capacity assurance.",
-    "next_step": "Review the recorded response and confirm the endpoint and expected behaviour. Retest only within the approved scope."
-  },
-  {
-    "mechanism": "One inert-marker HTTP response observation",
-    "limitations": "Shows the response from a bounded external sample. A confirmed reply can reveal an exposed service or a declared deny that was not enforced; a timeout or silence cannot prove blocking. No readiness or capacity assurance.",
-    "next_step": "Review the recorded response and confirm the endpoint and expected behaviour. Retest only within the approved scope."
-  },
-  {
-    "mechanism": "Ordinary GET with DNS/address/HTTP provider signals",
-    "limitations": "Shows the response from a bounded external sample. A confirmed reply can reveal an exposed service or a declared deny that was not enforced; a timeout or silence cannot prove blocking. No readiness or capacity assurance.",
-    "next_step": "Review the recorded response and confirm the endpoint and expected behaviour. Retest only within the approved scope."
-  },
-  {
-    "mechanism": "Small fixed HTTP request sequence",
-    "limitations": "Shows the response from a bounded external sample. A confirmed reply can reveal an exposed service or a declared deny that was not enforced; a timeout or silence cannot prove blocking. No readiness or capacity assurance.",
-    "next_step": "Review the recorded response and confirm the endpoint and expected behaviour. Retest only within the approved scope."
-  },
-  {
-    "mechanism": "Bounded HTTP method response matrix",
-    "limitations": "Shows the response from a bounded external sample. A confirmed reply can reveal an exposed service or a declared deny that was not enforced; a timeout or silence cannot prove blocking. No readiness or capacity assurance.",
-    "next_step": "Review the recorded response and confirm the endpoint and expected behaviour. Retest only within the approved scope."
-  },
-  {
-    "mechanism": "Bounded HTTP header-size comparison",
-    "limitations": "Shows the response from a bounded external sample. A confirmed reply can reveal an exposed service or a declared deny that was not enforced; a timeout or silence cannot prove blocking. No readiness or capacity assurance.",
-    "next_step": "Review the recorded response and confirm the endpoint and expected behaviour. Retest only within the approved scope."
-  },
-  {
-    "mechanism": "One TLS handshake and certificate/configuration inspection",
-    "limitations": "Shows the response from a bounded external sample. A confirmed reply can reveal an exposed service or a declared deny that was not enforced; a timeout or silence cannot prove blocking. No readiness or capacity assurance.",
-    "next_step": "Review the recorded response and confirm the endpoint and expected behaviour. Retest only within the approved scope."
-  },
-  {
-    "mechanism": "One HTTP/2 SETTINGS observation",
-    "limitations": "Shows the response from a bounded external sample. A confirmed reply can reveal an exposed service or a declared deny that was not enforced; a timeout or silence cannot prove blocking. No readiness or capacity assurance.",
-    "next_step": "Review the recorded response and confirm the endpoint and expected behaviour. Retest only within the approved scope."
-  },
-  {
-    "mechanism": "HTTP Alt-Svc advertisement observation, not a QUIC exchange",
-    "limitations": "Shows the response from a bounded external sample. A confirmed reply can reveal an exposed service or a declared deny that was not enforced; a timeout or silence cannot prove blocking. No readiness or capacity assurance.",
-    "next_step": "Review the recorded response and confirm the endpoint and expected behaviour. Retest only within the approved scope."
-  },
-  {
-    "mechanism": "No callback delivery without separately approved signed scope",
-    "limitations": "Shows the response from a bounded external sample. A confirmed reply can reveal an exposed service or a declared deny that was not enforced; a timeout or silence cannot prove blocking. No readiness or capacity assurance.",
-    "next_step": "Review the recorded response and confirm the endpoint and expected behaviour. Retest only within the approved scope."
-  },
-  {
-    "mechanism": "Local operational-declaration evaluation; no target traffic",
-    "limitations": "Customer-provided operational information is not live enforcement or capacity evidence.",
-    "next_step": "Review declared control evidence and its freshness; arrange an authorized assessment if needed."
-  },
-  {
-    "mechanism": "Bounded DNSKEY observation",
-    "limitations": "Shows the response from a bounded external sample. A confirmed reply can reveal an exposed service or a declared deny that was not enforced; a timeout or silence cannot prove blocking. No readiness or capacity assurance.",
-    "next_step": "Review the recorded response and confirm the endpoint and expected behaviour. Retest only within the approved scope."
-  },
-  {
-    "mechanism": "Bounded nameserver/address observations, not a failover drill",
-    "limitations": "Shows the response from a bounded external sample. A confirmed reply can reveal an exposed service or a declared deny that was not enforced; a timeout or silence cannot prove blocking. No readiness or capacity assurance.",
-    "next_step": "Review the recorded response and confirm the endpoint and expected behaviour. Retest only within the approved scope."
-  },
-  {
-    "mechanism": "Bounded authorized DNS zone-transfer comparison",
-    "limitations": "One confirmed transfer can establish exposure; protection requires every declared nameserver to refuse. No DNS resilience or capacity assurance.",
-    "next_step": "Review the recorded response and confirm the endpoint and expected behaviour. Retest only within the approved scope."
-  },
-  {
-    "mechanism": "Small HTTP cache-marker comparison",
-    "limitations": "Shows the response from a bounded external sample. A confirmed reply can reveal an exposed service or a declared deny that was not enforced; a timeout or silence cannot prove blocking. No readiness or capacity assurance.",
-    "next_step": "Review the recorded response and confirm the endpoint and expected behaviour. Retest only within the approved scope."
-  },
-  {
-    "mechanism": "Bounded GraphQL metadata observation",
-    "limitations": "Shows the response from a bounded external sample. A confirmed reply can reveal an exposed service or a declared deny that was not enforced; a timeout or silence cannot prove blocking. No readiness or capacity assurance.",
-    "next_step": "Review the recorded response and confirm the endpoint and expected behaviour. Retest only within the approved scope."
-  },
-  {
-    "mechanism": "One HTTP challenge observation",
-    "limitations": "Shows the response from a bounded external sample. A confirmed reply can reveal an exposed service or a declared deny that was not enforced; a timeout or silence cannot prove blocking. No readiness or capacity assurance.",
-    "next_step": "Review the recorded response and confirm the endpoint and expected behaviour. Retest only within the approved scope."
-  },
-  {
-    "mechanism": "One bounded slow-header timeout sample",
-    "limitations": "Shows the response from a bounded external sample. A confirmed reply can reveal an exposed service or a declared deny that was not enforced; a timeout or silence cannot prove blocking. No readiness or capacity assurance.",
-    "next_step": "Review the recorded response and confirm the endpoint and expected behaviour. Retest only within the approved scope."
-  },
-  {
-    "mechanism": "One TLS session observation",
-    "limitations": "Shows the response from a bounded external sample. A confirmed reply can reveal an exposed service or a declared deny that was not enforced; a timeout or silence cannot prove blocking. No readiness or capacity assurance.",
-    "next_step": "Review the recorded response and confirm the endpoint and expected behaviour. Retest only within the approved scope."
-  },
-  {
-    "mechanism": "One bounded gRPC reflection response observation",
-    "limitations": "Shows the response from a bounded external sample. A confirmed reply can reveal an exposed service or a declared deny that was not enforced; a timeout or silence cannot prove blocking. No readiness or capacity assurance.",
-    "next_step": "Review the recorded response and confirm the endpoint and expected behaviour. Retest only within the approved scope."
-  },
-  {
-    "mechanism": "One WebSocket upgrade response observation",
-    "limitations": "Shows the response from a bounded external sample. A confirmed reply can reveal an exposed service or a declared deny that was not enforced; a timeout or silence cannot prove blocking. No readiness or capacity assurance.",
-    "next_step": "Review the recorded response and confirm the endpoint and expected behaviour. Retest only within the approved scope."
-  },
-  {
-    "mechanism": "Bounded catalogue-path HTTP observations",
-    "limitations": "Shows the response from a bounded external sample. A confirmed reply can reveal an exposed service or a declared deny that was not enforced; a timeout or silence cannot prove blocking. No readiness or capacity assurance.",
-    "next_step": "Review the recorded response and confirm the endpoint and expected behaviour. Retest only within the approved scope."
-  },
-  {
-    "mechanism": "One CORS response-header observation",
-    "limitations": "Shows the response from a bounded external sample. A confirmed reply can reveal an exposed service or a declared deny that was not enforced; a timeout or silence cannot prove blocking. No readiness or capacity assurance.",
-    "next_step": "Review the recorded response and confirm the endpoint and expected behaviour. Retest only within the approved scope."
-  },
-  {
-    "mechanism": "Governed request only; no customer probe executor",
-    "limitations": "A request is not execution, approval, a traffic result or readiness evidence.",
-    "next_step": "Request an authorized SOC review; do not execute from this entry."
-  },
-  {
-    "mechanism": "Stored declaration only; zero target traffic",
-    "limitations": "Customer-provided operational information is not live enforcement or capacity evidence.",
-    "next_step": "Review declared control evidence and its freshness; arrange an authorized assessment if needed."
-  },
-  {
-    "mechanism": "Bounded TCP connection samples after explicit target setup",
-    "limitations": "The current entry lacks the required declared port or deny policy. No connection-flood validation or protection conclusion.",
-    "next_step": "Provide the required declared target and port or deny policy before an explicitly authorized bounded retest."
-  },
-  {
-    "mechanism": "Bounded labelled service requests without spoofing or amplification",
-    "limitations": "Shows the response from a bounded external sample. A confirmed reply can reveal an exposed service or a declared deny that was not enforced; a timeout or silence cannot prove blocking. No readiness or capacity assurance.",
-    "next_step": "Review the recorded response and confirm the endpoint and expected behaviour. Retest only within the approved scope."
-  },
-  {
-    "mechanism": "Bounded existing HTTP/2 control-frame or SETTINGS sample",
-    "limitations": "Shows the response from a bounded external sample. A confirmed reply can reveal an exposed service or a declared deny that was not enforced; a timeout or silence cannot prove blocking. No readiness or capacity assurance.",
-    "next_step": "Review the recorded response and confirm the endpoint and expected behaviour. Retest only within the approved scope."
-  },
-  {
-    "mechanism": "HTTP Alt-Svc advertisement observation, not HTTP/3 control traffic",
-    "limitations": "Shows the response from a bounded external sample. A confirmed reply can reveal an exposed service or a declared deny that was not enforced; a timeout or silence cannot prove blocking. No readiness or capacity assurance.",
-    "next_step": "Review the recorded response and confirm the endpoint and expected behaviour. Retest only within the approved scope."
-  },
-  {
-    "mechanism": "Bounded labelled service requests without spoofing or amplification",
-    "limitations": "The approved transport cannot deliver this mechanism. No substitute traffic or protection conclusion.",
-    "next_step": "Keep untested and seek an approved supported assessment."
-  },
-  {
-    "mechanism": "GET inert-token query/path/header placements and benign controls",
-    "limitations": "No exact installed-token rule binding exists in current declarations. No attack-method test, installed-rule failure finding or readiness credit.",
-    "next_step": "Review the recorded token response. Exact installed-rule validation is unavailable; do not infer failure or configure unrelated controls as a substitute."
-  },
-  {
-    "mechanism": "GET inert-token query/path/header placements and benign controls",
-    "limitations": "Only the completed, graded placements on sampled paths are covered; no exploit or DDoS-capacity assurance.",
-    "next_step": "Review the recorded response and confirm the endpoint and expected behaviour. Retest only within the approved scope."
-  },
-  {
-    "mechanism": "Benign control, plain inert reference and supported transformed marker comparison",
-    "limitations": "Only the completed, graded placements on sampled paths are covered; no exploit or DDoS-capacity assurance.",
-    "next_step": "Review the recorded response and confirm the endpoint and expected behaviour. Retest only within the approved scope."
-  },
-  {
-    "mechanism": "Benign control, plain inert reference and supported transformed marker comparison",
-    "limitations": "The approved transport cannot deliver this mechanism. No substitute traffic or protection conclusion.",
-    "next_step": "Keep untested and seek an approved supported assessment."
-  },
-  {
-    "mechanism": "Unavailable: no approved business-safe body endpoint",
-    "limitations": "The approved transport cannot deliver this mechanism. No substitute traffic or protection conclusion.",
-    "next_step": "Keep untested and seek an approved supported assessment."
-  },
-  {
-    "mechanism": "Bounded URI/parameter-size observation; body plans unavailable",
-    "limitations": "The approved transport cannot deliver this mechanism. No substitute traffic or protection conclusion.",
-    "next_step": "Keep untested and seek an approved supported assessment."
-  },
-  {
-    "mechanism": "Bounded URI/parameter-size observation; body plans unavailable",
-    "limitations": "Shows the response from a bounded external sample. A confirmed reply can reveal an exposed service or a declared deny that was not enforced; a timeout or silence cannot prove blocking. No readiness or capacity assurance.",
-    "next_step": "Review the recorded response and confirm the endpoint and expected behaviour. Retest only within the approved scope."
-  },
-  {
-    "mechanism": "GET inert scanner User-Agent and benign controls",
-    "limitations": "Only the completed, graded placements on sampled paths are covered; no exploit or DDoS-capacity assurance.",
-    "next_step": "Review the recorded response and confirm the endpoint and expected behaviour. Retest only within the approved scope."
-  },
-  {
-    "mechanism": "GET controls and bodyless TRACE/nonstandard-token method comparison",
-    "limitations": "A scoped E2 method-policy verdict is possible; no readiness, exploit or capacity assurance.",
-    "next_step": "Review the recorded response and confirm the endpoint and expected behaviour. Retest only within the approved scope."
-  },
-  {
-    "mechanism": "Bounded sequence on a declared low-threshold canary route",
-    "limitations": "Only the declared route, threshold and observed sequence are covered; no production quota, identity-key or DDoS-capacity assurance.",
-    "next_step": "Review the recorded response and confirm the endpoint and expected behaviour. Retest only within the approved scope."
-  },
-  {
-    "mechanism": "Bounded connection acceptance samples",
-    "limitations": "Shows the response from a bounded external sample. A confirmed reply can reveal an exposed service or a declared deny that was not enforced; a timeout or silence cannot prove blocking. No readiness or capacity assurance.",
-    "next_step": "Review the recorded response and confirm the endpoint and expected behaviour. Retest only within the approved scope."
-  }
-];
-const PAIRED_IDENTITY_TEMPLATE = TEMPLATES.push({
-  mechanism: "Reviewed two-leg E2 application-identity observation",
-  limitations: "Compares the protected route with one declared, verified origin using the reviewed HEAD or bounded GET scope. Content or certificate similarity alone is not confirmed application identity. No protected result, readiness credit, capacity assurance or proof of bypassing a particular WAF rule.",
-  next_step: "Inspect both observations, current authorization and fresh nonce-baseline comparability before interpreting the direct application path."
-}) - 1;
+/** Customer-facing explanations for every runtime check. Presentation only: no execution or version inputs. */
 const ENTRIES = {
-  "origin.identity_pair.head.v1": ["Paired origin identity · HEAD", PAIRED_IDENTITY_TEMPLATE],
-  "origin.identity_pair.get.v1": ["Paired origin identity · bounded GET", PAIRED_IDENTITY_TEMPLATE],
-  "origin.direct_reachability.safe": ["Direct Origin Reachability", 0],
-  "origin.direct_bypass.safe": ["Declared-origin response", 0],
-  "origin.host_sni_bypass.safe": ["Declared Host/SNI response", 0],
-  "origin.leak_scan.safe": ["Origin Leak Scan", 1],
-  "l3.firewall_exposure_scan.safe": ["Firewall Exposure Scan", 2],
-  "path.protected_canary.safe": ["Canary HTTP response", 3],
-  "l3.forbidden_tcp_port.safe": ["Forbidden TCP Port", 4],
-  "l3.forbidden_udp_port.safe": ["Forbidden UDP Port", 5],
-  "l3.basic_deny_rule.safe": ["Basic Deny-Rule Validation", 4],
-  "dns.authoritative_response.safe": ["DNS Authoritative Response", 6],
-  "dns.random_prefix_nxdomain.safe": ["DNS Random-Prefix / NXDOMAIN", 6],
-  "dns.open_recursion_behavior.safe": ["Open Recursion Behavior", 7],
-  "l7.waf_marker_rule.safe": ["WAF token response sample", 8],
-  "waf.fingerprint.safe": ["WAF and CDN Fingerprint", 9],
-  "waf.marker_rule.safe": ["WAF token response posture", 8],
-  "waf.origin_bypass.safe": ["Declared-origin WAF observation", 0],
-  "waf.low_rate_limit.safe": ["Low-rate response sequence", 10],
-  "l7.http_method_restriction.safe": ["HTTP method responses", 11],
-  "l7.header_size_boundary.safe": ["Header/Size Boundary", 12],
-  "l7.low_rate_rate_limit.safe": ["Rate-limit response sample", 10],
-  "tls.profile_exposure.safe": ["TLS Profile Exposure", 13],
-  "protocol.http2_readiness.safe": ["HTTP/2 settings observation", 14],
-  "protocol.http3_quic_exposure.safe": ["HTTP/3 Alt-Svc Observation", 15],
-  "ops.alert_workflow_marker.safe": ["Alert Workflow Webhook Ping", 16],
-  "ops.runbook_contact_validation.safe": ["Runbook declaration review", 17],
-  "ops.kill_switch_drill.safe": ["Stop-readiness declaration review", 17],
-  "l3.ipv6_reachability.safe": ["IPv6 Declared Reachability", 4],
-  "dns.amplification_exposure.safe": ["DNS response size sample", 6],
-  "dns.dnssec_expensive_query.safe": ["DNSKEY presence", 18],
-  "dns.secondary_failover.safe": ["Secondary DNS observations", 19],
-  "dns.zone_transfer_exposure.safe": ["Zone Transfer Exposure", 20],
-  "l7.cache_busting.safe": ["Cache response comparison", 21],
-  "l7.expensive_endpoint.safe": ["Expensive Endpoint", 3],
-  "l7.login_abuse_flow.safe": ["Login-route response sample", 10],
-  "l7.password_reset.safe": ["Reset-route HEAD response", 3],
-  "l7.api_quota_exhaustion.safe": ["API quota response signals", 10],
-  "l7.graphql_complexity.safe": ["GraphQL metadata response", 22],
-  "l7.bot_challenge_marker.safe": ["Bot / Challenge Marker", 23],
-  "tls.slow_header_body_timeout.safe": ["Slow-header timeout sample", 24],
-  "tls.idle_connection_timeout.safe": ["TLS session sample", 25],
-  "protocol.http2_rapid_reset_readiness.safe": ["HTTP/2 advertised settings", 14],
-  "protocol.http2_stream_concurrency.safe": ["HTTP/2 advertised stream limits", 14],
-  "protocol.grpc_reflection_stream.safe": ["gRPC reflection response", 26],
-  "protocol.websocket_connection_controls.safe": ["WebSocket upgrade response", 27],
-  "tls.full_audit.safe": ["TLS certificate and settings", 13],
-  "l7.api_surface_scan.safe": ["API Surface Scan", 28],
-  "l7.cors_posture.safe": ["CORS Posture", 29],
-  "waf.enforcement.safe": ["WAF token response", 8],
-  "l3.connection_table_exhaustion.request_only": ["Connection Table Exhaustion request", 30],
-  "high_scale.dns_high_query.request_only": ["DNS High-Query review request", 30],
-  "ops.runbook_contact_validation.request_only": ["Runbook / Emergency Contact Validation request", 30],
-  "ops.kill_switch_drill.request_only": ["Kill Switch Drill request", 30],
-  "ops.provider_telemetry.request_only": ["Provider Telemetry Validation request", 30],
-  "high_scale.multi_vector.request_only": ["Multi-Vector review request", 30],
-  "high_scale.degradation_recovery.request_only": ["Degradation / Recovery Drill request", 30],
-  "high_scale.volumetric.request_only": ["Volumetric L3/L4 request", 30],
-  "waf.offensive_sqli.soc": ["WAF SQLi review request", 30],
-  "waf.offensive_xss.soc": ["WAF XSS review request", 30],
-  "waf.offensive_rce.soc": ["WAF RCE review request", 30],
-  "waf.offensive_path_traversal.soc": ["WAF Path Traversal review request", 30],
-  "waf.offensive_command_injection.soc": ["WAF Command Injection review request", 30],
-  "waf.offensive_ldap_injection.soc": ["WAF LDAP Injection review request", 30],
-  "waf.offensive_ssti.soc": ["WAF SSTI review request", 30],
-  "waf.offensive_combined.soc": ["WAF Combined review request", 30],
-  "high_scale.application.request_only": ["Application-Layer High-Scale request", 30],
-  "l3.icmp_flood.readiness": ["ICMP Flood declaration", 31],
-  "l3.gre_esp_flood.readiness": ["GRE / ESP Tunnel Flood declaration", 31],
-  "l3.ipv6_volumetric.readiness": ["IPv6 Volumetric declaration", 31],
-  "l3.sip_voip_flood.readiness": ["SIP-port UDP response sample", 5],
-  "l3.sctp_exposure.readiness": ["SCTP Exposure declaration", 31],
-  "l3.multicast_broadcast_storm.readiness": ["Multicast / Broadcast Storm declaration", 31],
-  "l3.ack_flood.readiness": ["ACK Flood declaration", 31],
-  "l3.rst_flood.readiness": ["RST Flood declaration", 31],
-  "l3.syn_ack_flood.readiness": ["SYN-ACK Flood declaration", 31],
-  "l3.tcp_flag_anomaly.readiness": ["TCP flag test unavailable", 32],
-  "l3.out_of_state_tcp.readiness": ["Out-of-State TCP Filtering declaration", 31],
-  "l3.fragmentation_flood.readiness": ["Fragmentation Flood declaration", 31],
-  "l3.syn_flood.readiness": ["SYN Flood declaration", 31],
-  "l3.tcp_connection_flood.readiness": ["TCP connection setup required", 32],
-  "l3.nat_state_table.readiness": ["NAT / State Table declaration", 31],
-  "l3.smtp_connection_flood.readiness": ["SMTP-port TCP reachability", 4],
-  "l3.ssh_connection_flood.readiness": ["SSH-port TCP reachability", 4],
-  "l3.ftp_connection_flood.readiness": ["FTP-port TCP reachability", 4],
-  "l3.ike_ipsec_negotiation.readiness": ["IKE / IPsec Negotiation declaration", 31],
-  "l7.connection_hoarding.readiness": ["Application Connection Hoarding declaration", 31],
-  "exploit.ping_of_death.posture": ["Legacy Oversized-Packet Filtering declaration", 31],
-  "exploit.teardrop.posture": ["Overlapping-Fragment Filtering declaration", 31],
-  "exploit.ip_options.posture": ["IP Options Filtering declaration", 31],
-  "exploit.malformed_quic.posture": ["QUIC Parser Robustness declaration", 31],
-  "exploit.land_attack.posture": ["Spoofed Same-Source Filtering declaration", 31],
-  "exploit.quic_migration.posture": ["QUIC Migration Abuse declaration", 31],
-  "reflect.ssdp_exposure.safe": ["SSDP / UPnP Reflector Exposure", 33],
-  "reflect.snmp_exposure.safe": ["SNMP Responder Exposure", 33],
-  "reflect.chargen_qotd_exposure.safe": ["CHARGEN / QOTD / Echo Responder Exposure", 33],
-  "reflect.mdns_netbios_wsdiscovery_exposure.safe": ["mDNS / NetBIOS NBSTAT / WS-Discovery Composite Exposure", 33],
-  "reflect.portmap_service_exposure.safe": ["Portmapper / RIPv1 / RPC Service Exposure", 33],
-  "reflect.dtls_sip_rdp_tftp_exposure.safe": ["DTLS/SIP/RDP/TFTP responses", 33],
-  "reflect.quic_reflection_exposure.safe": ["QUIC Alt-Svc Advertisement Observation", 15],
-  "reflect.tcp_middlebox_exposure.safe": ["TCP service reachability", 32],
-  "reflect.mssql_resolver_exposure.safe": ["MSSQL Resolver Exposure", 33],
-  "reflect.jenkins_discovery_exposure.safe": ["Jenkins / CI Discovery Exposure", 33],
-  "reflect.coap_iot_exposure.safe": ["CoAP IoT Responder Exposure", 33],
-  "reflect.legacy_device_discovery_exposure.safe": ["Legacy Device / Game Discovery Exposure", 33],
-  "reflect.stun_turn_exposure.safe": ["STUN / TURN Responder Exposure", 33],
-  "reflect.ipmi_bmc_exposure.safe": ["IPMI / BMC Responder Exposure", 33],
-  "reflect.redis_direct_exposure.safe": ["Redis-port TCP reachability", 4],
-  "reflect.openvpn_wireguard_exposure.safe": ["OpenVPN / WireGuard Responder Exposure", 33],
-  "amp.ntp_exposure.safe": ["NTP Mode Restriction Exposure", 33],
-  "amp.cldap_exposure.safe": ["CLDAP Exposure Posture", 33],
-  "amp.memcached_exposure.safe": ["Memcached Exposure", 33],
-  "amp.dns_any_txt_exposure.safe": ["DNS ANY/TXT Response-Class Posture", 6],
-  "amp.smurf_broadcast_exposure.safe": ["Directed Broadcast Filtering declaration", 31],
-  "amp.authoritative_resolver_exposure.safe": ["DNS service response sample", 6],
-  "dns.laundering.readiness": ["DNS Laundering declaration", 31],
-  "dns.garbage_flood.readiness": ["DNS query response sample", 6],
-  "dns.phantom_domain.readiness": ["Phantom Domain declaration", 31],
-  "dns.domain_lockup.readiness": ["Domain Lock-Up declaration", 31],
-  "dns.nxns_attack.readiness": ["DNS nameserver response sample", 6],
-  "dns.dnsbomb.readiness": ["DNSBomb Pulsing declaration", 31],
-  "dns.qname_minimization.readiness": ["QNAME Minimization declaration", 31],
-  "dns.doh_dot_exposure.readiness": ["DoH / DoT Endpoint declaration", 31],
-  "dns.tcp_fallback.readiness": ["DNS TCP fallback sample", 6],
-  "dns.zone_walking.readiness": ["DNS Zone-Walking declaration", 31],
-  "l7.http_get_flood.validation": ["GET response sequence", 10],
-  "l7.http_post_flood.validation": ["HTTP POST Limit declaration", 31],
-  "l7.slowloris.readiness": ["Slow-header connection sample", 24],
-  "l7.slow_post.readiness": ["Slow Body Client declaration", 31],
-  "l7.slow_read.readiness": ["Slow Read Response declaration", 31],
-  "l7.low_and_slow.readiness": ["Low-and-Slow Header Timeout Sample", 24],
-  "l7.large_body_post.readiness": ["Large Body Limit declaration", 31],
-  "l7.file_upload_abuse.readiness": ["File Upload Abuse declaration", 31],
-  "l7.json_xml_bomb.readiness": ["Parser Depth Limit declaration", 31],
-  "l7.search_abuse.validation": ["Search-route response sample", 10],
-  "l7.export_abuse.validation": ["Export-route response sample", 10],
-  "l7.batch_api_abuse.validation": ["Batch API Limit declaration", 31],
-  "l7.oauth_token_abuse.validation": ["Token-route response sample", 10],
-  "l7.checkout_abuse.validation": ["Checkout Endpoint Limit declaration", 31],
-  "l7.otp_sms_cost.readiness": ["OTP / SMS Cost Guardrail declaration", 31],
-  "l7.signup_registration_abuse.validation": ["Signup-route response sample", 10],
-  "l7.elasticsearch_abuse.readiness": ["Search-Cluster Query Cost declaration", 31],
-  "l7.health_check_flood.readiness": ["Health-Check Flood declaration", 31],
-  "l7.wordpress_xmlrpc.readiness": ["XML-RPC Endpoint Posture", 3],
-  "l7.webhook_flood.readiness": ["Webhook Callback Limit declaration", 31],
-  "l7.http_pipelining.readiness": ["HTTP Pipelining Limit declaration", 31],
-  "l7.http_range_abuse.readiness": ["Range Request Limit declaration", 31],
-  "l7.conditional_revalidation.readiness": ["Conditional Revalidation Cost declaration", 31],
-  "l7.captcha_challenge_abuse.readiness": ["Challenge Endpoint Cost declaration", 31],
-  "l7.mqtt_broker_exposure.readiness": ["MQTT Broker declaration", 31],
-  "l7.redos.readiness": ["Regex Complexity declaration", 31],
-  "l7.graphql_batch_abuse.validation": ["GraphQL response posture", 22],
-  "tls.handshake_rate.readiness": ["TLS Handshake Rate declaration", 31],
-  "tls.renegotiation.readiness": ["TLS Renegotiation Posture", 25],
-  "tls.zero_rtt.readiness": ["TLS 0-RTT Early Data declaration", 31],
-  "tls.ocsp_stapling.readiness": ["OCSP Stapling Posture", 13],
-  "l7.http2_rapid_reset.validation": ["HTTP/2 reset sample", 34],
-  "l7.http2_made_you_reset.readiness": ["HTTP/2 control-frame sample", 34],
-  "l7.http2_continuation.readiness": ["HTTP/2 control-frame posture", 34],
-  "l7.http2_priority_abuse.readiness": ["HTTP/2 Priority Abuse declaration", 31],
-  "l7.hpack_bomb.readiness": ["HTTP/2 advertised header limits", 34],
-  "l7.http2_push_promise.readiness": ["HTTP/2 Server Push declaration", 31],
-  "l7.qpack_bomb.readiness": ["QPACK Compression Limit declaration", 31],
-  "protocol.sse_stream.readiness": ["SSE Stream Limit declaration", 31],
-  "protocol.http3_control_stream.readiness": ["HTTP/3 Alt-Svc Posture Observation", 35],
-  "protocol.websocket_message_rate.readiness": ["WebSocket Message Rate declaration", 31],
-  "origin.cdn_bypass.readiness": ["Declared-host origin observations", 1],
-  "origin.dns_hostname_bypass.readiness": ["DNS Hostname Bypass Sample", 1],
-  "pattern.carpet_bombing.readiness": ["Carpet Bombing declaration", 31],
-  "pattern.pulse_wave.readiness": ["Pulse-Wave declaration", 31],
-  "pattern.spoofed_source.readiness": ["Spoofed Source Filtering declaration", 31],
-  "pattern.ransom_ddos.readiness": ["Ransom DDoS Runbook declaration", 31],
-  "pattern.rate_limit_evasion.readiness": ["Rate-Limit Evasion Resistance declaration", 31],
-  "pattern.adaptive_evasion.readiness": ["Adaptive Evasion Resistance declaration", 31],
-  "pattern.residential_proxy.readiness": ["Residential Proxy Resistance declaration", 31],
-  "ops.autoscaling_cost.readiness": ["Autoscaling Cost Guardrail declaration", 31],
-  "ops.attack_alert_coverage.readiness": ["Attack Alert Coverage declaration", 31],
-  "reflect.slp_amplification_exposure.safe": ["SLP Amplification Exposure", 33],
-  "reflect.tp240_amplification_exposure.safe": ["TP240 PhoneHome Amplification Exposure", 33],
-  "reflect.l2tp_reflection_exposure.safe": ["L2TP Reflection Exposure", 33],
-  "reflect.natpmp_amplification_exposure.safe": ["NAT-PMP Amplification Exposure", 33],
-  "reflect.ipp_callback_exposure.safe": ["IPP callback test unavailable", 36],
-  "dns.multi_question_oversized.safe": ["DNS parser response sample", 6],
-  "waf.http_method_policy_marker.safe": ["HTTP-policy token observation", 37],
-  "waf.request_smuggling_marker.safe": ["Request Smuggling token observation", 37],
-  "waf.crlf_injection_marker.safe": ["CRLF/Response-Splitting token observation", 37],
-  "waf.open_redirect_marker.safe": ["Open Redirect / Parameter Policy token observation", 37],
-  "waf.nosql_injection_marker.safe": ["NoSQL Injection token observation", 37],
-  "waf.xpath_injection_marker.safe": ["XPath/XML Injection token observation", 37],
-  "waf.jndi_ldap_marker.safe": ["JNDI/LDAP token observation", 37],
-  "waf.csv_formula_marker.safe": ["CSV/Formula token observation", 37],
-  "waf.prototype_pollution_marker.safe": ["Prototype Pollution token observation", 37],
-  "waf.deserialization_marker.safe": ["Unsafe Deserialization token observation", 37],
-  "waf.ssrf_marker.safe": ["SSRF token observation", 37],
-  "waf.xxe_marker.safe": ["XXE token observation", 37],
-  "waf.file_upload_marker.safe": ["File Upload token observation", 37],
-  "waf.jwt_tamper_marker.safe": ["JWT Tamper token observation", 37],
-  "waf.entry_path_login_marker.safe": ["WAF Declared Login Path Marker", 38],
-  "waf.entry_path_api_marker.safe": ["WAF Declared API Path Marker", 38],
-  "waf.evasion_unicode_normalization.safe": ["Unicode Normalization marker comparison", 39],
-  "waf.evasion_homoglyph.safe": ["Homoglyph marker comparison", 39],
-  "waf.evasion_overlong_utf8.safe": ["Overlong Utf8 marker comparison", 39],
-  "waf.evasion_alt_charset.safe": ["ALT Charset test unavailable", 40],
-  "waf.evasion_html_entity.safe": ["Html Entity marker comparison", 39],
-  "waf.evasion_js_escape.safe": ["JS Escape marker comparison", 39],
-  "waf.evasion_json_unicode_escape.safe": ["Json Unicode Escape test unavailable", 40],
-  "waf.evasion_css_escape.safe": ["CSS Escape marker comparison", 39],
-  "waf.evasion_base64_wrap.safe": ["Base64 Wrap marker comparison", 39],
-  "waf.evasion_numeric_repr.safe": ["Numeric Repr marker comparison", 39],
-  "waf.evasion_whitespace.safe": ["Whitespace marker comparison", 39],
-  "waf.evasion_lexical_operator.safe": ["Lexical Operator test unavailable", 40],
-  "waf.evasion_lexical_tautology.safe": ["Lexical Tautology test unavailable", 40],
-  "waf.evasion_lexical_literal.safe": ["Lexical Literal test unavailable", 40],
-  "waf.evasion_control_char.safe": ["Control Char marker comparison", 39],
-  "waf.evasion_path_matrix.safe": ["Path Matrix test unavailable", 40],
-  "waf.evasion_path_suffix.safe": ["Path Suffix test unavailable", 40],
-  "waf.evasion_ip_representation.safe": ["IP Representation test unavailable", 40],
-  "waf.evasion_parser_hpp.safe": ["Parser HPP marker comparison", 39],
-  "waf.evasion_parser_json_dup.safe": ["Parser Json DUP test unavailable", 40],
-  "waf.evasion_parser_header_dup.safe": ["Parser Header DUP test unavailable", 40],
-  "waf.evasion_framing_cl_te.safe": ["Framing CL TE test unavailable", 40],
-  "waf.evasion_framing_transfer_coding.safe": ["Framing Transfer Coding test unavailable", 40],
-  "waf.evasion_framing_h2_h1.safe": ["Framing H2 H1 test unavailable", 40],
-  "waf.evasion_framing_line_ending.safe": ["Framing Line Ending test unavailable", 40],
-  "waf.evasion_framing_chunk_ext.safe": ["Framing Chunk EXT test unavailable", 40],
-  "waf.evasion_body_gzip.safe": ["Body Gzip test unavailable", 40],
-  "waf.evasion_body_nested_encoding.safe": ["Body Nested Encoding test unavailable", 40],
-  "waf.evasion_content_type_binary.safe": ["Content Type Binary test unavailable", 40],
-  "waf.evasion_struct_type_confusion.safe": ["Struct Type Confusion test unavailable", 40],
-  "waf.evasion_struct_deep_nesting.safe": ["Struct Deep Nesting test unavailable", 40],
-  "waf.evasion_parameter_location.safe": ["Parameter Location marker comparison", 39],
-  "waf.evasion_method_override.safe": ["Method Override test unavailable", 40],
-  "waf.evasion_protocol_version.safe": ["Protocol Version test unavailable", 40],
-  "waf.evasion_protocol_upgrade.safe": ["Protocol Upgrade test unavailable", 40],
-  "waf.evasion_benign_padding.safe": ["Benign Padding marker comparison", 39],
-  "waf.evasion_polyglot_content.safe": ["Polyglot Content test unavailable", 40],
-  "waf.evasion_protocol_h3_h1.safe": ["Protocol H3 H1 test unavailable", 40],
-  "waf.evasion_protocol_qpack_hpack.safe": ["Protocol Qpack Hpack test unavailable", 40],
-  "waf.evasion_multipart_charset.safe": ["Multipart Charset test unavailable", 40],
-  "waf.evasion_xml_attribute.safe": ["XML Attribute test unavailable", 40],
-  "waf.inspection_limit.safe": ["Body inspection unavailable", 41],
-  "waf.evasion_cache_key_mismatch.posture": ["Cache-key / routing mismatch declaration", 31],
-  "waf.evasion_reassembly_differential.posture": ["IP fragmentation / TCP segmentation differential declaration", 31],
-  "waf.evasion_rule_gap.posture": ["Zero-day / rule-gap evasion declaration", 31],
-  "waf.evasion_second_order.posture": ["Stored / deferred second-order payload declaration", 31],
-  "waf.evasion_encrypted_payload.posture": ["Application-layer encrypted / opaque payload declaration", 31],
-  "waf.evasion_signed_structured_data.posture": ["Signed but malicious structured data declaration", 31],
-  "waf.evasion_connection_coalescing.posture": ["Connection coalescing identity confusion declaration", 31],
-  "waf.evasion_ech_routing_metadata.posture": ["Encrypted ClientHello / hidden routing-metadata gap declaration", 31],
-  "l7.compressed_request_decompression.posture": ["Compressed-body test unavailable", 42],
-  "l7.request_parser_size.posture": ["Request URI / Parameter Size Limit Posture", 43],
-  "waf.http_routing_trust.posture": ["WAF HTTP Routing & Proxy-Trust declaration", 31],
-  "waf.jsonp_css_policy.posture": ["WAF JSONP & CSS-Injection Policy declaration", 31],
-  "waf.sqli_managed_marker.safe": ["SQLi marker comparison", 38],
-  "waf.xss_managed_marker.safe": ["XSS marker comparison", 38],
-  "waf.path_traversal_managed_marker.safe": ["Path-traversal marker comparison", 38],
-  "waf.ssti_marker.safe": ["SSTI token observation", 37],
-  "waf.scanner_signature_marker.safe": ["Scanner User-Agent marker", 44],
-  "waf.evasion_double_url.safe": ["Double URL marker comparison", 39],
-  "waf.evasion_mixed_url.safe": ["Mixed URL marker comparison", 39],
-  "waf.evasion_case_fold.safe": ["Case Fold marker comparison", 39],
-  "waf.http_method_policy_enforced.safe": ["HTTP method enforcement", 45],
-  "waf.rate_limit_canary.validation": ["WAF Rate-Limit Canary", 46],
-  "waf.body_json_marker.soc": ["WAF JSON Body Marker request", 30],
-  "waf.body_form_marker.soc": ["WAF Form Body Marker request", 30],
-  "waf.body_multipart_marker.soc": ["WAF Multipart Body Marker request", 30],
-  "waf.body_inspection_limit.soc": ["WAF Body Inspection Limit request", 30],
-  "waf.response_dlp_canary.soc": ["WAF Response DLP Canary request", 30],
-  "nfw.declared_deny_tcp.safe": ["Declared TCP Deny", 4],
-  "nfw.declared_deny_udp.safe": ["Declared UDP Deny", 5],
-  "nfw.management_port_exposure.safe": ["Management and Database Port Exposure", 2],
-  "nfw.ipv6_parity.safe": ["IPv6/IPv4 Policy Parity", 4],
-  "nfw.connection_limit.safe": ["Per-Source Connection Limit", 47],
-  "nfw.origin_lockdown.safe": ["Origin Lockdown to Declared Binding", 0],
-  "nfw.perspective_allowlist.safe": ["Multi-Perspective Allowlist", 4],
+  "origin.direct_reachability.safe": {
+    "name": "Direct server response",
+    "purpose": "Find out whether the server behind your public website answers a direct request.",
+    "mechanism": "Contacts the declared server address once while keeping your website name in the request and encrypted connection.",
+    "limitations": "A reply shows that address answered; it does not prove the reply came from your application or skipped a firewall rule.",
+    "next_step": "Compare the returned status and server details with the direct access you intended to allow."
+  },
+  "origin.direct_bypass.safe": {
+    "name": "Access outside the public website route",
+    "purpose": "Look for a second route that could expose a server normally reached through your website provider.",
+    "mechanism": "Sends one request to the server address you declared instead of the normal public route.",
+    "limitations": "This records a direct response, not a confirmed bypass or proof that the same application answered.",
+    "next_step": "Check whether that address should accept public traffic and restrict it if direct access is unnecessary."
+  },
+  "origin.host_sni_bypass.safe": {
+    "name": "Website name on a direct server connection",
+    "purpose": "See how a declared server responds when a connection uses your public website name.",
+    "mechanism": "Connects to the approved server IP and supplies the website name in both the HTTP request and TLS, the encrypted connection setup.",
+    "limitations": "The name and address must already be approved. Matching a page or certificate does not establish application identity.",
+    "next_step": "Review the approved address and website name together before interpreting the direct response."
+  },
+  "origin.leak_scan.safe": {
+    "name": "Public clues to the server behind your website",
+    "purpose": "Find public DNS names and responses that may reveal a server behind your CDN, the service that fronts your website.",
+    "mechanism": "Checks a fixed set of related names and records DNS answers and small HTTP responses.",
+    "limitations": "A public clue may be old, shared or unrelated. Finding an address does not confirm that it is your current server.",
+    "next_step": "Verify each candidate server address with your own records before declaring or testing it directly."
+  },
+  "l3.firewall_exposure_scan.safe": {
+    "name": "Internet access to common service ports",
+    "purpose": "Find commonly exposed administration and database connections on the declared target.",
+    "mechanism": "Attempts connections to a fixed list of service ports and records which accept, refuse or do not answer.",
+    "limitations": "An open port does not identify the application behind it; an unanswered connection does not prove a firewall blocked it.",
+    "next_step": "Compare the reachable ports with your approved public services and close unnecessary access."
+  },
+  "path.protected_canary.safe": {
+    "name": "Response from your test URL",
+    "purpose": "Check whether your declared test URL responds through the normal public website route.",
+    "mechanism": "Requests response headers from the exact URL without downloading its page body.",
+    "limitations": "A public response alone cannot confirm that your internal test application received the request.",
+    "next_step": "Compare the response with the result expected from your test URL and inspect its application logs if needed."
+  },
+  "l3.forbidden_tcp_port.safe": {
+    "name": "Access to a TCP port you marked blocked",
+    "purpose": "Find a connection that gets through a TCP port you said should reject public traffic.",
+    "mechanism": "Tries the declared port and records whether the server completes a connection.",
+    "limitations": "A completed connection can contradict a matching deny rule. Refusal or silence alone does not establish protection.",
+    "next_step": "Check the deny rule for the reported port, source address and IP version before repeating the check."
+  },
+  "l3.forbidden_udp_port.safe": {
+    "name": "Response from a UDP port you marked blocked",
+    "purpose": "Look for a reply from a UDP service that should be unavailable from the internet.",
+    "mechanism": "Sends a small approved message to the declared UDP port and listens for a matching reply.",
+    "limitations": "UDP services often stay silent even when reachable. No reply cannot prove that the deny rule works.",
+    "next_step": "Inspect any matching reply and compare the port with the UDP rules you declared."
+  },
+  "l3.basic_deny_rule.safe": {
+    "name": "Connection through a declared deny rule",
+    "purpose": "Check whether a TCP connection succeeds where your stated network policy says it must fail.",
+    "mechanism": "Selects the declared blocked port and makes a small number of connection attempts.",
+    "limitations": "Only a completed connection on a matching denied route demonstrates a policy violation; failed attempts remain uncertain.",
+    "next_step": "Confirm the rule applies to the tested address and port, then review the network control that allowed the connection."
+  },
+  "dns.authoritative_response.safe": {
+    "name": "Response from your domain's DNS server",
+    "purpose": "See whether the DNS service for your domain returns an answer to an ordinary question.",
+    "mechanism": "Sends a DNS query for the declared domain and records the reply, status and returned records.",
+    "limitations": "A single DNS reply does not measure uptime under attack or prove every nameserver is healthy.",
+    "next_step": "Check the recorded DNS status and investigate missing or unexpected records with your DNS provider."
+  },
+  "dns.random_prefix_nxdomain.safe": {
+    "name": "DNS response for a name that should not exist",
+    "purpose": "See how your DNS service handles a randomly generated subdomain.",
+    "mechanism": "Asks for a new name under your domain and records whether DNS says it is missing or returns an answer.",
+    "limitations": "Wildcard DNS can legitimately answer unknown names. This small check does not test a random-name flood.",
+    "next_step": "Compare the answer with your wildcard policy and review request limits for unknown names."
+  },
+  "dns.open_recursion_behavior.safe": {
+    "name": "Public access to DNS lookups",
+    "purpose": "Check whether a declared DNS resolver will answer lookup requests from an external source.",
+    "mechanism": "Sends a lookup to the declared resolver and records whether it offers recursive answers, meaning it looks up other names for the caller.",
+    "limitations": "One response cannot measure how the resolver behaves under load or prove that every public source has access.",
+    "next_step": "Restrict recursive lookups to approved clients if this resolver is not meant for public use."
+  },
+  "l7.waf_marker_rule.safe": {
+    "name": "Response to your firewall test label",
+    "purpose": "See how the website responds to a harmless label intended for a custom firewall rule.",
+    "mechanism": "Sends a small request containing the test label and records the returned status and headers.",
+    "limitations": "The label does not attack your application. Without a verified matching rule, an allowed response is not evidence of a security gap.",
+    "next_step": "Confirm which rule should match this label and compare its expected action with the recorded response."
+  },
+  "waf.fingerprint.safe": {
+    "name": "Identify your website's protection services",
+    "purpose": "Identify signs of a web firewall and CDN in the public path to your website.",
+    "mechanism": "Combines DNS and address information with ordinary web responses and, where allowed, test responses to identify known services.",
+    "limitations": "Recognizing a provider does not show that its security features are enabled or that they block an attack.",
+    "next_step": "Review the evidence behind each identified provider, then use relevant checks to examine its behavior."
+  },
+  "waf.marker_rule.safe": {
+    "name": "Custom firewall label response",
+    "purpose": "Record whether your public website accepts, challenges or rejects its configured firewall test label.",
+    "mechanism": "Adds the approved label to a web request and saves the response seen from outside your network.",
+    "limitations": "This cannot verify an installed rule unless that exact label and expected rule are known. It cannot prove attack protection.",
+    "next_step": "Match the label to the intended custom rule before treating its response as a rule test."
+  },
+  "waf.origin_bypass.safe": {
+    "name": "Firewall response on the direct server route",
+    "purpose": "Compare your expectations for the public firewall with the response from a declared direct server address.",
+    "mechanism": "Uses the website name on one direct connection to the approved server IP.",
+    "limitations": "The check does not repeat a firewall attack against the direct server or prove that the public firewall was bypassed.",
+    "next_step": "Confirm whether public access to that server address should be restricted to your CDN or proxy."
+  },
+  "waf.low_rate_limit.safe": {
+    "name": "Response to a short request sequence",
+    "purpose": "Look for rate-limit messages while the website receives a small series of requests.",
+    "mechanism": "Sends a few requests in sequence and records their status codes, timing and rate-limit headers.",
+    "limitations": "This sequence may be below your real limit. No limit response does not mean that rate limiting is absent.",
+    "next_step": "Compare the observed sequence with the limit configured for this URL and source."
+  },
+  "l7.http_method_restriction.safe": {
+    "name": "Responses to different HTTP methods",
+    "purpose": "See how your website handles the small set of HTTP request methods used by this check.",
+    "mechanism": "Sends the catalog's bodyless method samples and records each response separately.",
+    "limitations": "A response code alone does not prove that a method caused an application action or that all unwanted methods are blocked.",
+    "next_step": "Compare the sampled method responses with the methods your website is intended to accept."
+  },
+  "l7.header_size_boundary.safe": {
+    "name": "Response to a larger request header",
+    "purpose": "See whether the website handles a modest increase in request-header size predictably.",
+    "mechanism": "Compares a normal request with one carrying extra test header data within the check's size limit.",
+    "limitations": "This samples a header-size boundary; it does not exhaust memory or test the largest request the server can process.",
+    "next_step": "Review unexpected errors and align header-size limits across the firewall, proxy and application server."
+  },
+  "l7.low_rate_rate_limit.safe": {
+    "name": "Rate-limit signals at a low request rate",
+    "purpose": "Record whether a short, low-rate sequence encounters a limit or challenge on the chosen URL.",
+    "mechanism": "Makes a fixed series of requests without raising the request rate or continuing until a limit is reached.",
+    "limitations": "Production thresholds can be much higher than this test. An unchanged response does not establish unlimited access.",
+    "next_step": "Use a dedicated low-threshold test route if you need to verify a limit without stressing production traffic."
+  },
+  "tls.profile_exposure.safe": {
+    "name": "Encrypted connection settings",
+    "purpose": "Inspect the certificate and connection settings your public HTTPS service presents.",
+    "mechanism": "Opens an encrypted connection and records available TLS version, certificate and negotiation details.",
+    "limitations": "The sampled connection does not test every cipher, every client or the service's ability to handle a traffic surge.",
+    "next_step": "Compare the observed certificate and TLS settings with your organization's approved configuration."
+  },
+  "protocol.http2_readiness.safe": {
+    "name": "HTTP/2 connection settings",
+    "purpose": "Find the HTTP/2 limits a public server advertises when a client connects.",
+    "mechanism": "Opens an HTTP/2 connection and records its SETTINGS, the message that announces connection limits.",
+    "limitations": "Advertised settings are not proof that the server enforces those limits under attack.",
+    "next_step": "Check the advertised limits against your HTTP/2 configuration and provider guidance."
+  },
+  "protocol.http3_quic_exposure.safe": {
+    "name": "HTTP/3 availability announcement",
+    "purpose": "Find out whether your web response advertises an HTTP/3 endpoint.",
+    "mechanism": "Reads the Alt-Svc response header, where a server can announce another way to connect.",
+    "limitations": "An announcement does not prove that a QUIC connection works. This check does not send an HTTP/3 exchange.",
+    "next_step": "Verify the announced HTTP/3 endpoint separately if you intend clients to use it."
+  },
+  "ops.alert_workflow_marker.safe": {
+    "name": "Test notification delivery",
+    "purpose": "Check an approved notification destination without creating target traffic.",
+    "mechanism": "Sends a test message only when a separately approved, signed notification destination is available.",
+    "limitations": "Without that approved destination, no message is sent. Delivery does not prove that an on-call person saw or acted on it.",
+    "next_step": "Confirm the approved notification URL and ask the intended recipient to acknowledge the test."
+  },
+  "ops.runbook_contact_validation.safe": {
+    "name": "Response plan and emergency contacts",
+    "purpose": "Review whether the response plan and contact information needed during an incident have been recorded.",
+    "mechanism": "Evaluates the operational information supplied to AstraNull without contacting your website.",
+    "limitations": "A recorded contact or plan does not prove the contact is reachable or the team can follow the plan.",
+    "next_step": "Check the plan's review date and confirm every emergency contact is current."
+  },
+  "ops.kill_switch_drill.safe": {
+    "name": "Readiness to stop a validation",
+    "purpose": "Review whether the information needed to stop an approved validation has been recorded.",
+    "mechanism": "Checks the supplied stop procedure and operational declarations without generating traffic.",
+    "limitations": "This declaration check does not start and stop a live traffic generator or measure stop time.",
+    "next_step": "Arrange an authorized stop drill if you need evidence that the actual execution system stops promptly."
+  },
+  "l3.ipv6_reachability.safe": {
+    "name": "Connection to your IPv6 endpoint",
+    "purpose": "See whether your declared IPv6 service accepts a connection from the external check.",
+    "mechanism": "Attempts a connection to the target's declared IPv6 address and service port.",
+    "limitations": "This only covers the sampled IPv6 route. It does not show that IPv4 and IPv6 have the same firewall policy.",
+    "next_step": "Review whether the IPv6 service is intended to be public and compare its policy with the IPv4 service."
+  },
+  "dns.amplification_exposure.safe": {
+    "name": "Size of a DNS reply",
+    "purpose": "Observe the response to a small DNS question at your declared DNS endpoint.",
+    "mechanism": "Records the question and the reply size when the DNS response is captured.",
+    "limitations": "A large reply is one observation, not a measurement of attack strength or available bandwidth. No third-party victim is contacted.",
+    "next_step": "Review unusually large responses and whether the endpoint should answer this type of public query."
+  },
+  "dns.dnssec_expensive_query.safe": {
+    "name": "DNS signing-key records",
+    "purpose": "See whether your domain publishes DNSSEC key records used to check DNS authenticity.",
+    "mechanism": "Requests DNSKEY information and records the keys or DNS error returned.",
+    "limitations": "Key records alone do not prove that signatures validate correctly or that expensive-query attacks are controlled.",
+    "next_step": "Verify the signing chain and monitor DNS resource use if signing-key requests are a concern."
+  },
+  "dns.secondary_failover.safe": {
+    "name": "Secondary DNS server observations",
+    "purpose": "Check the public names and addresses associated with your domain's backup DNS service.",
+    "mechanism": "Looks up nameserver information and samples the declared DNS endpoints within the request budget.",
+    "limitations": "It does not disable a primary server or rehearse failover, so it cannot confirm recovery during an outage.",
+    "next_step": "Compare the reported servers with your backup DNS plan and schedule an approved failover exercise if needed."
+  },
+  "dns.zone_transfer_exposure.safe": {
+    "name": "Public DNS zone transfer",
+    "purpose": "Check whether a nameserver will share a domain's zone records with an external client.",
+    "mechanism": "Attempts the authorized DNS zone-transfer request against the declared nameserver scope.",
+    "limitations": "Only a confirmed transfer shows this disclosure. Refusal must cover every declared nameserver before interpreting the zone as restricted.",
+    "next_step": "Restrict zone transfers to approved secondary servers and review every responding nameserver."
+  },
+  "l7.cache_busting.safe": {
+    "name": "Response when a URL's cache key changes",
+    "purpose": "See how the public cache responds when a request includes changing test parameters.",
+    "mechanism": "Compares a small set of web requests with cache-changing URL values and records cache-related responses.",
+    "limitations": "Different responses do not prove that the origin server handled each request or that the cache can resist a flood.",
+    "next_step": "Review which query parameters affect caching and whether cache misses need separate request limits."
+  },
+  "l7.expensive_endpoint.safe": {
+    "name": "Response from a resource-heavy URL",
+    "purpose": "Record basic reachability for a URL you identified as costly to serve.",
+    "mechanism": "Makes a header-only request to the declared URL and records the response.",
+    "limitations": "A header-only request does not run the full business operation or measure its CPU, memory or database cost.",
+    "next_step": "Review the endpoint's actual processing limits using application measurements and an approved test plan."
+  },
+  "l7.login_abuse_flow.safe": {
+    "name": "Responses from the login test route",
+    "purpose": "Look for limit or challenge signals on a login-related route without signing in.",
+    "mechanism": "Sends a short sequence to the declared login test URL and records the web responses.",
+    "limitations": "No credentials are submitted. This cannot test password guessing, account lockout or behavior for individual users.",
+    "next_step": "Compare the route's response limits with your account-level login controls and test those separately where authorized."
+  },
+  "l7.password_reset.safe": {
+    "name": "Response from the password-reset URL",
+    "purpose": "Check how the public password-reset route responds without requesting a real reset.",
+    "mechanism": "Makes one header-only request to the declared reset URL.",
+    "limitations": "It does not send reset emails or test limits on reset submissions, so it cannot confirm abuse prevention.",
+    "next_step": "Review reset-submission limits and email safeguards with the team responsible for account recovery."
+  },
+  "l7.api_quota_exhaustion.safe": {
+    "name": "Visible API quota signals",
+    "purpose": "Look for quota or request-limit information on a declared API route.",
+    "mechanism": "Sends a short request sequence and records status codes and quota-related headers.",
+    "limitations": "The check does not use up a customer's quota or prove enforcement across users, API keys or billing periods.",
+    "next_step": "Compare the returned quota information with the route's intended limit and identity rules."
+  },
+  "l7.graphql_complexity.safe": {
+    "name": "Public GraphQL endpoint response",
+    "purpose": "Inspect the response from a declared GraphQL endpoint, where clients request selected data fields.",
+    "mechanism": "Makes the approved small endpoint request and records HTTP and GraphQL-related response information.",
+    "limitations": "It does not submit a deeply nested query or measure query-processing cost, so complexity limits remain unverified.",
+    "next_step": "Review configured query depth and cost limits in your GraphQL service."
+  },
+  "l7.bot_challenge_marker.safe": {
+    "name": "Bot challenge response",
+    "purpose": "See whether a sampled web request encounters a bot check or browser challenge.",
+    "mechanism": "Requests the protected URL and looks for known challenge and response signals.",
+    "limitations": "A challenge on one request does not prove that automated abuse is blocked across users or devices.",
+    "next_step": "Review the captured challenge and verify that legitimate visitors can still complete it."
+  },
+  "tls.slow_header_body_timeout.safe": {
+    "name": "Timeout for an unfinished web request",
+    "purpose": "See how an endpoint handles one connection whose HTTP headers arrive slowly.",
+    "mechanism": "Opens a single test connection, sends a small unfinished header sequence and observes closure within the time limit.",
+    "limitations": "This does not send a slow request body or create many connections. The short observation cannot establish resistance to a slow-client attack.",
+    "next_step": "Compare the observed closure with your header-read timeout and proxy configuration."
+  },
+  "tls.idle_connection_timeout.safe": {
+    "name": "HTTPS session response",
+    "purpose": "Record whether your public service can establish the encrypted session used by this timeout-related check.",
+    "mechanism": "Opens a TLS session and records the observed connection result.",
+    "limitations": "The current check does not wait through your configured idle timeout, so it cannot confirm idle-connection cleanup.",
+    "next_step": "Review the server's idle timeout directly or arrange a timed test that covers the full configured interval."
+  },
+  "protocol.http2_rapid_reset_readiness.safe": {
+    "name": "HTTP/2 settings relevant to reset protection",
+    "purpose": "Collect the connection settings relevant to reviewing HTTP/2 request-reset safeguards.",
+    "mechanism": "Reads the server's advertised HTTP/2 settings during one connection.",
+    "limitations": "No stream-reset sequence is sent by this check. Advertised settings cannot confirm that rapid-reset protections work.",
+    "next_step": "Review the settings alongside your provider's HTTP/2 reset protections and current software version."
+  },
+  "protocol.http2_stream_concurrency.safe": {
+    "name": "Advertised HTTP/2 stream limit",
+    "purpose": "Find how many simultaneous request streams your server says one HTTP/2 connection may use.",
+    "mechanism": "Records the concurrent-stream value announced in the HTTP/2 settings message.",
+    "limitations": "The check reads the announced value; it does not fill every stream or prove that the limit is enforced under load.",
+    "next_step": "Compare the stream limit with your application capacity and the settings on each public proxy layer."
+  },
+  "protocol.grpc_reflection_stream.safe": {
+    "name": "Public gRPC service information",
+    "purpose": "See whether the declared gRPC endpoint reveals service information to an external request.",
+    "mechanism": "Sends the approved small gRPC reflection request and records the service's response.",
+    "limitations": "This does not run application calls or stress streaming connections. A response may also require interpretation against your access policy.",
+    "next_step": "Disable or restrict public service reflection where it is unnecessary and review the endpoint's authentication settings."
+  },
+  "protocol.websocket_connection_controls.safe": {
+    "name": "WebSocket connection upgrade response",
+    "purpose": "See whether a public URL accepts the initial switch from HTTP to WebSocket.",
+    "mechanism": "Sends one WebSocket upgrade request and records whether the server accepts or rejects it.",
+    "limitations": "An accepted upgrade does not establish message authentication, message-rate limits or connection capacity.",
+    "next_step": "Compare the upgrade result with the intended public access policy and test message controls separately."
+  },
+  "tls.full_audit.safe": {
+    "name": "HTTPS certificate and connection details",
+    "purpose": "Review the certificate and TLS information presented on your website's encrypted connection.",
+    "mechanism": "Collects certificate identity, validity and available connection-negotiation facts from the sampled endpoint.",
+    "limitations": "Despite its technical ID, this is not a complete audit of every TLS version, cipher or client configuration.",
+    "next_step": "Investigate certificate errors first, then compare the observed TLS details with your security standard."
+  },
+  "l7.api_surface_scan.safe": {
+    "name": "Responses from common API paths",
+    "purpose": "Look for externally reachable API-related paths in the check's fixed list.",
+    "mechanism": "Requests a limited set of known API locations and records their status and response details.",
+    "limitations": "A status code does not confirm that a path exposes sensitive API functions, and this is not a complete endpoint inventory.",
+    "next_step": "Review unexpected responding paths and remove or protect API documentation and services that should be private."
+  },
+  "l7.cors_posture.safe": {
+    "name": "Cross-site browser access headers",
+    "purpose": "Review whether a web response advertises access for pages hosted on another website.",
+    "mechanism": "Sends the approved request and records Cross-Origin Resource Sharing headers, called CORS headers.",
+    "limitations": "Headers alone do not prove a browser can read private data; credentials and the requesting website also affect the result.",
+    "next_step": "Compare the allowed websites and credential settings with the access your application intends to grant."
+  },
+  "waf.enforcement.safe": {
+    "name": "Website response to a firewall test token",
+    "purpose": "Record the public response to the test token used for a custom web firewall rule.",
+    "mechanism": "Places the approved token in a small request and records whether a response, block or challenge is observed.",
+    "limitations": "A token response without a verified matching rule cannot establish that the firewall failed or that an attack would pass.",
+    "next_step": "Identify the exact intended token rule before drawing a rule-enforcement conclusion."
+  },
+  "l3.connection_table_exhaustion.request_only": {
+    "name": "Plan a connection-capacity test",
+    "purpose": "Prepare an approved test of how the service handles too many open connections.",
+    "mechanism": "Records a request for the security operations team to agree on connection limits, monitoring and stop conditions.",
+    "limitations": "Opening this request does not create connections or establish how many the service can handle.",
+    "next_step": "Provide the approved target, connection ceiling and recovery conditions for the planned exercise."
+  },
+  "high_scale.dns_high_query.request_only": {
+    "name": "Plan a high-volume DNS test",
+    "purpose": "Prepare a controlled assessment of whether your domain stays available during a large number of DNS questions.",
+    "mechanism": "Collects the scope and approvals needed for a separately managed DNS traffic exercise.",
+    "limitations": "This entry does not generate DNS traffic or produce a DNS-capacity result by itself.",
+    "next_step": "Agree on the DNS providers involved, maximum query rate and stop criteria before the exercise."
+  },
+  "ops.runbook_contact_validation.request_only": {
+    "name": "Arrange a response-team contact drill",
+    "purpose": "Plan a practical check that the right people can be reached during a security incident.",
+    "mechanism": "Opens a reviewed exercise for contact acknowledgments, response-plan versions and team responsibilities.",
+    "limitations": "Creating the request is not proof that anyone answered or that an incident response was rehearsed.",
+    "next_step": "Supply the current contact list, escalation order and required acknowledgment times."
+  },
+  "ops.kill_switch_drill.request_only": {
+    "name": "Arrange a validation stop drill",
+    "purpose": "Prepare a demonstration that an approved validation can be stopped promptly.",
+    "mechanism": "Requests a managed drill with a named stop authority and evidence of the execution system stopping.",
+    "limitations": "No live validation is started or stopped by this catalog entry.",
+    "next_step": "Agree on who may stop the drill, the expected stop time and the confirmation evidence."
+  },
+  "ops.provider_telemetry.request_only": {
+    "name": "Arrange provider monitoring verification",
+    "purpose": "Plan to compare your provider's traffic and mitigation records with an approved validation.",
+    "mechanism": "Collects the provider contacts, reporting sources and timing needed to verify monitoring during an exercise.",
+    "limitations": "A submitted request does not confirm that provider monitoring is connected, accurate or complete.",
+    "next_step": "Identify which provider reports should show the exercise and how their times will be matched."
+  },
+  "high_scale.multi_vector.request_only": {
+    "name": "Plan a mixed-traffic resilience test",
+    "purpose": "Prepare a coordinated test involving more than one traffic type.",
+    "mechanism": "Records the requested traffic types and the approvals needed for a managed mixed-traffic exercise.",
+    "limitations": "It does not combine or run traffic generators from the portal, and it cannot establish resilience without execution evidence.",
+    "next_step": "Agree on the exact traffic mix, limits, provider coordination and emergency stop plan."
+  },
+  "high_scale.degradation_recovery.request_only": {
+    "name": "Plan a service recovery exercise",
+    "purpose": "Prepare to measure how a service recovers after an approved validation is reduced or stopped.",
+    "mechanism": "Opens a managed exercise covering service health, recovery targets and the decision to stop.",
+    "limitations": "No disruption is created here, and recording a recovery target is not evidence that the service meets it.",
+    "next_step": "Define the health signals, recovery deadline and person responsible for declaring recovery."
+  },
+  "high_scale.volumetric.request_only": {
+    "name": "Plan a network-capacity exercise",
+    "purpose": "Prepare a controlled assessment of your provider's response to a large volume of network traffic.",
+    "mechanism": "Requests an authorized exercise with agreed traffic ceilings and provider monitoring.",
+    "limitations": "This request sends no traffic and does not measure available bandwidth or mitigation capacity.",
+    "next_step": "Obtain provider approval and document the traffic ceiling, protected addresses and stop conditions."
+  },
+  "waf.offensive_sqli.soc": {
+    "name": "Request a supervised database-injection assessment",
+    "purpose": "Arrange an authorized review of whether web inputs can change a database command.",
+    "mechanism": "Sends the security operations team the requested scope for a separate supervised SQL-injection assessment.",
+    "limitations": "The request itself sends no database-injection inputs and does not establish a vulnerability or protection result.",
+    "next_step": "Define the permitted application routes and database-safety restrictions with the assessment team."
+  },
+  "waf.offensive_xss.soc": {
+    "name": "Request a supervised browser-script assessment",
+    "purpose": "Arrange a reviewed assessment of whether untrusted page content could run script in a visitor's browser.",
+    "mechanism": "Records the authorization and application scope for a separately managed cross-site scripting assessment.",
+    "limitations": "No script-execution test runs when this entry is selected.",
+    "next_step": "Agree on test accounts, permitted pages and how any browser effects will be contained."
+  },
+  "waf.offensive_rce.soc": {
+    "name": "Request a supervised server-execution assessment",
+    "purpose": "Prepare an authorized investigation of whether web input could cause a server to run unintended code.",
+    "mechanism": "Opens a security-team review of the target and permitted assessment actions.",
+    "limitations": "This entry does not send executable inputs or prove that server code execution is possible.",
+    "next_step": "Establish the permitted server actions, isolation requirements and immediate stop authority."
+  },
+  "waf.offensive_path_traversal.soc": {
+    "name": "Request a supervised file-path assessment",
+    "purpose": "Arrange a review of whether a web request can reach files outside its intended folder.",
+    "mechanism": "Collects the approved routes and file-access boundaries for a separate assessment.",
+    "limitations": "No file-access attempt is made by this request marker.",
+    "next_step": "Agree on harmless test files and exclude sensitive system or customer files from the test scope."
+  },
+  "waf.offensive_command_injection.soc": {
+    "name": "Request a supervised command-input assessment",
+    "purpose": "Prepare a review of whether application input could become an unintended operating-system command.",
+    "mechanism": "Records the scope and approval needed for a separately controlled command-injection assessment.",
+    "limitations": "It does not execute commands or test a live command handler from this screen.",
+    "next_step": "Define allowed test actions and confirm how server-side effects will be monitored and stopped."
+  },
+  "waf.offensive_ldap_injection.soc": {
+    "name": "Request a supervised directory-query assessment",
+    "purpose": "Arrange a review of inputs that may change a user-directory lookup.",
+    "mechanism": "Requests a separate assessment of the approved directory-related application functions.",
+    "limitations": "This entry does not query or change directory accounts and does not prove access controls work.",
+    "next_step": "Identify the permitted directory-search routes and approved test identities."
+  },
+  "waf.offensive_ssti.soc": {
+    "name": "Request a supervised page-template assessment",
+    "purpose": "Prepare a review of whether user input could be treated as instructions in a page template.",
+    "mechanism": "Records a request for a controlled server-side template-injection assessment.",
+    "limitations": "No template instructions are executed by the portal request.",
+    "next_step": "Agree on safe test output, permitted templates and server-side monitoring with the assessment team."
+  },
+  "waf.offensive_combined.soc": {
+    "name": "Request a coordinated web-security assessment",
+    "purpose": "Prepare one reviewed scope covering several web-input risks.",
+    "mechanism": "Collects the application routes, test boundaries and approvals for a separately managed assessment.",
+    "limitations": "A combined request is not a completed test of any of its individual risk areas.",
+    "next_step": "List each requested test area and its acceptance conditions instead of relying on one broad approval."
+  },
+  "high_scale.application.request_only": {
+    "name": "Plan a high-volume website test",
+    "purpose": "Prepare a controlled assessment of how your website handles a large request load.",
+    "mechanism": "Records the proposed web traffic exercise for approval, scheduling and health monitoring.",
+    "limitations": "No high-volume web traffic is generated by this check entry.",
+    "next_step": "Choose the permitted URLs, request ceiling and application health signals for the exercise."
+  },
+  "l3.icmp_flood.readiness": {
+    "name": "Ping traffic surge plan",
+    "purpose": "Document how your network handles a large volume of ping and other ICMP messages.",
+    "mechanism": "Records your stated ICMP filtering and traffic-limit arrangements without sending ping traffic.",
+    "limitations": "The saved statement does not verify packet filtering or how much ICMP traffic the network can handle.",
+    "next_step": "Confirm the ICMP limits with your network provider and attach current control evidence."
+  },
+  "l3.gre_esp_flood.readiness": {
+    "name": "Tunnel traffic surge plan",
+    "purpose": "Review protection for network tunnels that use GRE or encrypted ESP traffic.",
+    "mechanism": "Saves your declaration about how tunnel traffic is filtered and limited.",
+    "limitations": "No tunnel packets are sent, and tunnel-traffic resilience is not measured.",
+    "next_step": "Record which tunnels are expected and how your provider rejects unexpected tunnel traffic."
+  },
+  "l3.ipv6_volumetric.readiness": {
+    "name": "IPv6 traffic surge plan",
+    "purpose": "Document the safeguards that keep your IPv6 service available during heavy network traffic.",
+    "mechanism": "Records your IPv6 traffic-filtering and provider-protection declarations.",
+    "limitations": "This does not send IPv6 load or verify that IPv6 mitigation matches IPv4 mitigation.",
+    "next_step": "Confirm that your provider's mitigation service includes your public IPv6 addresses."
+  },
+  "l3.sip_voip_flood.readiness": {
+    "name": "UDP response on the voice-signaling port",
+    "purpose": "See whether the configured voice-signaling UDP port returns a reply to an outside sample.",
+    "mechanism": "Sends the approved small UDP sample to port 5060 or the declared target port.",
+    "limitations": "A UDP reply does not prove a SIP call can be made or that voice-flood protection works.",
+    "next_step": "Check whether that port should be public and review voice-service traffic controls with its owner."
+  },
+  "l3.sctp_exposure.readiness": {
+    "name": "SCTP service access review",
+    "purpose": "Review whether services using SCTP, a connection protocol used by some signaling systems, should be publicly reachable.",
+    "mechanism": "Stores your declared SCTP access restrictions and expected public services.",
+    "limitations": "The current check does not open an SCTP connection or verify those restrictions.",
+    "next_step": "List any required public SCTP service and document the control that restricts other access."
+  },
+  "l3.multicast_broadcast_storm.readiness": {
+    "name": "Broadcast traffic containment plan",
+    "purpose": "Review controls that keep traffic addressed to many devices from overwhelming a network.",
+    "mechanism": "Records your stated broadcast and multicast restrictions.",
+    "limitations": "It does not send broadcast traffic or verify the behavior of internal network switches.",
+    "next_step": "Confirm broadcast containment and traffic limits with the owners of the affected networks."
+  },
+  "l3.ack_flood.readiness": {
+    "name": "Unexpected acknowledgment traffic plan",
+    "purpose": "Document how your network handles a surge of TCP acknowledgment messages.",
+    "mechanism": "Records the controls you state filter acknowledgment traffic that does not belong to expected connections.",
+    "limitations": "No specially crafted TCP messages are sent, so acknowledgment filtering is not demonstrated.",
+    "next_step": "Confirm that your provider checks connection state and limits unexpected acknowledgment traffic."
+  },
+  "l3.rst_flood.readiness": {
+    "name": "Unexpected connection-reset traffic plan",
+    "purpose": "Review controls for traffic that tries to repeatedly reset network connections.",
+    "mechanism": "Saves your declaration about filtering and limiting TCP reset messages.",
+    "limitations": "The review does not reset any connections or verify whether unwanted reset messages are rejected.",
+    "next_step": "Document which network layer checks reset messages against existing connections."
+  },
+  "l3.syn_ack_flood.readiness": {
+    "name": "Unexpected connection-reply traffic plan",
+    "purpose": "Document how unsolicited TCP connection replies are handled during a traffic surge.",
+    "mechanism": "Records your stated protections for unexpected SYN-ACK replies.",
+    "limitations": "No connection-reply flood is generated and the declared filters are not tested.",
+    "next_step": "Confirm that unsolicited connection replies are filtered or limited at the appropriate network edge."
+  },
+  "l3.tcp_flag_anomaly.readiness": {
+    "name": "TCP connection for packet-flag review",
+    "purpose": "Record basic TCP reachability for a target associated with unusual packet-flag concerns.",
+    "mechanism": "After a port is declared, attempts an ordinary TCP connection using the current transport.",
+    "limitations": "The worker does not craft unusual TCP flags; connection success is not a test of flag-anomaly filtering.",
+    "next_step": "Declare the intended port and arrange a separate approved packet-filtering assessment if unusual flags must be tested."
+  },
+  "l3.out_of_state_tcp.readiness": {
+    "name": "Traffic outside valid connections review",
+    "purpose": "Review whether your network rejects TCP traffic that does not belong to a valid connection.",
+    "mechanism": "Records your statement about connection-state filtering.",
+    "limitations": "This does not send unusual TCP packets or inspect a firewall's internal connection table.",
+    "next_step": "Confirm where connection-state checks run and retain evidence of their current configuration."
+  },
+  "l3.fragmentation_flood.readiness": {
+    "name": "Split network-packet traffic plan",
+    "purpose": "Document how the network handles large amounts of traffic split into IP fragments.",
+    "mechanism": "Stores the fragment-filtering and traffic-limit measures you declare.",
+    "limitations": "No fragmented packets are generated and packet-reassembly limits remain untested.",
+    "next_step": "Review fragment handling with your network provider, including limits on incomplete fragments."
+  },
+  "l3.syn_flood.readiness": {
+    "name": "New-connection traffic surge plan",
+    "purpose": "Review the defenses for a surge of requests to start TCP connections.",
+    "mechanism": "Records the protections you declare for new-connection traffic.",
+    "limitations": "This entry does not generate a SYN flood or prove that connection-setup defenses work.",
+    "next_step": "Confirm new-connection limits and upstream mitigation coverage for the declared service."
+  },
+  "l3.tcp_connection_flood.readiness": {
+    "name": "Reachability of the declared connection service",
+    "purpose": "Check whether a declared TCP service accepts a small number of external connections.",
+    "mechanism": "Uses the target's declared service port for ordinary connection attempts.",
+    "limitations": "It does not create a connection flood or determine how many clients the service can handle.",
+    "next_step": "Confirm the service port and review connection-rate and total-connection limits separately."
+  },
+  "l3.nat_state_table.readiness": {
+    "name": "Network address-translation capacity plan",
+    "purpose": "Document controls that protect the connection records used by network address translation, or NAT.",
+    "mechanism": "Saves your stated NAT capacity, limits and cleanup arrangements.",
+    "limitations": "No NAT table is filled or inspected; the declared connection capacity is not verified.",
+    "next_step": "Review connection tracking limits and exhaustion alerts on the devices that perform address translation."
+  },
+  "l3.smtp_connection_flood.readiness": {
+    "name": "Connection to the mail service port",
+    "purpose": "See whether an external client can open a connection to your mail service.",
+    "mechanism": "Makes a small number of TCP connections to the configured SMTP port, normally port 25.",
+    "limitations": "It does not send email, test mail authentication or measure connection-flood resistance.",
+    "next_step": "Confirm that public mail access is intended and review SMTP connection and message limits."
+  },
+  "l3.ssh_connection_flood.readiness": {
+    "name": "Connection to the remote-login port",
+    "purpose": "Find whether the remote-login port accepts a connection from the check's external source.",
+    "mechanism": "Attempts an ordinary TCP connection to the configured SSH port, normally port 22.",
+    "limitations": "No username, password or command is sent, and an accepted connection does not confirm SSH identity or login permissions.",
+    "next_step": "Restrict administrative login access to approved networks and review authentication separately."
+  },
+  "l3.ftp_connection_flood.readiness": {
+    "name": "Connection to the file-transfer port",
+    "purpose": "See whether the declared file-transfer service port accepts an outside connection.",
+    "mechanism": "Makes the approved TCP connection samples to the configured FTP port, normally port 21.",
+    "limitations": "It does not log in, transfer a file or test resilience to many simultaneous FTP clients.",
+    "next_step": "Confirm whether this service should be public and review access and encryption requirements."
+  },
+  "l3.ike_ipsec_negotiation.readiness": {
+    "name": "VPN negotiation surge plan",
+    "purpose": "Review how VPN connection setup is protected from excessive negotiation requests.",
+    "mechanism": "Records your declared IKE and IPsec protections for starting encrypted VPN connections.",
+    "limitations": "It does not initiate a VPN negotiation or measure cryptographic processing capacity.",
+    "next_step": "Confirm VPN negotiation limits and provider support for the actual VPN endpoint."
+  },
+  "l7.connection_hoarding.readiness": {
+    "name": "Long-lived connection resource plan",
+    "purpose": "Document how your service prevents idle or very long connections from tying up resources.",
+    "mechanism": "Records your declared connection timeouts and per-client limits.",
+    "limitations": "No long-lived connection test runs, so the saved limits remain statements rather than observations.",
+    "next_step": "Verify connection cleanup settings and monitor long-held connection counts."
+  },
+  "exploit.ping_of_death.posture": {
+    "name": "Oversized ping handling review",
+    "purpose": "Review whether your network software is maintained to handle invalid oversized ping traffic safely.",
+    "mechanism": "Records your statement about patching and packet validation for this older attack class.",
+    "limitations": "No oversized or malformed ping packets are sent, and software vulnerability status is not verified.",
+    "next_step": "Confirm that exposed network systems are patched and reject invalid packet sizes."
+  },
+  "exploit.teardrop.posture": {
+    "name": "Overlapping packet-fragment review",
+    "purpose": "Review safeguards against packets whose overlapping fragments confuse older network software.",
+    "mechanism": "Saves your declaration about patching and fragment handling.",
+    "limitations": "The check does not create overlapping fragments or attempt to crash a device.",
+    "next_step": "Confirm current software versions and fragment-validation controls with the network owner."
+  },
+  "exploit.ip_options.posture": {
+    "name": "Unusual IP packet options review",
+    "purpose": "Document how your network handles uncommon options in IP packet headers.",
+    "mechanism": "Records your declared policy for accepting, rejecting or limiting IP options.",
+    "limitations": "It does not send packets with unusual options or measure the cost of processing them.",
+    "next_step": "Review whether uncommon IP options are required and how unnecessary options are filtered."
+  },
+  "exploit.malformed_quic.posture": {
+    "name": "Invalid QUIC message handling review",
+    "purpose": "Review patching and validation for malformed messages sent to HTTP/3's QUIC transport.",
+    "mechanism": "Stores your statement about QUIC software maintenance and invalid-message handling.",
+    "limitations": "No malformed QUIC exchange is sent and no QUIC vulnerability is tested.",
+    "next_step": "Confirm the deployed QUIC implementation is maintained and follows your provider's security guidance."
+  },
+  "exploit.land_attack.posture": {
+    "name": "Same-source-and-destination packet review",
+    "purpose": "Review protections against invalid packets that claim the same source and destination.",
+    "mechanism": "Records your stated packet-validation controls for this older attack pattern.",
+    "limitations": "The check sends no such packets and cannot verify device behavior under this condition.",
+    "next_step": "Confirm spoofed-address filtering and current network software with the infrastructure owner."
+  },
+  "exploit.quic_migration.posture": {
+    "name": "QUIC connection address-change review",
+    "purpose": "Document how QUIC connections are checked when a client's network address changes.",
+    "mechanism": "Records your declared controls for QUIC address validation and connection migration.",
+    "limitations": "It does not move a live connection between addresses or verify address-validation challenges.",
+    "next_step": "Review QUIC migration settings and confirm that an address change cannot skip required validation."
+  },
+  "reflect.ssdp_exposure.safe": {
+    "name": "Public device-discovery replies",
+    "purpose": "Find whether a device-discovery service using SSDP answers an internet request.",
+    "mechanism": "Sends one small SSDP discovery request to the declared endpoint and checks the reply format.",
+    "limitations": "A valid reply shows a publicly responding discovery service; it does not measure traffic amplification or prove attack capacity.",
+    "next_step": "Restrict device discovery to intended networks if public replies are unnecessary."
+  },
+  "reflect.snmp_exposure.safe": {
+    "name": "Public network-management replies",
+    "purpose": "Check whether an SNMP network-management service answers an external information request.",
+    "mechanism": "Sends one approved SNMP request for basic system information and validates any reply.",
+    "limitations": "This does not audit all SNMP permissions, change configuration or establish that the service can withstand a flood.",
+    "next_step": "Review which clients can use SNMP and limit management access to approved networks."
+  },
+  "reflect.chargen_qotd_exposure.safe": {
+    "name": "Public character-generator service",
+    "purpose": "Check whether a legacy character-generator service answers from the internet.",
+    "mechanism": "Sends the catalog's small CHARGEN request and records a matching response.",
+    "limitations": "The current request covers CHARGEN on its configured port, not every legacy echo or quote service named in the technical ID.",
+    "next_step": "Disable unused legacy response services or restrict them to trusted clients."
+  },
+  "reflect.mdns_netbios_wsdiscovery_exposure.safe": {
+    "name": "Public local-network discovery services",
+    "purpose": "Find whether discovery services normally used on local networks respond to an outside request.",
+    "mechanism": "Sends the approved mDNS, NetBIOS and WS-Discovery samples and records each service's reply separately.",
+    "limitations": "Only the sampled protocols and ports are covered; a missing reply cannot establish that all discovery traffic is blocked.",
+    "next_step": "Review each responding discovery protocol and prevent unnecessary exposure outside the local network."
+  },
+  "reflect.portmap_service_exposure.safe": {
+    "name": "Public RPC service-directory replies",
+    "purpose": "Check whether an RPC portmapper reveals a service directory to an external client.",
+    "mechanism": "Sends one approved portmapper request and validates the returned information.",
+    "limitations": "This samples the RPC directory on the configured port; it does not enumerate every application or test remote procedure calls.",
+    "next_step": "Restrict public access to RPC service discovery and review the services it reveals."
+  },
+  "reflect.dtls_sip_rdp_tftp_exposure.safe": {
+    "name": "Public replies from selected UDP services",
+    "purpose": "Check whether selected file-transfer, voice, remote-desktop and encrypted-datagram services answer externally.",
+    "mechanism": "Sends the small approved TFTP, SIP, RDP-UDP and DTLS samples within one shared request budget.",
+    "limitations": "Only the returned and validated samples establish reachability; missing replies do not show that the services are protected.",
+    "next_step": "Review the exact responding service and close or restrict public access where it is not required."
+  },
+  "reflect.quic_reflection_exposure.safe": {
+    "name": "QUIC availability advertised by the website",
+    "purpose": "Record whether your website announces a QUIC or HTTP/3 connection option.",
+    "mechanism": "Reads the HTTP response's Alt-Svc announcement using the current web transport.",
+    "limitations": "Despite the technical ID, no QUIC reflection request is sent and no reflected traffic is measured.",
+    "next_step": "Treat the announcement as configuration information and assess the actual QUIC endpoint separately."
+  },
+  "reflect.tcp_middlebox_exposure.safe": {
+    "name": "Connection to a declared network intermediary",
+    "purpose": "See whether a declared TCP service accepts a connection that may reach a proxy or other network intermediary.",
+    "mechanism": "Attempts a connection only after the target supplies the required port.",
+    "limitations": "A TCP handshake cannot identify a middlebox or prove that it reflects or amplifies traffic.",
+    "next_step": "Declare the intended service port and investigate the identity and access policy of any responding service."
+  },
+  "reflect.mssql_resolver_exposure.safe": {
+    "name": "Public SQL Server discovery replies",
+    "purpose": "Check whether Microsoft SQL Server's discovery service responds to an external query.",
+    "mechanism": "Sends one small SQL Server instance-discovery request to the configured UDP service.",
+    "limitations": "The response can reveal a discovery service; it does not authenticate to a database or test database permissions.",
+    "next_step": "Disable unnecessary public SQL Server discovery and restrict it to approved management networks."
+  },
+  "reflect.jenkins_discovery_exposure.safe": {
+    "name": "Public Jenkins discovery replies",
+    "purpose": "Find whether a Jenkins build server's discovery service answers publicly.",
+    "mechanism": "Sends the fixed Jenkins discovery sample and records a validated reply.",
+    "limitations": "Discovery exposure does not prove access to build jobs, credentials or administrative functions.",
+    "next_step": "Review whether Jenkins discovery needs public access and restrict it if it does not."
+  },
+  "reflect.coap_iot_exposure.safe": {
+    "name": "Public device-service information",
+    "purpose": "Check whether a CoAP device service shares its public resource information with an external caller.",
+    "mechanism": "Requests the approved CoAP discovery resource and validates a reply.",
+    "limitations": "It does not operate a device, authenticate to private resources or test device resilience under load.",
+    "next_step": "Review the resources disclosed and restrict public CoAP access to intended clients."
+  },
+  "reflect.legacy_device_discovery_exposure.safe": {
+    "name": "Public WS-Discovery response",
+    "purpose": "Find whether a device using WS-Discovery responds outside its intended network.",
+    "mechanism": "Sends the approved WS-Discovery sample to the configured service port.",
+    "limitations": "The check covers this discovery response only; it does not test every device or game-discovery protocol suggested by older labels.",
+    "next_step": "Restrict WS-Discovery and inspect any device information exposed in the response."
+  },
+  "reflect.stun_turn_exposure.safe": {
+    "name": "Public STUN address-discovery replies",
+    "purpose": "Check whether a STUN service answers an external request for connection-address information.",
+    "mechanism": "Asks the STUN service which network address it sees for the requester and checks the reply.",
+    "limitations": "A STUN reply does not prove that a TURN relay can be used without permission or measure relay capacity.",
+    "next_step": "Confirm that public STUN access is intended and review TURN authentication separately."
+  },
+  "reflect.ipmi_bmc_exposure.safe": {
+    "name": "Public server-management discovery replies",
+    "purpose": "Check whether hardware-management discovery for an IPMI or BMC interface answers externally.",
+    "mechanism": "Sends one approved management-discovery message and checks its response.",
+    "limitations": "It does not sign in, power-cycle hardware or audit management-interface credentials.",
+    "next_step": "Move hardware-management access behind approved private networks or administrative gateways."
+  },
+  "reflect.redis_direct_exposure.safe": {
+    "name": "Connection to the Redis service port",
+    "purpose": "See whether the Redis service port accepts a connection from outside your network.",
+    "mechanism": "Attempts a small number of TCP connections to the configured Redis port.",
+    "limitations": "A handshake alone does not identify Redis or test database commands; a gap requires a matching declared deny rule.",
+    "next_step": "Confirm which service is listening and restrict public access to the database port if it is unnecessary."
+  },
+  "reflect.openvpn_wireguard_exposure.safe": {
+    "name": "Public OpenVPN service reply",
+    "purpose": "Check whether the configured OpenVPN endpoint replies to an external setup sample.",
+    "mechanism": "Sends the catalog's small OpenVPN reset sample and validates any matching reply.",
+    "limitations": "This does not authenticate a VPN session or test WireGuard behavior despite the combined technical ID.",
+    "next_step": "Confirm that the OpenVPN listener is intended to be public and review authentication and request limits."
+  },
+  "amp.ntp_exposure.safe": {
+    "name": "Public time-service information replies",
+    "purpose": "Check whether a network time server answers the approved public information request.",
+    "mechanism": "Sends one small NTP control-information query and validates the response.",
+    "limitations": "It does not request a traffic flood or measure how the service could amplify another client's traffic.",
+    "next_step": "Restrict unnecessary NTP control queries while preserving the time service your clients need."
+  },
+  "amp.cldap_exposure.safe": {
+    "name": "Public directory-discovery replies",
+    "purpose": "Find whether a connectionless directory service answers an external discovery query.",
+    "mechanism": "Sends one small CLDAP directory-information request to the declared endpoint.",
+    "limitations": "A directory reply does not establish account access or quantify how much attack traffic could be produced.",
+    "next_step": "Restrict CLDAP exposure and keep directory discovery within approved network boundaries."
+  },
+  "amp.memcached_exposure.safe": {
+    "name": "Public UDP cache-service replies",
+    "purpose": "Check whether a Memcached UDP service answers from the internet.",
+    "mechanism": "Sends the approved cache statistics sample and records a validated reply.",
+    "limitations": "The check does not read cached application data, write cache entries or measure amplification capacity.",
+    "next_step": "Disable unnecessary UDP cache access and restrict the service to approved application networks."
+  },
+  "amp.dns_any_txt_exposure.safe": {
+    "name": "DNS text-record response size",
+    "purpose": "Observe the text-record replies your declared DNS endpoint returns.",
+    "mechanism": "Sends the catalog's TXT queries and records the returned DNS information and sizes where available.",
+    "limitations": "The current profile uses TXT queries, not a general ANY-query flood or an amplification-capacity test.",
+    "next_step": "Review large TXT responses and whether the endpoint should answer these queries publicly."
+  },
+  "amp.smurf_broadcast_exposure.safe": {
+    "name": "Directed-broadcast restriction review",
+    "purpose": "Document whether the network rejects internet traffic directed at a whole subnet.",
+    "mechanism": "Stores your statement about directed-broadcast filtering.",
+    "limitations": "No broadcast request is sent and no third-party replies are generated.",
+    "next_step": "Confirm that internet-facing routers disable unnecessary directed broadcasts."
+  },
+  "amp.authoritative_resolver_exposure.safe": {
+    "name": "DNS nameserver response behavior",
+    "purpose": "Inspect the nameserver information returned by a declared DNS endpoint.",
+    "mechanism": "Sends the configured NS queries and records their answers and reply sizes.",
+    "limitations": "Nameserver answers do not by themselves prove open recursion or that amplification controls work.",
+    "next_step": "Confirm the endpoint's intended DNS role and review public recursive access separately."
+  },
+  "dns.laundering.readiness": {
+    "name": "DNS traffic from public resolvers review",
+    "purpose": "Review how you handle unwanted DNS traffic that reaches your domain through legitimate recursive resolvers.",
+    "mechanism": "Records your stated detection and mitigation approach for resolver-forwarded attack traffic.",
+    "limitations": "No DNS laundering scenario is executed or distinguished from normal resolver use.",
+    "next_step": "Agree with your DNS provider on how to detect unusual forwarded query patterns without blocking legitimate clients."
+  },
+  "dns.garbage_flood.readiness": {
+    "name": "DNS responses to sampled address queries",
+    "purpose": "Observe how the DNS endpoint answers a small set of ordinary address-record questions.",
+    "mechanism": "Sends the catalog's limited A-record queries and saves their DNS responses.",
+    "limitations": "The check does not send malformed DNS messages or a garbage-query flood, despite its technical ID.",
+    "next_step": "Review DNS reply errors and use provider monitoring to assess malformed-query handling."
+  },
+  "dns.phantom_domain.readiness": {
+    "name": "DNS requests for unresponsive domains review",
+    "purpose": "Document how your DNS infrastructure limits work spent waiting for domains that do not answer.",
+    "mechanism": "Records your declared DNS timeout, retry and resource controls.",
+    "limitations": "The check does not create unresponsive domains or tie up resolver workers.",
+    "next_step": "Review DNS retry limits and monitoring for unusually high numbers of waiting lookups."
+  },
+  "dns.domain_lockup.readiness": {
+    "name": "Slow DNS reply resource review",
+    "purpose": "Review safeguards against DNS destinations that answer slowly and hold lookup resources.",
+    "mechanism": "Saves your stated DNS connection and query-waiting limits.",
+    "limitations": "It does not operate a slow DNS server or measure how long your resolver holds resources.",
+    "next_step": "Confirm maximum DNS waiting times and limits on simultaneous outstanding lookups."
+  },
+  "dns.nxns_attack.readiness": {
+    "name": "DNS delegation-record response",
+    "purpose": "Inspect the nameserver records relevant to reviewing excessive follow-up DNS lookups.",
+    "mechanism": "Sends the approved NS queries and records the delegation information returned.",
+    "limitations": "It does not create malicious delegations or trigger the recursive lookup fan-out involved in an NXNS attack.",
+    "next_step": "Review resolver query limits and the actual nameservers returned for your domain."
+  },
+  "dns.dnsbomb.readiness": {
+    "name": "Delayed DNS reply surge review",
+    "purpose": "Document the controls for DNS behavior that builds up and then releases many replies.",
+    "mechanism": "Records your declaration about DNS response pacing, resource limits and provider safeguards.",
+    "limitations": "No delayed-reply scenario is created and response-burst resistance is not measured.",
+    "next_step": "Review provider guidance for delayed DNS replies and confirm resource and traffic limits."
+  },
+  "dns.qname_minimization.readiness": {
+    "name": "DNS lookup privacy review",
+    "purpose": "Review whether resolvers limit how much of a requested domain name they disclose during lookup.",
+    "mechanism": "Records your statement about DNS query-name minimization.",
+    "limitations": "The check does not trace recursive lookups and cannot verify that each upstream query reveals only the needed name.",
+    "next_step": "Confirm query-name minimization on the resolvers you operate or use."
+  },
+  "dns.doh_dot_exposure.readiness": {
+    "name": "Encrypted DNS access review",
+    "purpose": "Document who may use your DNS-over-HTTPS or DNS-over-TLS service.",
+    "mechanism": "Stores your declared access policy and request limits for encrypted DNS endpoints.",
+    "limitations": "It does not open or stress either encrypted DNS service.",
+    "next_step": "Identify the approved encrypted DNS clients and verify access restrictions with the service owner."
+  },
+  "dns.tcp_fallback.readiness": {
+    "name": "DNS response over TCP",
+    "purpose": "Check whether the declared DNS service answers a query over a TCP connection.",
+    "mechanism": "Sends the configured DNS question using TCP rather than UDP and records the reply.",
+    "limitations": "It does not force or observe a live UDP-to-TCP fallback sequence, and a reply is not a DNS-capacity test.",
+    "next_step": "Confirm that required TCP DNS access is allowed and review fallback behavior with your DNS provider."
+  },
+  "dns.zone_walking.readiness": {
+    "name": "Public DNS record enumeration review",
+    "purpose": "Review whether signed DNS records can reveal additional names in your zone.",
+    "mechanism": "Records your stated DNSSEC denial-of-existence configuration and enumeration controls.",
+    "limitations": "No zone enumeration is performed, and the number of discoverable names is not measured.",
+    "next_step": "Review the DNSSEC record policy with your DNS provider and avoid publishing unnecessary sensitive names."
+  },
+  "l7.http_get_flood.validation": {
+    "name": "Response to a small page-request burst",
+    "purpose": "Look for response limits when a page receives a short series of requests.",
+    "mechanism": "Sends a fixed small sequence of GET requests and records status changes and limit headers.",
+    "limitations": "The request count is deliberately small; this is not a GET flood or a capacity measurement.",
+    "next_step": "Compare any limit responses with the rate policy for the tested page."
+  },
+  "l7.http_post_flood.validation": {
+    "name": "Form-submission traffic surge review",
+    "purpose": "Document how the site limits a surge of requests that submit data.",
+    "mechanism": "Records your declared limits for HTTP POST requests and affected business operations.",
+    "limitations": "No POST flood or form submission is sent by this declaration check.",
+    "next_step": "List the routes that submit data and verify that their request and business-action limits are documented."
+  },
+  "l7.slowloris.readiness": {
+    "name": "One slowly started HTTP request",
+    "purpose": "Observe whether the server closes a single request whose headers are sent slowly.",
+    "mechanism": "Opens one connection, sends a small unfinished header sequence and watches for a reply or closure within the time budget.",
+    "limitations": "It does not hold many connections open, so it cannot demonstrate resistance to a Slowloris attack.",
+    "next_step": "Review the observed header-read behavior alongside server connection and timeout limits."
+  },
+  "l7.slow_post.readiness": {
+    "name": "Slow form-upload handling review",
+    "purpose": "Review how long a server waits for a client that sends a request body very slowly.",
+    "mechanism": "Stores your stated request-body timeout and minimum receive-rate settings.",
+    "limitations": "The check does not slowly upload data or confirm the timeout takes effect.",
+    "next_step": "Verify body-read timeouts at the proxy and application server that receive uploads."
+  },
+  "l7.slow_read.readiness": {
+    "name": "Slow response-reader handling review",
+    "purpose": "Document how your service handles clients that receive response data very slowly.",
+    "mechanism": "Records your declared response-write timeouts and connection limits.",
+    "limitations": "No slow-reading client is created and outgoing connection cleanup is not timed.",
+    "next_step": "Review write timeouts and limits on clients holding responses open."
+  },
+  "l7.low_and_slow.readiness": {
+    "name": "Single slow-request timeout sample",
+    "purpose": "Sample the timeout behavior that helps prevent slow clients from holding server resources.",
+    "mechanism": "Uses one slowly started HTTP-header request with a fixed short observation period.",
+    "limitations": "The test does not cover slow uploads, slow downloads or a sustained group of slow clients.",
+    "next_step": "Check which request-read timeouts apply at each server and proxy layer."
+  },
+  "l7.large_body_post.readiness": {
+    "name": "Large submitted-request limits review",
+    "purpose": "Review the maximum amount of data a client may submit in one request.",
+    "mechanism": "Stores the body-size limits and rejection behavior you declare.",
+    "limitations": "It does not upload a large body or compare limits across your actual request path.",
+    "next_step": "Confirm consistent request-body limits at the CDN, web firewall, proxy and application."
+  },
+  "l7.file_upload_abuse.readiness": {
+    "name": "Upload abuse controls review",
+    "purpose": "Document how file uploads are limited and checked before they consume storage or processing.",
+    "mechanism": "Records your declared file-size, rate, content and storage safeguards.",
+    "limitations": "No file is uploaded, scanned or stored during this check.",
+    "next_step": "Review upload limits, storage quotas and file-validation responsibilities with the application owner."
+  },
+  "l7.json_xml_bomb.readiness": {
+    "name": "Complex document-processing limits review",
+    "purpose": "Review protections against JSON or XML documents that require excessive work to parse.",
+    "mechanism": "Records the document size, nesting and expansion limits you declare.",
+    "limitations": "It does not send oversized documents or XML entity-expansion inputs.",
+    "next_step": "Confirm document-processing limits in the application and any libraries that read structured requests."
+  },
+  "l7.search_abuse.validation": {
+    "name": "Request-limit signals on the search test route",
+    "purpose": "Look for limit or challenge responses on a search-related URL you have approved for testing.",
+    "mechanism": "Sends a short GET sequence to the declared search route and records the responses.",
+    "limitations": "It does not submit expensive search terms or measure database work caused by a search.",
+    "next_step": "Review both request limits and query-cost controls on the actual search feature."
+  },
+  "l7.export_abuse.validation": {
+    "name": "Request-limit signals on the export test route",
+    "purpose": "Check visible response controls on an export-related URL without repeatedly creating exports.",
+    "mechanism": "Sends a small sequence to the approved export probe path and records status and limit signals.",
+    "limitations": "A response sample does not prove an export ran, measure its cost or test per-user export quotas.",
+    "next_step": "Verify export creation limits and background-job quotas in the application itself."
+  },
+  "l7.batch_api_abuse.validation": {
+    "name": "Bulk API operation limits review",
+    "purpose": "Document how an API limits requests that contain many individual operations.",
+    "mechanism": "Stores your declared batch-size and per-operation controls.",
+    "limitations": "No batch request is submitted and a batch cannot be assumed to count as only one business operation.",
+    "next_step": "Review both the maximum batch size and how each operation consumes quota."
+  },
+  "l7.oauth_token_abuse.validation": {
+    "name": "Response limits on the token-service test route",
+    "purpose": "Look for public request-limit signals on an OAuth token-related route.",
+    "mechanism": "Sends a short header-only request sequence to the declared route without credentials or token requests.",
+    "limitations": "No access token is issued, refreshed or revoked, and account-specific limits are not measured.",
+    "next_step": "Review token issuance and refresh limits with the identity-service owner."
+  },
+  "l7.checkout_abuse.validation": {
+    "name": "Checkout abuse prevention review",
+    "purpose": "Review safeguards against automated use of order and payment routes.",
+    "mechanism": "Records your stated checkout limits and anti-abuse controls.",
+    "limitations": "It does not create a cart, submit payment details or place an order.",
+    "next_step": "Confirm protections for stock reservations, checkout attempts and payment processing with the commerce team."
+  },
+  "l7.otp_sms_cost.readiness": {
+    "name": "Text-message and verification-code cost review",
+    "purpose": "Document controls that stop repeated verification requests from driving messaging costs.",
+    "mechanism": "Stores your stated limits for sending one-time codes or SMS messages.",
+    "limitations": "No code or text message is sent, and billing exposure is not measured.",
+    "next_step": "Review per-user, per-destination and overall sending limits with your messaging provider."
+  },
+  "l7.signup_registration_abuse.validation": {
+    "name": "Response limits on the signup test route",
+    "purpose": "Inspect limit and challenge signals associated with an approved registration URL.",
+    "mechanism": "Sends a small header-only request sequence to that route.",
+    "limitations": "No account is created or verification message sent, so this cannot establish registration-abuse prevention.",
+    "next_step": "Review account-creation limits, verification costs and challenge settings separately."
+  },
+  "l7.elasticsearch_abuse.readiness": {
+    "name": "Search-cluster access and query limits review",
+    "purpose": "Review access restrictions and query limits for an Elasticsearch service.",
+    "mechanism": "Records your declared public-access policy and limits on costly search work.",
+    "limitations": "No cluster query runs and index access or query cost is not verified.",
+    "next_step": "Confirm authentication, network access and query limits on the actual search cluster."
+  },
+  "l7.health_check_flood.readiness": {
+    "name": "Health-check route abuse review",
+    "purpose": "Document how public health-check URLs avoid triggering excessive backend work.",
+    "mechanism": "Stores your stated access, caching and request limits for health checks.",
+    "limitations": "The check does not call a health route repeatedly or measure what each call does internally.",
+    "next_step": "Ensure public health endpoints return only necessary information and do minimal work."
+  },
+  "l7.wordpress_xmlrpc.readiness": {
+    "name": "Response from the declared WordPress route",
+    "purpose": "Record whether a declared WordPress-related endpoint returns a public response.",
+    "mechanism": "Makes one header-only request to the target or approved probe path.",
+    "limitations": "It does not submit an XML-RPC call or test WordPress authentication and bulk-call limits.",
+    "next_step": "Confirm whether XML-RPC is needed and review its access and method restrictions in WordPress."
+  },
+  "l7.webhook_flood.readiness": {
+    "name": "Incoming webhook traffic review",
+    "purpose": "Review limits and authentication for services that accept event notifications from other systems.",
+    "mechanism": "Records your stated webhook signature checks, request limits and queue controls.",
+    "limitations": "No webhook event is delivered and no downstream action is triggered.",
+    "next_step": "Verify sender authentication and queue limits on the webhook receiver."
+  },
+  "l7.http_pipelining.readiness": {
+    "name": "Multiple requests on one HTTP connection review",
+    "purpose": "Document how your server handles a client sending several HTTP/1 requests on one connection.",
+    "mechanism": "Saves your declared request-per-connection and parser controls.",
+    "limitations": "It does not send pipelined requests or compare how proxies process them.",
+    "next_step": "Review HTTP/1 connection handling and consistent request limits across your proxy path."
+  },
+  "l7.http_range_abuse.readiness": {
+    "name": "Partial-file request limits review",
+    "purpose": "Review controls for requests that ask for many separate parts of a file.",
+    "mechanism": "Records your declared HTTP Range handling and response-size policies.",
+    "limitations": "No multi-range request or large-file download is sent.",
+    "next_step": "Confirm limits on ranges per request and the processing cost of serving partial files."
+  },
+  "l7.conditional_revalidation.readiness": {
+    "name": "Cache revalidation workload review",
+    "purpose": "Document how your site limits requests that repeatedly ask whether cached content has changed.",
+    "mechanism": "Records your stated cache-revalidation and backend request controls.",
+    "limitations": "It does not force cache refreshes or measure origin-server work.",
+    "next_step": "Review cache freshness rules and limits on expensive revalidation paths."
+  },
+  "l7.captcha_challenge_abuse.readiness": {
+    "name": "Browser challenge abuse review",
+    "purpose": "Review whether repeated CAPTCHA or browser challenges can create excessive work or block real visitors.",
+    "mechanism": "Stores your declared challenge placement, retry limits and recovery arrangements.",
+    "limitations": "No challenge is solved, bypassed or repeatedly requested.",
+    "next_step": "Check challenge costs, retry behavior and alternatives for legitimate users who cannot complete them."
+  },
+  "l7.mqtt_broker_exposure.readiness": {
+    "name": "MQTT messaging service access review",
+    "purpose": "Document who may connect to the MQTT service used by devices or message publishers.",
+    "mechanism": "Records your stated broker authentication, topic access and connection limits.",
+    "limitations": "The check does not connect to the broker or publish or subscribe to messages.",
+    "next_step": "Verify broker access rules and limits on connections, subscriptions and message delivery."
+  },
+  "l7.redos.readiness": {
+    "name": "Regular-expression processing limits review",
+    "purpose": "Review safeguards for text patterns that can take excessive CPU time on certain input.",
+    "mechanism": "Stores your statement about regular-expression time limits and safe input sizes.",
+    "limitations": "No costly text pattern is executed against your application.",
+    "next_step": "Review expressions that process untrusted text and enforce input and execution-time limits."
+  },
+  "l7.graphql_batch_abuse.validation": {
+    "name": "GraphQL route headers for a batch-limit review",
+    "purpose": "Collect basic response information from the GraphQL route before reviewing batch controls.",
+    "mechanism": "Makes the approved header-only request and records any advertised GraphQL-related limits.",
+    "limitations": "No batched GraphQL query is submitted and a header cannot prove that each operation is charged to quota.",
+    "next_step": "Verify the actual batch-size and per-operation limits in your GraphQL implementation."
+  },
+  "tls.handshake_rate.readiness": {
+    "name": "Encrypted connection setup load review",
+    "purpose": "Document how your service limits the work needed to start many HTTPS connections.",
+    "mechanism": "Records your declared TLS handshake limits and upstream protection.",
+    "limitations": "It does not create a handshake surge or measure the server's encryption-processing capacity.",
+    "next_step": "Confirm connection-start limits and how your provider handles sudden TLS setup demand."
+  },
+  "tls.renegotiation.readiness": {
+    "name": "Client-requested TLS renegotiation",
+    "purpose": "See whether an established encrypted connection accepts one client request to renegotiate its settings.",
+    "mechanism": "Opens one TLS connection and, where the negotiated protocol permits it, attempts one renegotiation.",
+    "limitations": "A single attempt does not measure renegotiation load resistance; TLS 1.3 does not use this older renegotiation mechanism.",
+    "next_step": "Review the recorded protocol and whether client-initiated renegotiation should be disabled for that service."
+  },
+  "tls.zero_rtt.readiness": {
+    "name": "Early encrypted-request replay review",
+    "purpose": "Review how your service handles TLS early data, which can arrive before connection setup finishes.",
+    "mechanism": "Stores your declared policy for TLS 0-RTT early requests and replay-sensitive actions.",
+    "limitations": "No early-data request is sent or replayed, so replay protection is not demonstrated.",
+    "next_step": "Confirm that early data cannot repeat payments, account changes or other non-repeatable operations."
+  },
+  "tls.ocsp_stapling.readiness": {
+    "name": "Certificate information for a revocation-status review",
+    "purpose": "Collect the public certificate details needed when reviewing certificate-revocation status.",
+    "mechanism": "Runs the current TLS certificate observation and records the available connection facts.",
+    "limitations": "The current observation does not establish that a valid stapled OCSP response was received or checked.",
+    "next_step": "Verify OCSP stapling and revocation behavior with a certificate-specific test if your policy requires it."
+  },
+  "l7.http2_rapid_reset.validation": {
+    "name": "HTTP/2 response to one canceled request",
+    "purpose": "Observe a small HTTP/2 exchange that includes canceling a request stream.",
+    "mechanism": "Reads connection settings and, within the budget, uses a ping and one opened stream that is canceled.",
+    "limitations": "One canceled stream is not a rapid-reset attack and cannot show how the server handles a reset flood.",
+    "next_step": "Review the recorded settings and cancellation result together with your provider's rapid-reset safeguards."
+  },
+  "l7.http2_made_you_reset.readiness": {
+    "name": "HTTP/2 cancellation behavior sample",
+    "purpose": "Collect a small connection-level observation for a review of reset-related HTTP/2 risks.",
+    "mechanism": "Uses the current settings, ping and single-stream cancellation sequence where the request budget permits.",
+    "limitations": "It does not reproduce the full MadeYouReset attack pattern or measure server resource exhaustion.",
+    "next_step": "Confirm the server version and relevant vendor fixes, then assess any remaining reset concerns under an approved plan."
+  },
+  "l7.http2_continuation.readiness": {
+    "name": "HTTP/2 advertised header limits",
+    "purpose": "Review the HTTP/2 settings relevant to how much header data a connection may use.",
+    "mechanism": "Collects advertised settings and the existing small control-message observations.",
+    "limitations": "The worker does not send a CONTINUATION-frame flood or demonstrate that oversized header sequences are contained.",
+    "next_step": "Compare advertised header limits with the HTTP/2 implementation's current security guidance."
+  },
+  "l7.http2_priority_abuse.readiness": {
+    "name": "HTTP/2 request-priority handling review",
+    "purpose": "Document limits on the work caused by clients changing request priorities.",
+    "mechanism": "Records your stated HTTP/2 priority handling and software protections.",
+    "limitations": "It does not send priority frames or measure scheduling overhead.",
+    "next_step": "Review HTTP/2 priority handling in the server and proxies that accept public connections."
+  },
+  "l7.hpack_bomb.readiness": {
+    "name": "HTTP/2 header-compression settings",
+    "purpose": "Inspect limits announced for compressed HTTP/2 request headers.",
+    "mechanism": "Reads the header-table and header-list sizes in the server's HTTP/2 settings message.",
+    "limitations": "No highly compressed header block is sent, so expansion cost and HPACK attack resistance are not tested.",
+    "next_step": "Review the header-table and total-header limits in the actual HTTP/2 service configuration."
+  },
+  "l7.http2_push_promise.readiness": {
+    "name": "HTTP/2 server-push handling review",
+    "purpose": "Review whether unnecessary HTTP/2 server-push features are disabled or limited.",
+    "mechanism": "Stores your declaration about server push and related resource limits.",
+    "limitations": "No PUSH_PROMISE exchange or server-push load is generated.",
+    "next_step": "Confirm whether your server still uses HTTP/2 push and restrict it if it is unnecessary."
+  },
+  "l7.qpack_bomb.readiness": {
+    "name": "HTTP/3 header-compression limits review",
+    "purpose": "Document the limits that keep compressed HTTP/3 headers from consuming too much memory or work.",
+    "mechanism": "Records your stated QPACK settings, the header-compression system used by HTTP/3.",
+    "limitations": "It does not send compressed-header stress traffic or verify HTTP/3 memory use.",
+    "next_step": "Review QPACK table and blocked-stream limits in your deployed HTTP/3 service."
+  },
+  "protocol.sse_stream.readiness": {
+    "name": "Long-running event-stream controls review",
+    "purpose": "Review limits for pages that keep a connection open to receive server-sent events.",
+    "mechanism": "Records your stated limits and cleanup behavior for event-stream connections.",
+    "limitations": "No event stream is opened or held, and application cleanup is not observed.",
+    "next_step": "Confirm per-client stream limits and that disconnected clients release server resources."
+  },
+  "protocol.http3_control_stream.readiness": {
+    "name": "HTTP/3 announcement for a control-stream review",
+    "purpose": "Collect a website's advertised HTTP/3 availability before reviewing control-stream protections.",
+    "mechanism": "Uses the current HTTP response observation to read the Alt-Svc announcement.",
+    "limitations": "This does not establish a QUIC session or send HTTP/3 control-stream messages.",
+    "next_step": "Review the actual HTTP/3 implementation and its control-stream limits separately."
+  },
+  "protocol.websocket_message_rate.readiness": {
+    "name": "WebSocket message limits review",
+    "purpose": "Document how an established WebSocket connection is prevented from sending too many messages.",
+    "mechanism": "Stores your stated message-rate, message-size and authentication controls.",
+    "limitations": "The check does not open a WebSocket or send messages over one.",
+    "next_step": "Verify message limits after connection setup, including limits shared across a user's connections."
+  },
+  "origin.cdn_bypass.readiness": {
+    "name": "Public clues to routes outside the CDN",
+    "purpose": "Look for public names or responses that may point to an alternate route around your CDN.",
+    "mechanism": "Runs the fixed, limited DNS and web-observation list associated with origin clues.",
+    "limitations": "An alternate name or IP may be unrelated or old; this does not confirm a working CDN bypass.",
+    "next_step": "Verify any candidate against your infrastructure records before approving direct-address testing."
+  },
+  "origin.dns_hostname_bypass.readiness": {
+    "name": "Alternate DNS names for the server",
+    "purpose": "Find public hostname clues that may identify another way to reach the server behind your website.",
+    "mechanism": "Checks the catalog's related DNS names and records the available web responses.",
+    "limitations": "The check does not prove that an alternate hostname reaches the same application or avoids security controls.",
+    "next_step": "Review each reported hostname and remove or restrict obsolete public server names."
+  },
+  "pattern.carpet_bombing.readiness": {
+    "name": "Traffic spread across many addresses review",
+    "purpose": "Review how protection handles unwanted traffic distributed across several addresses in your declared scope.",
+    "mechanism": "Records your statement about protection and monitoring across the affected addresses.",
+    "limitations": "No multi-address traffic is sent and aggregate network limits are not tested.",
+    "next_step": "Confirm that the provider monitors the whole approved address scope, not only individual destinations."
+  },
+  "pattern.pulse_wave.readiness": {
+    "name": "Repeated traffic-burst response review",
+    "purpose": "Document how mitigation responds when unwanted traffic repeatedly rises and falls.",
+    "mechanism": "Stores your declared burst-detection, hold-down and recovery arrangements.",
+    "limitations": "The check does not generate bursts or measure how quickly mitigation turns on and off.",
+    "next_step": "Review detection and recovery timing with the provider responsible for handling short traffic surges."
+  },
+  "pattern.spoofed_source.readiness": {
+    "name": "Forged source-address protection review",
+    "purpose": "Review whether the network limits traffic carrying false source addresses.",
+    "mechanism": "Records your stated source-address validation and provider protections.",
+    "limitations": "It does not send spoofed traffic or verify the origin of arriving packets.",
+    "next_step": "Confirm source-address filtering responsibilities with your network and upstream providers."
+  },
+  "pattern.ransom_ddos.readiness": {
+    "name": "DDoS extortion response review",
+    "purpose": "Document the response plan for a threat demanding payment to avoid a traffic attack.",
+    "mechanism": "Stores your stated incident contacts, escalation steps and evidence-handling arrangements.",
+    "limitations": "No threat is simulated or attack carried out, and the response team is not exercised.",
+    "next_step": "Confirm who handles threats, provider escalation, evidence preservation and business decisions."
+  },
+  "pattern.rate_limit_evasion.readiness": {
+    "name": "Request limits across changing clients review",
+    "purpose": "Review how request limits apply when unwanted activity changes addresses, identities or request patterns.",
+    "mechanism": "Records your declared rate-limit keys and coordination between controls.",
+    "limitations": "It does not change client identities or attempt to bypass a live rate limit.",
+    "next_step": "Review whether important limits apply to users and business actions as well as individual IP addresses."
+  },
+  "pattern.adaptive_evasion.readiness": {
+    "name": "Changing attack-pattern response review",
+    "purpose": "Document how your team and providers handle unwanted traffic that changes after mitigation begins.",
+    "mechanism": "Stores your stated monitoring, rule-update and escalation process.",
+    "limitations": "No adaptive traffic is generated and the speed of your response is not measured.",
+    "next_step": "Confirm who reviews new traffic patterns and how approved protection changes are applied."
+  },
+  "pattern.residential_proxy.readiness": {
+    "name": "Abuse through household internet addresses review",
+    "purpose": "Review controls for automated requests that arrive from ordinary consumer internet connections.",
+    "mechanism": "Records your declared bot detection and account or behavior-based protections.",
+    "limitations": "It does not use residential proxies or determine whether a visitor is a person.",
+    "next_step": "Review controls that do not rely only on data-center IP reputation."
+  },
+  "ops.autoscaling_cost.readiness": {
+    "name": "Unexpected infrastructure growth and cost review",
+    "purpose": "Document safeguards against unwanted traffic causing excessive automatic scaling or charges.",
+    "mechanism": "Stores your declared scaling ceilings, budget alerts and response ownership.",
+    "limitations": "It does not increase traffic, resize infrastructure or verify billing alerts.",
+    "next_step": "Confirm spending thresholds, scaling limits and the person authorized to change them during an incident."
+  },
+  "ops.attack_alert_coverage.readiness": {
+    "name": "Attack monitoring and alert ownership review",
+    "purpose": "Review which traffic incidents should generate an alert and who receives it.",
+    "mechanism": "Records your stated detection coverage, notification routes and response owners.",
+    "limitations": "No attack is generated and no alert is delivered by this declaration check.",
+    "next_step": "Map important traffic incidents to named alerts and schedule approved notification tests."
+  },
+  "reflect.slp_amplification_exposure.safe": {
+    "name": "Public service-location discovery",
+    "purpose": "Check whether a Service Location Protocol directory answers from the internet.",
+    "mechanism": "Sends one small SLP service request and validates a matching reply.",
+    "limitations": "It records service discovery only; it does not exercise the high-volume behavior associated with SLP abuse.",
+    "next_step": "Restrict SLP discovery to intended networks and review any public listener."
+  },
+  "reflect.tp240_amplification_exposure.safe": {
+    "name": "Public TP240 device-status reply",
+    "purpose": "Check whether the configured TP240 PhoneHome service answers an external status query.",
+    "mechanism": "Sends the fixed small TP240 status sample and records a validated reply.",
+    "limitations": "This does not control the device or measure the volume of replies it could generate under abuse.",
+    "next_step": "Confirm the device owner and restrict unnecessary public access to the status service."
+  },
+  "reflect.l2tp_reflection_exposure.safe": {
+    "name": "Public L2TP tunnel-setup reply",
+    "purpose": "Check whether an L2TP tunneling endpoint responds to a small external setup request.",
+    "mechanism": "Sends the approved L2TP setup sample and validates the returned message.",
+    "limitations": "It does not establish a working tunnel, authenticate a user or test reflected-traffic capacity.",
+    "next_step": "Confirm public L2TP access is required and review the endpoint's filtering and authentication."
+  },
+  "reflect.natpmp_amplification_exposure.safe": {
+    "name": "Public router address-discovery reply",
+    "purpose": "Find whether a router's NAT-PMP service answers a public request for its external address.",
+    "mechanism": "Sends the approved address-information query and checks the reply.",
+    "limitations": "No port mapping is created or changed, and the response does not establish access to the router's administration interface.",
+    "next_step": "Keep NAT-PMP limited to intended local clients and remove unnecessary internet exposure."
+  },
+  "reflect.ipp_callback_exposure.safe": {
+    "name": "Printer-service query availability",
+    "purpose": "Review a planned external check of printer information returned through IPP.",
+    "mechanism": "The catalog defines a printer-attribute request, but the current worker has no approved way to deliver this scenario.",
+    "limitations": "No print, printer query or callback is triggered, and public printer access remains untested.",
+    "next_step": "Use a separately approved printer-service assessment that cannot create print jobs or change printer settings."
+  },
+  "dns.multi_question_oversized.safe": {
+    "name": "DNS nameserver query over TCP",
+    "purpose": "Observe a DNS reply using the TCP request path for this catalog entry.",
+    "mechanism": "Sends the current single NS question over TCP and records the response.",
+    "limitations": "Despite the technical ID, the worker does not send a multi-question or oversized DNS packet.",
+    "next_step": "Use the recorded TCP DNS result for connectivity review and arrange a separate approved parser-size assessment if needed."
+  },
+  "waf.http_method_policy_marker.safe": {
+    "name": "Response to an HTTP-method test label",
+    "purpose": "Record the website's reaction to a text label associated with an HTTP-method firewall rule.",
+    "mechanism": "Sends the label using ordinary GET requests in the available URL or header positions.",
+    "limitations": "No TRACE request or other unusual method is sent by this label check. It cannot verify a method rule or assign readiness credit.",
+    "next_step": "Use the actual HTTP-method enforcement check when you need to test which request methods are accepted."
+  },
+  "waf.request_smuggling_marker.safe": {
+    "name": "Response to a request-framing test label",
+    "purpose": "Observe how a custom firewall rule responds to a label associated with request smuggling, where systems disagree about request boundaries.",
+    "mechanism": "Places a harmless framing-related label in ordinary GET requests and records the replies.",
+    "limitations": "It does not send conflicting request lengths or smuggle a second request. No exact installed label rule is verified.",
+    "next_step": "Review the intended custom rule separately and use an authorized framing assessment for actual request-boundary behavior."
+  },
+  "waf.crlf_injection_marker.safe": {
+    "name": "Response to a line-break test label",
+    "purpose": "Record whether text associated with injected HTTP line breaks causes a firewall response.",
+    "mechanism": "Sends a labeled string containing encoded line-break text through ordinary URL or header positions.",
+    "limitations": "This does not establish that a new header was injected or that a backend interpreted a line break.",
+    "next_step": "Check the returned response and the intended custom label rule without treating the observation as a header-injection result."
+  },
+  "waf.open_redirect_marker.safe": {
+    "name": "Response to a redirect-rule test label",
+    "purpose": "Observe the response to a label intended for a custom rule about unwanted website redirects.",
+    "mechanism": "Sends the redirect-related test label in small GET requests.",
+    "limitations": "No external redirect destination is supplied or followed, and no real open redirect is demonstrated.",
+    "next_step": "Review the label rule and assess real redirect destinations through a separately approved application test."
+  },
+  "waf.nosql_injection_marker.safe": {
+    "name": "Response to a document-database test label",
+    "purpose": "Record the firewall reaction to text associated with altered NoSQL database queries.",
+    "mechanism": "Places the catalog's harmless database-related test string in normal request fields.",
+    "limitations": "No database operation is performed and acceptance does not establish a NoSQL-injection vulnerability.",
+    "next_step": "Verify the relevant application's query validation separately from this custom-rule observation."
+  },
+  "waf.xpath_injection_marker.safe": {
+    "name": "Response to an XML-query test label",
+    "purpose": "Observe how the website responds to text associated with changes to an XML document query.",
+    "mechanism": "Sends the fixed XPath-related label, where XPath is a language for selecting data from XML.",
+    "limitations": "The sample does not read an XML file or demonstrate that the application ran an altered query.",
+    "next_step": "Compare the response with your intended label rule and review real XML-query construction in the application."
+  },
+  "waf.jndi_ldap_marker.safe": {
+    "name": "Response to a directory-lookup test label",
+    "purpose": "Record how the firewall treats a label associated with directory-lookup input.",
+    "mechanism": "Sends harmless directory-related test text in ordinary GET requests.",
+    "limitations": "No LDAP or JNDI lookup is triggered and no external lookup server is contacted.",
+    "next_step": "Review the custom detection rule and confirm actual directory inputs are validated by the application."
+  },
+  "waf.csv_formula_marker.safe": {
+    "name": "Response to a spreadsheet-formula test label",
+    "purpose": "Observe the firewall's response to a label associated with unwanted spreadsheet formulas.",
+    "mechanism": "Places the fixed test label in URL or header fields without creating a spreadsheet.",
+    "limitations": "No spreadsheet formula is executed or exported, so this cannot verify formula-injection prevention.",
+    "next_step": "Review how real exported spreadsheet cells are handled and evaluate the custom label rule separately."
+  },
+  "waf.prototype_pollution_marker.safe": {
+    "name": "Response to a JavaScript object-change test label",
+    "purpose": "Record how the website responds to a label associated with unwanted changes to shared JavaScript object properties.",
+    "mechanism": "Sends a harmless label without instructions to change an object's prototype or properties.",
+    "limitations": "No application object is modified and the check does not prove protection against prototype pollution.",
+    "next_step": "Review the application's object-update handling and treat this response as a custom-rule observation only."
+  },
+  "waf.deserialization_marker.safe": {
+    "name": "Response to a stored-object test label",
+    "purpose": "Observe the response to a label resembling data used to rebuild a stored software object.",
+    "mechanism": "Sends the fixed object-data label through normal GET request fields.",
+    "limitations": "No runnable serialized object is supplied or rebuilt, and accepting the label is not a deserialization vulnerability.",
+    "next_step": "Review which object formats the application accepts and how those objects are safely reconstructed."
+  },
+  "waf.ssrf_marker.safe": {
+    "name": "Response to a server-fetch test label",
+    "purpose": "Record the firewall reaction to a label associated with requests that make a server contact another address.",
+    "mechanism": "Sends a harmless SSRF-related label without a destination for the application to fetch.",
+    "limitations": "No internal or external fetch is triggered, and this cannot verify protection against server-side request forgery.",
+    "next_step": "Review destination validation on actual server-fetch features and evaluate any custom label rule separately."
+  },
+  "waf.xxe_marker.safe": {
+    "name": "Response to an XML external-file test label",
+    "purpose": "Observe the response to a label associated with XML processing that could read another file or URL.",
+    "mechanism": "Sends the fixed XML-related label without an external-entity definition.",
+    "limitations": "No XML entity is expanded, file read or network lookup performed.",
+    "next_step": "Confirm that external-entity loading is disabled in the actual XML parser."
+  },
+  "waf.file_upload_marker.safe": {
+    "name": "Response to an upload-filename test label",
+    "purpose": "Record how the firewall treats test text that resembles an executable file's name.",
+    "mechanism": "Sends a harmless filename-like label ending in a text-file suffix through ordinary requests.",
+    "limitations": "No file is uploaded or executed, so this cannot confirm upload-content scanning or storage restrictions.",
+    "next_step": "Review actual upload validation and storage behavior independently of this filename-label response."
+  },
+  "waf.jwt_tamper_marker.safe": {
+    "name": "Response to a sign-in-token test label",
+    "purpose": "Observe how the firewall handles a harmless token-shaped string associated with JSON Web Tokens, or JWTs.",
+    "mechanism": "Sends an artificial token-like value in test request fields without using a real account session.",
+    "limitations": "No valid sign-in token is modified or accepted, and application signature checks are not exercised.",
+    "next_step": "Review JWT signature, issuer and expiration checks in the service that verifies real tokens."
+  },
+  "waf.entry_path_login_marker.safe": {
+    "name": "Firewall checks on your declared login URL",
+    "purpose": "Check whether your login URL's firewall response stays consistent when database-like test text is placed in several request forms.",
+    "mechanism": "Uses the declared login path and compares ordinary requests, original test text and the approved encoded or padded variations.",
+    "limitations": "No login or password submission occurs. Each changed form needs a blocked original comparison before it can show a difference.",
+    "next_step": "Review the login-path responses and the specific input form associated with any observed difference."
+  },
+  "waf.entry_path_api_marker.safe": {
+    "name": "Firewall checks on your declared API URL",
+    "purpose": "Check how your API URL's firewall handles database-like test text across the request forms this check can send.",
+    "mechanism": "Uses the declared API path and compares ordinary requests with original, encoded and padded test requests.",
+    "limitations": "It does not execute an API business operation or submit a JSON body; content-type labels are not a body-parser test.",
+    "next_step": "Review which actual request forms differ and verify matching firewall coverage on the declared API route."
+  },
+  "waf.evasion_unicode_normalization.safe": {
+    "name": "Firewall handling of wide Unicode characters",
+    "purpose": "Check whether changing test text into wide Unicode characters changes the firewall's response.",
+    "mechanism": "Sends ordinary requests before and after comparing the original test text with the same text written using full-width characters.",
+    "limitations": "Only this character conversion and URL are compared. A useful comparison requires the original test text to be blocked.",
+    "next_step": "Compare the original and wide-character responses and review character normalization in the web firewall."
+  },
+  "waf.evasion_homoglyph.safe": {
+    "name": "Firewall response to look-alike letters",
+    "purpose": "See how the firewall responds when some letters are replaced with visually similar characters.",
+    "mechanism": "Compares the original test text with a version containing look-alike letters from another alphabet, alongside ordinary requests.",
+    "limitations": "Looking similar does not mean the application reads the two strings identically; an allowed look-alike is not proof of a bypass.",
+    "next_step": "Check whether your application treats those letters as equivalent before interpreting the difference."
+  },
+  "waf.evasion_overlong_utf8.safe": {
+    "name": "Firewall handling of invalid text encoding",
+    "purpose": "Check the response to a test string containing an invalid longer UTF-8 character sequence.",
+    "mechanism": "Compares the original test text with a version that changes one encoded character, checking ordinary requests around the comparison.",
+    "limitations": "Only the transmitted encoding is covered. Rejection may come from a parser before any firewall rule is evaluated.",
+    "next_step": "Review the recorded replies and confirm invalid UTF-8 is rejected consistently across your request path."
+  },
+  "waf.evasion_alt_charset.safe": {
+    "name": "Alternative text-encoding test availability",
+    "purpose": "Review whether test text could be interpreted differently under an alternative character set.",
+    "mechanism": "The catalog describes changing the request's character-set label; the current worker does not send this request format.",
+    "limitations": "No alternative-character-set comparison runs, so a result cannot establish how your application decodes it.",
+    "next_step": "Use an approved test endpoint and a worker that can exercise the intended character set."
+  },
+  "waf.evasion_html_entity.safe": {
+    "name": "Firewall handling of HTML-encoded text",
+    "purpose": "Check whether a firewall reacts consistently when test text is written as HTML character references.",
+    "mechanism": "Compares the original text with a version where characters are written as numeric HTML references, with ordinary requests around it.",
+    "limitations": "HTML decoding depends on where the application uses the text. This comparison does not run a browser script.",
+    "next_step": "Review the HTML-encoded response and the decoding rules used where the application reads that input."
+  },
+  "waf.evasion_js_escape.safe": {
+    "name": "Firewall handling of JavaScript-style escapes",
+    "purpose": "Check whether writing characters in JavaScript's backslash-escape form changes the firewall response.",
+    "mechanism": "Sends the original test text and a version whose characters are written as hexadecimal backslash escapes.",
+    "limitations": "These requests do not execute JavaScript or establish that the application decodes the escape form.",
+    "next_step": "Compare the replies and verify how the receiving application handles backslash-escaped text."
+  },
+  "waf.evasion_json_unicode_escape.safe": {
+    "name": "JSON character-escape test availability",
+    "purpose": "Review a planned comparison of ordinary JSON text with Unicode-escaped JSON text.",
+    "mechanism": "The intended request carries escaped test text inside JSON; the current worker cannot send this body comparison.",
+    "limitations": "Changing only a URL would not test a JSON parser, so no substitute request is sent.",
+    "next_step": "Arrange a JSON-body comparison on an endpoint approved to receive test data."
+  },
+  "waf.evasion_css_escape.safe": {
+    "name": "Firewall handling of stylesheet-style escapes",
+    "purpose": "See how the firewall responds to test text written using CSS character escapes.",
+    "mechanism": "Compares the original text with a version using the escape notation found in stylesheets.",
+    "limitations": "The check does not create a stylesheet or show that a browser interprets the text as CSS.",
+    "next_step": "Review the response difference and validate how stylesheet-related inputs are processed in the application."
+  },
+  "waf.evasion_base64_wrap.safe": {
+    "name": "Firewall response to Base64-encoded text",
+    "purpose": "See whether the firewall responds differently when the same test text is written as Base64, a way to represent data using letters, numbers and symbols.",
+    "mechanism": "Sends an ordinary request, the original test text, a Base64 version of that text, and another ordinary request.",
+    "limitations": "The original text must be blocked for a meaningful comparison. An allowed Base64 response does not prove the application decodes it or that an attack would succeed.",
+    "next_step": "First confirm that the intended rule blocks the original text; then compare the Base64 response and the application's decoding behavior."
+  },
+  "waf.evasion_numeric_repr.safe": {
+    "name": "Firewall response to characters written as numbers",
+    "purpose": "See how the firewall responds when test text is represented as hexadecimal character numbers.",
+    "mechanism": "Compares the original text with its character-number representation and checks that ordinary requests still work.",
+    "limitations": "The number form may be ordinary data to your application. Its acceptance alone does not demonstrate a firewall bypass.",
+    "next_step": "Check whether the application converts these numbers back into text before drawing a security conclusion."
+  },
+  "waf.evasion_whitespace.safe": {
+    "name": "Firewall handling of changed spacing",
+    "purpose": "Check whether tabs and changed spacing affect the firewall's response to the test text.",
+    "mechanism": "Compares the original text with a version containing tabs in place of selected separators.",
+    "limitations": "Only the specific spacing changes sent by this check are covered; it does not test every whitespace character.",
+    "next_step": "Review whether the firewall and application handle the recorded spacing changes consistently."
+  },
+  "waf.evasion_lexical_operator.safe": {
+    "name": "Database operator-variation test availability",
+    "purpose": "Review a planned comparison of different ways to express database-related text.",
+    "mechanism": "The catalog defines an operator-related variation, but the current worker does not run this comparison.",
+    "limitations": "No database-expression variation is sent and no operator-based bypass is established.",
+    "next_step": "Use a reviewed comparison that names the exact expression and confirms it is safe for the receiving endpoint."
+  },
+  "waf.evasion_lexical_tautology.safe": {
+    "name": "Database condition-variation test availability",
+    "purpose": "Review whether equivalent-looking database conditions need different firewall handling.",
+    "mechanism": "The intended scenario compares alternative condition forms; the current request transport does not implement this scenario.",
+    "limitations": "The catalog label is not evidence that a true or false database condition was evaluated.",
+    "next_step": "Arrange an approved test that explicitly defines the condition forms and expected response."
+  },
+  "waf.evasion_lexical_literal.safe": {
+    "name": "Database text-value variation test availability",
+    "purpose": "Review a planned check of alternative representations of text values in database-related input.",
+    "mechanism": "The scenario is cataloged, but the worker does not currently send the intended text-value comparison.",
+    "limitations": "No quoted-value or literal-handling result is produced by this entry.",
+    "next_step": "Have the assessment owner define the precise text-value variation and a safe route for testing it."
+  },
+  "waf.evasion_control_char.safe": {
+    "name": "Firewall handling of an encoded null character",
+    "purpose": "Check whether placing an encoded null character before the test text changes the response.",
+    "mechanism": "Compares the original text with a version prefixed by the encoded zero-byte character while checking ordinary requests.",
+    "limitations": "It covers one encoded control character, not all invalid input or how every backend parser handles it.",
+    "next_step": "Review null-character rejection and compare the firewall's handling with the application's input parser."
+  },
+  "waf.evasion_path_matrix.safe": {
+    "name": "Path-parameter test availability",
+    "purpose": "Review whether semicolon-style path parameters could change how a URL is interpreted.",
+    "mechanism": "This scenario needs a path-changing request; the current comparison worker does not send that form.",
+    "limitations": "No path parameter is inserted and no difference in route selection is demonstrated.",
+    "next_step": "Arrange a path-specific assessment that can safely compare the actual application routes."
+  },
+  "waf.evasion_path_suffix.safe": {
+    "name": "Extra path-suffix test availability",
+    "purpose": "Review whether an added encoded suffix changes how the firewall and application read a file path.",
+    "mechanism": "The catalog describes a modified path suffix, but this worker cannot issue the intended path comparison.",
+    "limitations": "The check does not add a suffix to a live application path or confirm a route mismatch.",
+    "next_step": "Define the exact path suffix and an approved destination before scheduling a dedicated test."
+  },
+  "waf.evasion_ip_representation.safe": {
+    "name": "Alternative IP-address notation test availability",
+    "purpose": "Review whether different written forms of an IP address could affect request validation.",
+    "mechanism": "The planned scenario needs an actual address-interpretation comparison that the current worker cannot perform.",
+    "limitations": "No alternate address is contacted, so the entry cannot prove a server-side request validation bypass.",
+    "next_step": "Use an approved address-validation test that verifies the address actually interpreted by the application."
+  },
+  "waf.evasion_parser_hpp.safe": {
+    "name": "Firewall handling of a repeated URL parameter",
+    "purpose": "Check whether repeating a parameter changes how the firewall handles the test text.",
+    "mechanism": "Compares a single test parameter with a request containing both an ordinary value and the test value under the same parameter name.",
+    "limitations": "The check covers the recorded parameter order. Different application frameworks may choose or combine repeated values differently.",
+    "next_step": "Review which repeated value the application uses and ensure the firewall evaluates the same effective input."
+  },
+  "waf.evasion_parser_json_dup.safe": {
+    "name": "Repeated JSON-field test availability",
+    "purpose": "Review whether a firewall and JSON parser might choose different values for a repeated field name.",
+    "mechanism": "The intended comparison needs a JSON body with duplicate fields; the current worker does not send it.",
+    "limitations": "No JSON duplicate-field behavior is observed, and a repeated URL parameter is not an equivalent test.",
+    "next_step": "Arrange a safe JSON request test that records how both the firewall and application select the field value."
+  },
+  "waf.evasion_parser_header_dup.safe": {
+    "name": "Repeated-header test availability",
+    "purpose": "Review whether duplicate request headers could be interpreted differently along the web request path.",
+    "mechanism": "This scenario requires preserving repeated header lines, which the current comparison worker does not implement.",
+    "limitations": "No duplicate-header request is sent by this check and no header-selection difference is confirmed.",
+    "next_step": "Agree on the exact header and expected handling before running a dedicated proxy and server comparison."
+  },
+  "waf.evasion_framing_cl_te.safe": {
+    "name": "Conflicting request-length test availability",
+    "purpose": "Review a planned check of disagreement between two ways of describing a request's length.",
+    "mechanism": "The scenario requires special HTTP framing that the current approved worker does not send.",
+    "limitations": "No conflicting-length request or request-smuggling test runs from this entry.",
+    "next_step": "Arrange a supervised request-framing assessment with explicit proxy and server scope."
+  },
+  "waf.evasion_framing_transfer_coding.safe": {
+    "name": "Unusual transfer-format test availability",
+    "purpose": "Review how different spelling or formatting of transfer information might affect HTTP request parsing.",
+    "mechanism": "The current worker cannot send the unusual transfer-coding format required for this comparison.",
+    "limitations": "No transfer-format ambiguity is introduced, so no parsing or smuggling conclusion is available.",
+    "next_step": "Define the exact transfer-format case with the assessment team and use an approved dedicated test."
+  },
+  "waf.evasion_framing_h2_h1.safe": {
+    "name": "HTTP/2 to HTTP/1 translation test availability",
+    "purpose": "Review whether converting requests between HTTP versions could change their meaning.",
+    "mechanism": "The intended scenario compares how an intermediary translates HTTP/2 requests into HTTP/1; this worker does not perform that comparison.",
+    "limitations": "No cross-version request-framing evidence is collected by this catalog entry.",
+    "next_step": "Plan a reviewed test that includes the actual proxy performing the HTTP-version conversion."
+  },
+  "waf.evasion_framing_line_ending.safe": {
+    "name": "Nonstandard HTTP line-ending test availability",
+    "purpose": "Review whether unusual line endings could make a proxy and server disagree about a request.",
+    "mechanism": "This scenario needs raw request formatting that the current worker cannot send.",
+    "limitations": "No nonstandard line-ending request is transmitted and ordinary HTTP responses do not answer this question.",
+    "next_step": "Use a supervised parser comparison with explicit agreement on the unusual request format."
+  },
+  "waf.evasion_framing_chunk_ext.safe": {
+    "name": "Chunked-request extension test availability",
+    "purpose": "Review handling of extra information attached to chunks in an HTTP request body.",
+    "mechanism": "The cataloged scenario requires specially formatted chunked-body traffic that this worker cannot generate.",
+    "limitations": "No chunk extension is sent, and there is no result about chunked-body parsing differences.",
+    "next_step": "Arrange an approved chunked-request assessment on the proxy and application path in scope."
+  },
+  "waf.evasion_body_gzip.safe": {
+    "name": "Compressed request-body test availability",
+    "purpose": "Review whether the firewall inspects test text after a gzip-compressed request body is unpacked.",
+    "mechanism": "The intended scenario requires a real compressed body; the current worker does not send that body format.",
+    "limitations": "A Base64 string in a URL would not test gzip decompression, so no replacement request is used.",
+    "next_step": "Provide an approved body-receiving endpoint for a dedicated compressed-request comparison."
+  },
+  "waf.evasion_body_nested_encoding.safe": {
+    "name": "Multiply compressed body test availability",
+    "purpose": "Review how several layers of request compression or encoding are handled.",
+    "mechanism": "The scenario calls for an actual body with multiple encoding layers; the current worker cannot deliver it.",
+    "limitations": "No layered compressed body is sent and decompression-depth protection is not measured.",
+    "next_step": "Agree on the exact encoding layers and processing limits for a supervised endpoint test."
+  },
+  "waf.evasion_content_type_binary.safe": {
+    "name": "Binary-labeled request-body test availability",
+    "purpose": "Review whether labeling submitted data as binary changes which inspection rules apply.",
+    "mechanism": "This comparison requires a submitted binary-labeled body that the current request worker cannot send.",
+    "limitations": "No binary body is delivered, and a header-only request would not test body inspection.",
+    "next_step": "Arrange a body comparison on a route approved to accept both relevant content types."
+  },
+  "waf.evasion_struct_type_confusion.safe": {
+    "name": "Changed JSON value-type test availability",
+    "purpose": "Review whether a firewall and application handle a field differently when its type changes.",
+    "mechanism": "The intended scenario changes a JSON value between types, such as text and a list; the current worker does not submit the needed body.",
+    "limitations": "No JSON type conversion is tested or assumed from an ordinary URL response.",
+    "next_step": "Use a reviewed API test that compares the exact accepted field types and application behavior."
+  },
+  "waf.evasion_struct_deep_nesting.safe": {
+    "name": "Nested JSON inspection test availability",
+    "purpose": "Review whether the firewall and application agree on how deeply nested JSON data is processed.",
+    "mechanism": "The scenario needs a JSON body containing nested structures; that body comparison is unavailable in this worker.",
+    "limitations": "No deeply nested document is submitted and parsing-depth limits remain unverified.",
+    "next_step": "Define a safe nesting depth and test route before arranging a dedicated JSON parser assessment."
+  },
+  "waf.evasion_parameter_location.safe": {
+    "name": "Firewall comparison of URL and cookie input",
+    "purpose": "Check whether moving the test text from a URL parameter into a cookie changes its treatment.",
+    "mechanism": "Compares the original URL-parameter request with one carrying the same test text in a named test cookie.",
+    "limitations": "It covers the test cookie only, not account sessions or every input location; the original request must provide a valid blocked comparison.",
+    "next_step": "Confirm whether the application reads that cookie and whether the firewall applies the intended inspection there."
+  },
+  "waf.evasion_method_override.safe": {
+    "name": "HTTP method-override test availability",
+    "purpose": "Review whether a header that asks to change a request's method is trusted consistently.",
+    "mechanism": "The planned scenario requires a method-changing request that the current worker does not send.",
+    "limitations": "No POST or application-changing operation is attempted, and method-override protection is not assessed.",
+    "next_step": "Identify whether the application accepts method overrides and arrange a safe route-specific review."
+  },
+  "waf.evasion_protocol_version.safe": {
+    "name": "HTTP-version comparison availability",
+    "purpose": "Review whether the same input is checked consistently over different HTTP versions.",
+    "mechanism": "This scenario requires equivalent requests over multiple HTTP versions; the current comparison worker does not perform them.",
+    "limitations": "One version's response cannot establish the behavior of another version.",
+    "next_step": "Arrange an approved comparison covering every HTTP version your public endpoint actually accepts."
+  },
+  "waf.evasion_protocol_upgrade.safe": {
+    "name": "Protocol-upgrade inspection test availability",
+    "purpose": "Review whether security checks remain appropriate when HTTP switches to another connection protocol.",
+    "mechanism": "The intended comparison spans an HTTP upgrade; the current worker does not run this inspection scenario.",
+    "limitations": "No WebSocket message or post-upgrade input is tested by this entry.",
+    "next_step": "Review authentication and inspection both before and after the upgrade in a dedicated assessment."
+  },
+  "waf.evasion_benign_padding.safe": {
+    "name": "Firewall inspection after extra leading text",
+    "purpose": "Check whether the firewall still reacts when the test text appears after extra ordinary characters.",
+    "mechanism": "Compares the original test text with a request that adds about 2 KiB of ordinary text before it.",
+    "limitations": "The test covers one amount and position of extra text, not the firewall's maximum inspection size.",
+    "next_step": "Compare the replies and review inspection length and scoring rules if the added text changes the outcome."
+  },
+  "waf.evasion_polyglot_content.safe": {
+    "name": "Multiple-format content test availability",
+    "purpose": "Review whether content that resembles more than one format could be parsed differently by different systems.",
+    "mechanism": "The scenario requires a body-format comparison that the current worker does not deliver.",
+    "limitations": "No multi-format document is submitted or interpreted, so no parser disagreement is demonstrated.",
+    "next_step": "Choose the relevant formats and a safe receiving route for a supervised content-parser comparison."
+  },
+  "waf.evasion_protocol_h3_h1.safe": {
+    "name": "HTTP/3 to HTTP/1 translation test availability",
+    "purpose": "Review whether converting an HTTP/3 request to HTTP/1 changes what the firewall and application inspect.",
+    "mechanism": "The catalog describes a cross-version translation scenario that the current worker cannot send.",
+    "limitations": "No HTTP/3-to-HTTP/1 comparison runs, and an advertised HTTP/3 header is not equivalent evidence.",
+    "next_step": "Include the real HTTP/3 edge and HTTP/1 backend in an approved translation test plan."
+  },
+  "waf.evasion_protocol_qpack_hpack.safe": {
+    "name": "HTTP header-compression translation test availability",
+    "purpose": "Review whether HTTP/3 and HTTP/2 header compression can lead to different effective request headers.",
+    "mechanism": "The planned comparison covers QPACK and HPACK compression; the worker does not produce this exchange.",
+    "limitations": "No compressed-header translation behavior is observed in this check.",
+    "next_step": "Arrange a protocol-specific assessment of the proxy that translates between HTTP/3 and HTTP/2."
+  },
+  "waf.evasion_multipart_charset.safe": {
+    "name": "Uploaded-field character-set test availability",
+    "purpose": "Review whether different text encodings inside uploaded form parts change inspection.",
+    "mechanism": "The scenario needs a multipart body with field-specific character sets, which this worker cannot deliver.",
+    "limitations": "No upload or mixed-character-set body is sent, and no form-field decoding result is available.",
+    "next_step": "Provide a safe upload route and agree on the exact field encodings for a dedicated test."
+  },
+  "waf.evasion_xml_attribute.safe": {
+    "name": "XML attribute inspection test availability",
+    "purpose": "Review whether test text inside an XML attribute is checked the same way as other input.",
+    "mechanism": "The current worker cannot submit the XML body required by this scenario.",
+    "limitations": "No XML attribute is processed and no XML parser or firewall bypass is tested.",
+    "next_step": "Arrange an approved XML endpoint comparison using a harmless, non-expanding document."
+  },
+  "waf.inspection_limit.safe": {
+    "name": "Request-body inspection test availability",
+    "purpose": "Review whether the firewall examines test text near the end of submitted request data.",
+    "mechanism": "The intended scenario requires an approved route for request bodies; the current worker does not send that comparison.",
+    "limitations": "No body inspection depth is measured, and a size label in a header would not provide equivalent evidence.",
+    "next_step": "Provide a safe body-receiving endpoint and a reviewed size plan for a dedicated inspection-depth test."
+  },
+  "waf.evasion_cache_key_mismatch.posture": {
+    "name": "Cache and firewall URL interpretation review",
+    "purpose": "Review whether the cache, firewall and application agree on which request identifies a page.",
+    "mechanism": "Records your declaration about cache keys, URL handling and request routing.",
+    "limitations": "It does not create a cache-poisoning scenario or compare live cache-key interpretation.",
+    "next_step": "Check that security decisions and cache keys use compatible URL and parameter rules."
+  },
+  "waf.evasion_reassembly_differential.posture": {
+    "name": "Split-request interpretation review",
+    "purpose": "Document how network devices and applications agree when rebuilding data split across packets.",
+    "mechanism": "Stores your stated packet-reassembly and request-parsing protections.",
+    "limitations": "No fragmented or segmented test traffic is sent and parsing differences are not observed.",
+    "next_step": "Review consistent reassembly policies at the network firewall, web proxy and server."
+  },
+  "waf.evasion_rule_gap.posture": {
+    "name": "New and uncovered web-threat response review",
+    "purpose": "Review how you handle web threats that are not covered by an existing firewall rule.",
+    "mechanism": "Records your declared rule-maintenance, monitoring and emergency-response process.",
+    "limitations": "This cannot test unknown vulnerabilities or prove that future attacks will be blocked.",
+    "next_step": "Confirm how new rules are evaluated, deployed and monitored when a new threat is reported."
+  },
+  "waf.evasion_second_order.posture": {
+    "name": "Stored-input processing review",
+    "purpose": "Document protection for input that is stored first and processed later.",
+    "mechanism": "Stores your declared validation controls for saved data, background jobs and later page rendering.",
+    "limitations": "It does not save or later execute test input, so delayed effects are not assessed.",
+    "next_step": "Identify where saved user data is reused and verify validation at each later use."
+  },
+  "waf.evasion_encrypted_payload.posture": {
+    "name": "Application-encrypted request inspection review",
+    "purpose": "Review how threats are checked when request data is encrypted in a way the web firewall cannot read.",
+    "mechanism": "Records your statement about application-side validation and inspection responsibility.",
+    "limitations": "No encrypted request is submitted or decrypted, and unreadable content is not treated as safe.",
+    "next_step": "Confirm where data is decrypted and which controls validate it afterward."
+  },
+  "waf.evasion_signed_structured_data.posture": {
+    "name": "Signed data validation review",
+    "purpose": "Document how the application checks signed JSON, tokens or documents after verifying their signature.",
+    "mechanism": "Stores your declared content validation and trust rules for signed data.",
+    "limitations": "The check does not forge a signature or submit a malicious signed document.",
+    "next_step": "Confirm that a valid signature never replaces checks on what the signed data asks the application to do."
+  },
+  "waf.evasion_connection_coalescing.posture": {
+    "name": "Shared connection website-identity review",
+    "purpose": "Review how a shared encrypted connection keeps requests for different website names separate.",
+    "mechanism": "Records your stated host validation and routing rules for reused connections.",
+    "limitations": "It does not switch identities on a live connection or prove separation between hosted applications.",
+    "next_step": "Verify that each request's website name is checked against its connection and permitted backend route."
+  },
+  "waf.evasion_ech_routing_metadata.posture": {
+    "name": "Encrypted website-name routing review",
+    "purpose": "Document how security and routing work when the TLS connection hides part of the requested website name.",
+    "mechanism": "Stores your declared handling of Encrypted ClientHello, or ECH, and the remaining routing information.",
+    "limitations": "No ECH connection is made and hidden name information is not recovered.",
+    "next_step": "Review where website identity is available and how the correct protection policy is selected there."
+  },
+  "l7.compressed_request_decompression.posture": {
+    "name": "Compressed-body processing test availability",
+    "purpose": "Review the protection needed when a small compressed request expands into more data.",
+    "mechanism": "The worker does not send compressed request bodies without an approved business-safe endpoint.",
+    "limitations": "No compressed upload or decompression workload is created, so processing limits remain untested.",
+    "next_step": "Define an approved receiving endpoint and explicit compressed and expanded size limits."
+  },
+  "l7.request_parser_size.posture": {
+    "name": "Response to a longer URL parameter",
+    "purpose": "See how the website handles a request with about 1 KiB of extra URL-parameter data.",
+    "mechanism": "Sends one GET request containing the fixed longer test parameter and records the response.",
+    "limitations": "This samples the transmitted URL size; it does not test a 64-KiB URL limit or any request-body parser.",
+    "next_step": "Review the observed response and confirm maximum URL sizes across the proxy and application."
+  },
+  "waf.http_routing_trust.posture": {
+    "name": "Proxy-supplied routing information review",
+    "purpose": "Review which systems may supply the headers your application trusts for client identity and routing.",
+    "mechanism": "Records your declared trusted-proxy and forwarded-header policy.",
+    "limitations": "It does not inject routing headers or demonstrate a host-header or proxy-trust vulnerability.",
+    "next_step": "Restrict trusted forwarded headers to known proxies and validate the public website name."
+  },
+  "waf.jsonp_css_policy.posture": {
+    "name": "Script callback and stylesheet input review",
+    "purpose": "Document controls for user input that affects script callbacks or generated stylesheets.",
+    "mechanism": "Stores your declared policy for JSONP callbacks and CSS-related output.",
+    "limitations": "No callback or stylesheet injection is attempted and no browser is used to test execution.",
+    "next_step": "Review whether these features are necessary and ensure untrusted input is safely handled in each output context."
+  },
+  "waf.sqli_managed_marker.safe": {
+    "name": "Firewall blocking of database-like test text",
+    "purpose": "Check whether the web firewall blocks harmless text that resembles part of a database command.",
+    "mechanism": "Sends ordinary requests and database-like test text in the approved URL and header positions, then compares their responses.",
+    "limitations": "A completed comparison covers these test strings and paths only; it does not execute database commands or prove resistance to all SQL injection.",
+    "next_step": "Inspect any allowed test request and review the database-injection rules applied to that path."
+  },
+  "waf.xss_managed_marker.safe": {
+    "name": "Firewall blocking of HTML-like test text",
+    "purpose": "Check whether the web firewall rejects harmless HTML-like text used to examine script-injection rules.",
+    "mechanism": "Compares ordinary requests with requests containing an artificial HTML tag in the available input positions.",
+    "limitations": "The tag is not an executing browser script. Blocking it does not prove that all cross-site scripting is prevented.",
+    "next_step": "Review the input positions that were accepted and confirm the application's output encoding is also appropriate."
+  },
+  "waf.path_traversal_managed_marker.safe": {
+    "name": "Firewall blocking of parent-folder test paths",
+    "purpose": "Check whether the firewall rejects test text that resembles a request to move outside an allowed folder.",
+    "mechanism": "Sends a harmless parent-folder-style path string and compares its responses with ordinary requests.",
+    "limitations": "No real sensitive file is requested, and a response alone does not prove the application read a file.",
+    "next_step": "Review file-path validation and the rule handling parent-folder sequences on the sampled route."
+  },
+  "waf.ssti_marker.safe": {
+    "name": "Response to a page-template test label",
+    "purpose": "Observe how the website responds to a label associated with unintended server-side template instructions.",
+    "mechanism": "Sends the harmless template-related label through normal request fields.",
+    "limitations": "No template instructions run, and the firewall rule expected to match this label has not been verified.",
+    "next_step": "Review real template rendering and keep this response separate from proof of template-injection protection."
+  },
+  "waf.scanner_signature_marker.safe": {
+    "name": "Firewall response to a scanner's browser label",
+    "purpose": "Check whether the firewall reacts to a request that identifies itself like a known security scanner.",
+    "mechanism": "Compares a normal browser-style request with a harmless scanner-style User-Agent header, the field describing the client software.",
+    "limitations": "It does not run the scanner or attempt its attacks, and the result covers only the sampled client label.",
+    "next_step": "Review whether scanner-labeled traffic should be blocked, challenged or allowed on the tested URL."
+  },
+  "waf.evasion_double_url.safe": {
+    "name": "Firewall handling of twice-encoded URL text",
+    "purpose": "Check whether encoding the same URL text twice changes the firewall's response.",
+    "mechanism": "Compares the original test text with a version that has two layers of URL encoding, alongside ordinary requests.",
+    "limitations": "Only this encoding combination is covered, and the original test text must be blocked before a bypass comparison is meaningful.",
+    "next_step": "Check how many decoding steps occur at the firewall, proxy and application, then compare the recorded responses."
+  },
+  "waf.evasion_mixed_url.safe": {
+    "name": "Firewall handling of partly encoded URL text",
+    "purpose": "Check whether mixing ordinary characters with URL-encoded characters changes the firewall response.",
+    "mechanism": "Compares the original test text with a version where selected characters use URL encoding.",
+    "limitations": "The result covers the selected character substitutions, not every possible mixture or application decoder.",
+    "next_step": "Review consistent URL decoding along the request path if the partly encoded version receives a different response."
+  },
+  "waf.evasion_case_fold.safe": {
+    "name": "Firewall handling of changed letter case",
+    "purpose": "Check whether changing uppercase and lowercase letters affects recognition of the test text.",
+    "mechanism": "Compares the original test text with a version using a different letter case and checks ordinary requests around it.",
+    "limitations": "Case sensitivity depends on the field and application; this check only covers the specific test text sent.",
+    "next_step": "Compare the two responses and ensure case handling matches the input's meaning in the application."
+  },
+  "waf.http_method_policy_enforced.safe": {
+    "name": "Actual HTTP request-method enforcement",
+    "purpose": "Check whether the website accepts or rejects the specific HTTP methods selected for this policy check.",
+    "mechanism": "Compares ordinary GET responses with bodyless TRACE and a nonstandard test-method request.",
+    "limitations": "This can assess the sampled method policy, not application actions, attack resistance or DDoS capacity.",
+    "next_step": "Compare the per-method replies with your approved method policy and restrict methods the application does not need."
+  },
+  "waf.rate_limit_canary.validation": {
+    "name": "Request limiting on your dedicated test URL",
+    "purpose": "Verify a deliberately low request limit on the test URL you declared for this purpose.",
+    "mechanism": "Uses the declared threshold and short request sequence to look for the expected block or challenge while checking normal responses.",
+    "limitations": "The result covers this test URL, source and threshold; it does not establish production-user quotas or attack capacity.",
+    "next_step": "Compare the response sequence with the declared limit and review the matching rate-limit rule if enforcement differs."
+  },
+  "waf.body_json_marker.soc": {
+    "name": "Plan a firewall test for JSON request data",
+    "purpose": "Arrange a controlled check of test text inside JSON, a common format for API request data.",
+    "mechanism": "Requests approval for the exact JSON route and payload before any separate managed test.",
+    "limitations": "This entry does not submit JSON request bodies or confirm that the firewall inspects them.",
+    "next_step": "Provide a non-production or otherwise approved route that can receive test data without changing business records."
+  },
+  "waf.body_form_marker.soc": {
+    "name": "Plan a firewall test for form submissions",
+    "purpose": "Prepare an approved comparison of firewall responses to test text in submitted form fields.",
+    "mechanism": "Records the form route, expected firewall action and permission needed for a separate exercise.",
+    "limitations": "Selecting this request does not submit a form or create an account, order or other business action.",
+    "next_step": "Identify a safe test form and document which fields can be submitted without side effects."
+  },
+  "waf.body_multipart_marker.soc": {
+    "name": "Plan a firewall test for uploaded form data",
+    "purpose": "Arrange a reviewed check of data sent using the same request format as file uploads.",
+    "mechanism": "Collects the approved multipart request scope and expected firewall response.",
+    "limitations": "No upload is performed here, and the request does not establish whether file contents are inspected.",
+    "next_step": "Supply a safe upload endpoint, harmless sample file and an agreed cleanup procedure."
+  },
+  "waf.body_inspection_limit.soc": {
+    "name": "Plan a request-body inspection limit test",
+    "purpose": "Prepare a controlled check of how much submitted data your firewall examines.",
+    "mechanism": "Requests review of body sizes, test text positions and a route approved to receive those bodies.",
+    "limitations": "This catalog action does not send large bodies or measure the firewall's inspection depth.",
+    "next_step": "Agree on exact size limits and a test route that will not process the sample as a real transaction."
+  },
+  "waf.response_dlp_canary.soc": {
+    "name": "Plan a test for sensitive-data filtering",
+    "purpose": "Arrange a reviewed check of whether a harmless stand-in for sensitive data is detected in a web response.",
+    "mechanism": "Records the test value and approved response-producing endpoint for a separately managed exercise.",
+    "limitations": "This entry does not expose real confidential data or establish that response filtering is working.",
+    "next_step": "Use a clearly artificial test value and agree on the alert or filtering result expected from your provider."
+  },
+  "nfw.declared_deny_tcp.safe": {
+    "name": "TCP connection against your network deny policy",
+    "purpose": "Detect an accepted TCP connection that contradicts a port rule you declared as denied.",
+    "mechanism": "Selects eligible denied TCP ports from your target's network policy and records connection outcomes.",
+    "limitations": "Only a successful connection on a matching denied port shows a violation; silence is not a protection pass.",
+    "next_step": "Review the specific matching deny rule, destination port and source represented by the successful connection."
+  },
+  "nfw.declared_deny_udp.safe": {
+    "name": "UDP reply against your network deny policy",
+    "purpose": "Look for a matching UDP reply from a service your declared network policy says to block.",
+    "mechanism": "Sends the approved small sample to eligible denied UDP ports and listens for matching responses.",
+    "limitations": "An unanswered UDP sample is uncertain, and the result applies only to the protocol and ports actually sampled.",
+    "next_step": "Review a matching reply against the declared UDP deny rule and remove unintended public access."
+  },
+  "nfw.management_port_exposure.safe": {
+    "name": "Public administration and database connections",
+    "purpose": "Find reachable service ports commonly used for administration, databases and cluster management.",
+    "mechanism": "Attempts the fixed list of administrative and data-service ports within the check's connection budget.",
+    "limitations": "A completed connection does not identify the software or prove that a login is possible.",
+    "next_step": "Compare each reachable port with your intended management access and restrict unnecessary public listeners."
+  },
+  "nfw.ipv6_parity.safe": {
+    "name": "Compare IPv4 and IPv6 connection access",
+    "purpose": "Look for differences in how your service accepts connections over IPv4 and IPv6.",
+    "mechanism": "Attempts the applicable address-family connections and records each result separately.",
+    "limitations": "A difference may reflect routing or service availability, and a failed attempt cannot prove that firewall policies match.",
+    "next_step": "Compare the recorded address-family results with the access expected on both network paths."
+  },
+  "nfw.connection_limit.safe": {
+    "name": "Sample your declared connection limit",
+    "purpose": "Check a small set of connection attempts against the per-source limit declared for a service.",
+    "mechanism": "Uses the declared port and connection limit within the fixed connection budget and records acceptance or refusal.",
+    "limitations": "The check cannot measure limits above its budget or establish behavior across many source addresses.",
+    "next_step": "Compare the actual accepted connections with the declared limit and review source-specific connection tracking."
+  },
+  "nfw.origin_lockdown.safe": {
+    "name": "Direct access to your approved origin server",
+    "purpose": "Check whether the server behind your CDN answers directly when your policy says direct access should be blocked.",
+    "mechanism": "Uses the single verified server association and the approved website name for one direct request.",
+    "limitations": "A direct response is not confirmed application identity; no response cannot prove that only the CDN can reach the server.",
+    "next_step": "Review the verified server association and investigate any response that contradicts the declared direct-access policy."
+  },
+  "nfw.perspective_allowlist.safe": {
+    "name": "Connection from the selected probe location",
+    "purpose": "Compare a service's public access with the probe locations you declared as allowed or denied.",
+    "mechanism": "Makes the approved TCP sample from the authenticated worker location and records its connection result.",
+    "limitations": "One worker location cannot establish the full allowlist. Unauthenticated location labels cannot prove a policy violation.",
+    "next_step": "Review the actual authenticated source and compare its result with that location's declared access rule."
+  },
+  "origin.identity_pair.head.v1": {
+    "name": "Compare website and direct-server headers",
+    "purpose": "Compare the public website response with one verified direct-server response using header-only requests.",
+    "mechanism": "After reviewing the exact scope, sends one HEAD request through the public route and one to the approved server address.",
+    "limitations": "Matching headers or certificates alone do not prove both routes serve the same application, and no page content is downloaded.",
+    "next_step": "Inspect both recorded routes and their authorization before deciding whether more application-identity evidence is needed."
+  },
+  "origin.identity_pair.get.v1": {
+    "name": "Compare website and direct-server page samples",
+    "purpose": "Compare small page samples from the public website and one verified server behind it.",
+    "mechanism": "After scope review, sends one GET request on each approved route and records small page samples.",
+    "limitations": "Similar content alone is not confirmed application identity, a firewall-rule bypass or a capacity result.",
+    "next_step": "Compare the two samples and any approved identity evidence while keeping the public and direct routes distinct."
+  }
 };
-const PRESENTATION = Object.freeze(Object.fromEntries(Object.entries(ENTRIES).map(([id, [name, index]]) => {
-  const template = TEMPLATES[index];
-  return [id, Object.freeze({ name, purpose: name + ': ' + template.mechanism + '.', ...template })];
-})));
+const PRESENTATION = Object.freeze(Object.fromEntries(Object.entries(ENTRIES).map(([id, entry]) => [id, Object.freeze(entry)])));
 export const CHECK_PRESENTATION_IDS = Object.freeze(Object.keys(PRESENTATION));
-const UNKNOWN = Object.freeze({
-  name: 'Unknown check', purpose: 'This check is not in the current presentation registry.',
-  limitations: 'No mechanism or supported conclusion is established by an unknown ID.',
-  next_step: 'Review the exact check ID and current catalog.', mechanism: 'Unknown',
-});
+const UNKNOWN = Object.freeze({ name: 'Unknown check', purpose: 'This check is not in the current catalog.', mechanism: 'No current check description is available.', limitations: 'An unknown check ID does not establish what was tested.', next_step: 'Check the ID and load the current check catalog.' });
 
-/** Stable metadata, independent of mutable/caller-supplied check display fields. */
+/** Resolve by stable ID; never use caller-supplied descriptions as product copy. */
 export function checkPresentation(checkOrId) {
   const id = typeof checkOrId === 'string' ? checkOrId : checkOrId?.check_id;
   return Object.hasOwn(PRESENTATION, id) ? PRESENTATION[id] : UNKNOWN;
+}
+
+const LEGACY_EXPLANATIONS = Object.freeze({
+  'The baseline harmless marker was allowed. Requests were sent, but evasion or inspection-limit resistance cannot be assessed without a blocked baseline.': 'Your site allowed the original test text. With no blocked request to compare against, this run cannot tell whether changing the text avoids a firewall rule.',
+  'A complete blocked-baseline comparison was not recorded. Evasion or inspection-limit resistance remains unassessed.': 'The comparison is incomplete. This run needs an ordinary request, a blocked original test request and the changed test request before it can compare firewall behavior.',
+});
+
+/** Translate known historical wording for display without changing stored evidence. */
+export function plainCheckExplanation(value) {
+  const text = typeof value === 'string' ? value : '';
+  return LEGACY_EXPLANATIONS[text] ?? text;
 }

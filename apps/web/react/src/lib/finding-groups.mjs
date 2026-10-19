@@ -1,3 +1,4 @@
+import { checkPresentation } from './check-presentation.mjs';
 /**
  * Group findings that describe the same alert, so the Refined findings view can show
  * "one problem, N affected assets" instead of N near-identical rows.
@@ -441,7 +442,7 @@ function buildGroup(key, entries) {
   const lead = ranked[0]?.facts;
   const checkId = lead?.checkId ?? '';
   const check = lead?.check ?? null;
-  const checkLabel = checkId ? plainCheckName(pick(check ?? {}, ['name', 'title']) || checkId) : '';
+  const checkLabel = checkId ? checkPresentation(checkId).name : '';
   const identity = lead?.identity ?? { source: 'none', title: '' };
   const verdict = lead?.verdict ?? '';
 
@@ -543,7 +544,7 @@ function buildGroup(key, entries) {
     issueSource: identity.source,
     checkId,
     checkLabel,
-    checkDescription: pick(check ?? {}, ['description']),
+    checkDescription: checkId ? checkPresentation(checkId).purpose : '',
     vectorFamily: ranked[0] ? vectorFamilyOf(ranked[0].record, check) : '',
     verdict,
     verdictLabel: verdict ? plainVerdictLabel(verdict) : 'No conclusion yet',

@@ -1,3 +1,4 @@
+import { checkPresentation } from '../../lib/check-presentation.mjs';
 import { useEffect, useId, useMemo, useRef, useState, type FormEvent, type HTMLAttributes, type ReactNode } from 'react';
 import {
   Archive,
@@ -177,7 +178,7 @@ export function scheduleCheck(policy: DataItem, checks: DataItem[]) {
     checkId,
     record: catalog ?? (Object.keys(embedded).length ? embedded : null),
     inCatalog: Boolean(catalog),
-    name: plainCheckName(str(catalog ?? embedded, ['name', 'title'], checkId || 'Check not recorded')) as string
+    name: checkPresentation(checkId).name
   };
 }
 
@@ -909,7 +910,7 @@ function CreateSchedulePanel({
               <ul className="rf-review-list full" aria-label="Schedules to create">
                 {reviewRows.map((row) => (
                   <li key={row.targetId}>
-                    <strong>{plainCheckName(checkName || form.checkId)}</strong>
+                    <strong>{checkPresentation(form.checkId).name}</strong>
                     <span> on </span>
                     <strong className="rf-mono">{row.targetLabel || 'target not selected'}</strong>
                   </li>

@@ -10,114 +10,81 @@ import { pinnedFetch, pinnedHttp2Request } from '../../src/lib/pinnedHttpRequest
 const item = (extra = {}) => ({ sequence: 1, at: new Date().toISOString(), stage: 'request_started',
   capture_version: HTTP_CAPTURE_VERSION, exchange_id: 'exchange_1', attempt_id: 'attempt_1', operation_id: 'operation_1', ...extra });
 
-test('HTTP capture preserves duplicate header names while withholding credentials and unapproved values', () => {
-  const entries = captureHttpHeaders(['Content-Type', 'text/plain', 'Vary', 'Accept', 'Vary', 'Accept-Encoding',
-    'Authorization', 'Bearer private-value', 'Proxy-Authorization', 'private-proxy', 'Set-Cookie', 'session=private',
-    'X-Customer', 'private-customer', 'Location', '/login?session=private-session&next=private-path#secret']);
+test('HTTP capture preserves every header value and duplicate entry', () => {
+  const entries = captureHttpHeaders(['Content-Type', 'text/plain; charset=UTF-8', 'Vary', 'Accept', 'Vary', 'Accept-Encoding',
+    'Authorization', 'Bearer private-value', 'Set-Cookie', 'session=private', 'X-Customer', 'private-customer',
+    'Date', 'Sun, 18 Oct 2026 12:00:00 GMT', 'Location', '/login?session=private-session&next=private-path#fragment']);
   assert.deepEqual(entries.slice(1, 3), [{ name: 'vary', value: 'Accept' }, { name: 'vary', value: 'Accept-Encoding' }]);
-  assert.equal(entries.find((entry) => entry.name === 'authorization').value, '[redacted]');
-  assert.equal(entries.find((entry) => entry.name === 'location').value, '/login?session=%5Bredacted%5D&next=%5Bredacted%5D');
-  assert.doesNotMatch(JSON.stringify(entries), /private-|#secret/);
+  assert.equal(entries.find((entry) => entry.name === 'authorization').value, 'Bearer private-value');
+  assert.equal(entries.find((entry) => entry.name === 'set-cookie').value, 'session=private');
+  assert.equal(entries.find((entry) => entry.name === 'x-customer').value, 'private-customer');
+  assert.equal(entries.find((entry) => entry.name === 'location').value, '/login?session=private-session&next=private-path#fragment');
+  assert.doesNotMatch(JSON.stringify(entries), /\[redacted\]/);
+  assert.equal(captureHttpHeaders(Object.fromEntries(Array.from({ length: 100 }, (_, i) => [`x-header-${i}`, `value-${i}`]))).length, 100);
 });
 
-test('private header values reflected into public response headers are scrubbed before capture', () => {
-  for (const headers of [
-    { 'set-cookie': ['session=private-response-cookie; HttpOnly'], server: 'private-response-cookie', location: '/private-response-cookie' },
-    ['Set-Cookie', 'session=private-response-cookie; HttpOnly', 'Server', 'private-response-cookie', 'Location', '/private-response-cookie'],
-    [{ name: 'Set-Cookie', value: 'session=private-response-cookie; HttpOnly' }, { name: 'Server', value: 'private-response-cookie' }, { name: 'Location', value: '/private-response-cookie' }],
-  ]) {
-    const captured = captureHttpHeaders(headers);
-    assert.equal(captured.find((entry) => entry.name === 'server').value, '[redacted]');
-    assert.equal(captured.find((entry) => entry.name === 'location').value, '/[redacted]');
-    assert.doesNotMatch(JSON.stringify(captured), /private-response-cookie/);
-  }
-});
-
-test('only restricted inert AstraNull marker header values are inspectable', () => {
-  const headers = captureHttpHeaders({ 'x-astranull-marker': 'astranull-method-policy-probe-TRACK-inert' });
-  assert.equal(headers[0].value, 'astranull-method-policy-probe-TRACK-inert');
-  assert.equal(captureHttpHeaders({ 'x-astranull-marker': 'private-customer-token' })[0].value, '[redacted]');
-  assert.equal(captureHttpHeaders({ 'x-astranull-marker': 'astranull-authorization=secret-inert' })[0].value, '[redacted]');
-});
-
-test('captured URLs withhold credentials and query values, retain encoded path semantics and duplicate keys', () => {
-  assert.equal(captureUrl('https://user:private@owned.test/a%2Fb?marker=one&marker=two#private'),
-    'https://owned.test/a%2Fb?marker=%5Bredacted%5D&marker=%5Bredacted%5D');
-  assert.equal(captureUrl('/reset/private-token?token=private', { relative: true }), '/reset/[redacted]?token=%5Bredacted%5D');
+test('captured URLs retain paths, credentials, query values and duplicate keys', () => {
+  assert.equal(captureUrl('https://user:private@owned.test/a%2Fb?marker=one&marker=two#fragment'),
+    'https://user:private@owned.test/a%2Fb?marker=one&marker=two');
+  assert.equal(captureUrl('/reset/private-token?token=private', { relative: true }), '/reset/private-token?token=private');
   assert.equal(captureUrl('javascript:alert(1)', { relative: true }), null);
-  assert.equal(captureUrl('https://owned.test/private-marker', { sensitiveValues: ['private-marker'] }), 'https://owned.test/[redacted]');
+  assert.equal(captureUrl('https://owned.test/private-marker', { sensitiveValues: ['private-marker'] }), 'https://owned.test/private-marker');
 });
 
-test('strict additive capture fields are normalized again at ingestion and unknown versions rejected', () => {
+test('strict capture fields preserve values at ingestion and still reject malformed metadata', () => {
   const normalized = normalizeProbeActivityItem(item({ request_headers: [{ name: 'Cookie', value: 'private' }], http_version: '2.0' }));
-  assert.deepEqual(normalized.request_headers, [{ name: 'cookie', value: '[redacted]' }]);
+  assert.deepEqual(normalized.request_headers, [{ name: 'cookie', value: 'private' }]);
   assert.equal(normalized.http_version, '2.0');
   assert.equal(normalizeProbeActivityItem(item({ capture_version: 'future' })), null);
   assert.equal(normalizeProbeActivityItem(item({ request_headers: [{ name: 'x', value: 'v', raw: 'private' }] })), null);
-  assert.equal(normalizeProbeActivityItem(item({ request_headers: Array.from({ length: 17 }, () => ({ name: 'host', value: 'owned.test' })) })), null);
+  assert.equal(normalizeProbeActivityItem(item({ request_headers: Array.from({ length: 2049 }, () => ({ name: 'host', value: 'owned.test' })) })), null);
   assert.equal(normalizeProbeActivityItem(item({ exchange_id: 'spaces are invalid' })), null);
   assert.equal(normalizeProbeActivityItem(item({ http_version: 'https' })), null);
   assert.equal(normalizeProbeActivityItem(item({ capture_version: undefined, request_headers: [] })), null);
 });
 
-test('arbitrary base64 capture cannot bypass ingestion redaction', () => {
-  const normalized = normalizeProbeActivityItem(item({ response_payload_encoding: 'base64', response_payload_preview: Buffer.from('private').toString('base64') }));
-  assert.equal(normalized.response_payload_encoding, 'redacted');
-  assert.equal(normalized.response_payload_preview, '[Binary payload withheld]');
-});
-
-test('versioned truncated previews are withheld again at ingestion while legacy previews retain their contract', () => {
+test('binary and partial payloads retain their bytes and explicit capture state', () => {
+  const encoded = Buffer.from([0, 1, 2, 255]).toString('base64');
+  const binary = normalizeProbeActivityItem(item({ response_payload_encoding: 'base64', response_payload_preview: encoded }));
+  assert.equal(binary.response_payload_encoding, 'base64');
+  assert.equal(binary.response_payload_preview, encoded);
   for (const side of ['request', 'response']) {
     const fields = { [`${side}_payload_preview`]: 'private-incomplete-prefix', [`${side}_payload_encoding`]: 'utf8', [`${side}_payload_truncated`]: true };
     const normalized = normalizeProbeActivityItem(item(fields));
-    assert.equal(normalized[`${side}_payload_preview`], '[Partial payload withheld]');
-    assert.equal(normalized[`${side}_payload_encoding`], 'redacted');
-    assert.equal(normalizeProbeActivityItem({ sequence: 1, at: new Date().toISOString(), stage: 'response_payload', ...fields })[`${side}_payload_preview`], 'private-incomplete-prefix');
+    assert.equal(normalized[`${side}_payload_preview`], 'private-incomplete-prefix');
+    assert.equal(normalized[`${side}_payload_truncated`], true);
   }
 });
 
-test('versioned partial response captures do not leak secret prefixes across chunk boundaries', () => {
+test('response capture preserves text across chunks including supplied sensitive values', () => {
   const events = [];
   const capture = captureResponsePayload({ onProbeActivity: (event) => events.push(event), activitySensitiveValues: ['customer-private'] },
     { capture_version: HTTP_CAPTURE_VERSION, exchange_id: 'exchange_1' }, 'text/plain');
   capture.chunk(Buffer.from('customer-'));
-  assert.equal(events[0].response_payload_preview, '[Partial payload withheld]');
+  assert.equal(events[0].response_payload_preview, 'customer-');
   capture.chunk(Buffer.from('private')); capture.complete();
-  assert.equal(events[1].response_payload_preview, '[redacted]');
-  assert.equal(events[1].response_payload_truncated, false);
-  assert.doesNotMatch(JSON.stringify(events), /customer-/);
+  assert.equal(events.at(-1).response_payload_preview, 'customer-private');
+  assert.equal(events.at(-1).response_payload_truncated, false);
 });
 
-test('versioned truncated or binary response samples are withheld rather than encoded as supposedly safe text', () => {
-  for (const [bytes, type] of [[Buffer.alloc(3000, 120), 'text/plain'], [Buffer.from([0, 1, 2]), 'application/grpc']]) {
-    const events = [];
-    const capture = captureResponsePayload({ onProbeActivity: (event) => events.push(event) }, { capture_version: HTTP_CAPTURE_VERSION }, type);
-    capture.chunk(bytes); capture.complete();
-    assert.equal(events.at(-1).response_payload_encoding, 'redacted');
-    assert.match(events.at(-1).response_payload_preview, /withheld/);
-    assert.equal(events.at(-1).response_bytes_observed, bytes.length);
-  }
-});
-
-test('versioned structured bodies without a safe parser are withheld rather than leaking form or XML values', () => {
+test('HTML, XML and multipart bodies are preserved as inert text through capture and ingestion', () => {
   for (const [body, type] of [
-    ['<form><input name="csrf" value="private-form-value"></form>', 'text/html'],
+    ['<form><input name="csrf" value="private-form-value"></form><script>alert(1)</script>', 'text/html'],
     ['<response><token>private-xml-value</token></response>', 'application/xml'],
-    ['--boundary\r\nContent-Disposition: form-data; name="password"\r\n\r\nprivate-multipart-value\r\n--boundary--', 'multipart/form-data'],
+    ['--boundary\r\nContent-Disposition: form-data; name="password"\r\n\r\nprivate-multipart-value\r\n--boundary--', 'multipart/form-data; boundary=boundary'],
   ]) {
     const events = [];
     const capture = captureResponsePayload({ onProbeActivity: (event) => events.push(event) }, { capture_version: HTTP_CAPTURE_VERSION }, type);
     capture.chunk(Buffer.from(body)); capture.complete();
-    assert.equal(events.at(-1).response_payload_encoding, 'redacted');
-    assert.match(events.at(-1).response_payload_preview, /withheld/);
-    assert.doesNotMatch(JSON.stringify(events), /private-(?:form|xml|multipart)-value/);
+    assert.equal(events.at(-1).response_payload_encoding, 'utf8');
+    assert.equal(events.at(-1).response_payload_preview, body);
     const normalized = normalizeProbeActivityItem(item({ response_content_type: type, response_payload_preview: body, response_payload_encoding: 'utf8' }));
-    assert.equal(normalized.response_payload_encoding, 'redacted');
-    assert.match(normalized.response_payload_preview, /withheld/);
+    assert.equal(normalized.response_payload_preview, body);
+    assert.equal(normalized.response_payload_encoding, 'utf8');
   }
 });
 
-test('projection does not apply branding substitutions to immutable sanitized URL, headers or payload text', () => {
+test('projection does not apply branding substitutions to immutable recorded URL, headers or payload text', () => {
   const at = new Date().toISOString();
   const run = { id: 'run_capture', tenant_id: 'tenant_1', check_id: 'check_1', status: 'verdicted' };
   const event = { id: 'evt_1', tenant_id: run.tenant_id, test_run_id: run.id, signal_type: 'probe_activity', producer_kind: 'signed_probe',
@@ -142,7 +109,7 @@ test('activity preserves legacy total while exposing distinct nullable logical o
   assert.equal(legacy.accounting.destination_vetting_resolver_attempts, null);
 });
 
-test('HTTP/2 response capture scrubs reflected header secrets from headers, MIME metadata and consumed bodies', async () => {
+test('HTTP/2 response capture preserves header values, MIME parameters and consumed bodies', async () => {
   const events = [];
   const session = new EventEmitter();
   const stream = new EventEmitter();
@@ -168,12 +135,13 @@ test('HTTP/2 response capture scrubs reflected header secrets from headers, MIME
   assert.equal(deliveredHeaders.authorization, 'Bearer private');
   assert.equal(deliveredBody.toString(), 'inert-body');
   assert.equal(response.responseBody.toString(), 'reply private-response-cookie');
-  assert.equal(events.find((event) => event.stage === 'response_received').response_content_type, 'text/plain');
-  assert.equal(events.at(-1).response_payload_preview, 'reply [redacted]');
-  assert.doesNotMatch(JSON.stringify(events), /private-response-cookie|Bearer private/);
+  assert.equal(events.find((event) => event.stage === 'response_received').response_content_type, 'text/plain; charset=private-response-cookie');
+  assert.equal(events.at(-1).response_payload_preview, 'reply private-response-cookie');
+  assert.match(JSON.stringify(events), /private-response-cookie/);
+  assert.match(JSON.stringify(events), /Bearer private/);
 });
 
-test('structured request capture withholds multipart without changing the delivered body', async () => {
+test('structured request capture preserves the exact delivered multipart body', async () => {
   const body = '--boundary\r\nContent-Disposition: form-data; name="password"\r\n\r\nprivate-form-value\r\n--boundary--';
   let received = '';
   const server = http.createServer(async (req, res) => {
@@ -188,9 +156,9 @@ test('structured request capture withholds multipart without changing the delive
     { destinationPolicy: { allowLoopback: true, allowPrivate: false }, onProbeActivity: (event) => events.push(event) });
     await new Response(response.body).text();
     assert.equal(received, body);
-    assert.equal(events[0].request_payload_preview, '[Structured payload withheld]');
-    assert.equal(events[0].request_payload_encoding, 'redacted');
-    assert.doesNotMatch(JSON.stringify(events), /private-form-value/);
+    assert.equal(events[0].request_payload_preview, body);
+    assert.equal(events[0].request_payload_encoding, 'utf8');
+    assert.match(JSON.stringify(events), /private-form-value/);
   } finally { server.closeAllConnections(); await new Promise((resolve) => server.close(resolve)); }
 });
 
@@ -221,12 +189,13 @@ test('actual concurrent same-URL transports have separate identities and do not 
       const exchange = events.filter((event) => event.exchange_id === start.exchange_id);
       assert.deepEqual(exchange.map((event) => event.stage), ['request_started', 'response_received', 'response_payload', 'response_body_completed']);
       assert.equal(exchange[1].http_version, '1.1');
-      assert.equal(exchange[1].response_headers.find((header) => header.name === 'set-cookie').value, '[redacted]');
-      assert.equal(exchange[1].response_headers.find((header) => header.name === 'server').value, '[redacted]');
-      assert.equal(exchange[1].response_headers.find((header) => header.name === 'content-type').value, 'text/plain');
-      assert.equal(exchange[1].response_content_type, 'text/plain');
-      assert.equal(exchange.at(-1).response_payload_preview, 'recorded response [redacted]');
+      assert.equal(exchange[1].response_headers.find((header) => header.name === 'set-cookie').value, 'session=private-response-cookie');
+      assert.equal(exchange[1].response_headers.find((header) => header.name === 'server').value, 'private-response-cookie');
+      assert.equal(exchange[1].response_headers.find((header) => header.name === 'content-type').value, 'text/plain; charset=private-response-cookie');
+      assert.equal(exchange[1].response_content_type, 'text/plain; charset=private-response-cookie');
+      assert.equal(exchange.at(-1).response_payload_preview, 'recorded response private-response-cookie');
     }
-    assert.doesNotMatch(JSON.stringify(events), /Bearer private|private-response-cookie|session=private|token=private/);
+    assert.match(JSON.stringify(events), /Bearer private/);
+    assert.match(JSON.stringify(events), /token=private/);
   } finally { server.closeAllConnections(); await new Promise((resolve) => server.close(resolve)); }
 });

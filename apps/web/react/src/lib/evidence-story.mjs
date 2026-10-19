@@ -1,3 +1,4 @@
+import { plainCheckExplanation } from './check-presentation.mjs';
 // Family copy only; every proof fact comes from the recorded model passed in.
 
 const PASS = new Set(['pass', 'passed', 'protected', 'blocked', 'block_at_edge', 'allowed_as_expected', 'edge_protected']);
@@ -131,7 +132,7 @@ export function evidenceStory(input = {}) {
   const copy = family ? FAMILY_COPY[family] : null;
   const tone = storyTone(input.outcome ?? '', input.notTested === true);
   const observationOnly = input.observationOnly === true && (tone === 'gap' || tone === 'pass');
-  const explanation = text(input.explanation);
+  const explanation = plainCheckExplanation(input.explanation);
   const remediation = text(input.remediation);
   let headline;
   if (tone === 'not_tested') headline = 'This check did not produce a result for this target.';

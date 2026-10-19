@@ -4,14 +4,14 @@
  *
  * Evidence over assertion: a check only counts toward efficacy when it produced a definitive
  * external-probe verdict. Transport-only (E2) checks are shown as observations and never score;
- * declaration-only (E1) checks perform no network I/O and are not part of "run all".
+ * declaration-only (E1) checks perform no network I/O; server-supplied assessments may include their markers.
  */
 import { checkExclusionReason, checkSupportsTarget } from './check-picker.mjs';
 import { checkPrerequisite, needsTargetAnswer } from './control-declarations.mjs';
 import { MAX_SCAN_CHECKS } from './validation-scan.mjs';
 import { requiredInputMissing } from './missing-input.mjs';
 import { plainVerdictShortLabel } from './plain-language.mjs';
-import { checkPresentation } from '../../../../../src/lib/checkPresentation.mjs';
+import { checkPresentation, plainCheckExplanation } from '../../../../../src/lib/checkPresentation.mjs';
 import { OBSERVATION_ONLY_PROBE_KINDS, isVerdictCapableProbeKind } from '../../../../../src/lib/probeEvidenceTiers.mjs';
 
 export const EDGE_DETECTION_CHECK_ID = 'waf.fingerprint.safe';
@@ -128,6 +128,12 @@ function serverSuppliedRunnable(check, context) {
   return context?.serverSuppliesInput === true && serverRunnableAnswer(check, context) === true;
 }
 
+function executionExclusion(check, context) {
+  // Server-supplied runnability mirrors the existing server exception; static catalog flags stay intact.
+  const reason = checkExclusionReason(check);
+  return serverSuppliedRunnable(check, context) && ['soc_gated', 'not_customer_runnable'].includes(reason) ? null : reason;
+}
+
 // Older/full catalog projections may omit the server's input flag. Known setup-input
 // protocols still cannot enter an automatic assessment or infer authorization from metadata.
 function requiresDedicatedCheckInput(check, context = null) {
@@ -151,14 +157,14 @@ export function withTargetRunnableChecks(checks, targetCatalog, { serverSupplies
   return extra.length ? [...base, ...extra] : base;
 }
 
-/** Customer-runnable network checks, including observations, available individually. */
+/** Individually runnable checks; server-supplied input also follows the server's declaration/SOC eligibility. */
 export function individualChecks(checks, target, context = null) {
   const eligible = list(checks).filter((check) => text(check?.check_id)
-    && !checkExclusionReason(check)
+    && !executionExclusion(check, context)
     && checkSupportsTarget(check, target)
     && !requiresDedicatedCheckInput(check, context)
-    && check.probe_profile?.kind !== 'ops_readiness'
-    && !isDeclarationOnlyCheck(check));
+    && (serverSuppliedRunnable(check, context)
+      || (check.probe_profile?.kind !== 'ops_readiness' && !isDeclarationOnlyCheck(check))));
   return [...new Map(eligible.map((check) => [text(check.check_id), check])).values()];
 }
 
@@ -166,7 +172,7 @@ function prerequisitesMet(check, target, context) {
   return !context || checkPrerequisite(check, { ...context, target }).state === 'ready';
 }
 
-/** Complete bounded network assessment; with a prerequisite context, checks awaiting a port or declaration are left out. */
+/** Complete assessment; server-supplied assessments may also evaluate declaration and request markers. */
 export function assessmentChecks(checks, target, context = null) {
   return individualChecks(checks, target, context)
     .filter((check) => prerequisitesMet(check, target, context))
@@ -180,24 +186,24 @@ export function assessmentChecks(checks, target, context = null) {
 export function targetCheckRequirement(check, target, context = null) {
   const prerequisite = checkPrerequisite(check, { ...(context ?? {}), target });
   if (prerequisite.reason || ['needs_port', 'needs_deny_or_port', 'needs_perspectives', 'checking'].includes(prerequisite.state)) return prerequisite.detail;
-  const restriction = checkExclusionReason(check);
+  const restriction = executionExclusion(check, context);
   if (restriction === 'soc_gated') return 'Requires SOC approval and a governed execution workflow.';
   if (restriction) return 'Requires a dedicated workflow; direct customer execution is unavailable.';
   if (!checkSupportsTarget(check, target)) return `Declare a compatible endpoint (${list(check.supported_targets).join(', ')}).`;
   if (check.probe_profile?.kind === 'alert_webhook_ping' && !serverSuppliedRunnable(check, context)) return 'Requires approved signed alert-webhook scope and its dedicated workflow; no callback is inferred from catalog metadata.';
   if (requiresDedicatedCheckInput(check, context)) return 'Declare the origin binding or application probe path before using its dedicated workflow.';
-  if (isDeclarationOnlyCheck(check) || check.probe_profile?.kind === 'ops_readiness') return 'Declaration or operational evidence only; sends no external traffic.';
+  if (!serverSuppliedRunnable(check, context) && (isDeclarationOnlyCheck(check) || check.probe_profile?.kind === 'ops_readiness')) return 'Declaration or operational evidence only; sends no external traffic.';
   return '';
 }
 
 /** Catalog visibility is not execution eligibility; input-complete answers do not waive support or target restrictions. */
 export function targetCheckAvailability(check, target, context = null) {
   const unavailable = (label, detail) => ({ state: 'unavailable', label, detail, missing: [], reason: '', cta: '', section: '' });
-  const exclusion = checkExclusionReason(check);
+  const exclusion = executionExclusion(check, context);
   if (exclusion === 'soc_gated' || exclusion === 'not_customer_runnable') return checkPrerequisite(check, context ?? {});
   if (exclusion) return unavailable(exclusion === 'monitor_only' ? 'Monitor only' : 'Execution unavailable', 'This definition is visible for reference, but direct customer execution is unavailable.');
   if (!checkSupportsTarget(check, target)) return unavailable('Different target type', `Declare a compatible endpoint (${list(check.supported_targets).join(', ')}). This check cannot run on this target.`);
-  if (isDeclarationOnlyCheck(check) || check.probe_profile?.kind === 'ops_readiness') return unavailable('Declaration only', 'Declaration or operational evidence only; sends no external traffic and cannot be started here.');
+  if (!serverSuppliedRunnable(check, context) && (isDeclarationOnlyCheck(check) || check.probe_profile?.kind === 'ops_readiness')) return unavailable('Declaration only', 'Declaration or operational evidence only; sends no external traffic and cannot be started here.');
   const prerequisite = checkPrerequisite(check, { ...(context ?? {}), target });
   if (prerequisite.state !== 'ready') return prerequisite;
   const requirement = targetCheckRequirement(check, target, context);
@@ -387,6 +393,7 @@ export function buildCheckRows({ checks, scan = null, runs = [], coverage = null
       checkId,
       name: presentation.name,
       description: presentation.purpose,
+      explanation: plainCheckExplanation(base.explanation),
       limitations: presentation.limitations,
       nextStep: presentation.next_step,
       mechanism: presentation.mechanism,

@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { normalizeProbeCapture } from './probeExecution.mjs';
 import { presentProductDetectionEvidence } from './productDetectionEvidence.mjs';
-import { redactPayloadPreview, PROBE_PREVIEW_CHARS, previewContentType, unsafePayloadPreviewReason } from './probePayloadPreview.mjs';
+import { capturePayloadText, PROBE_PREVIEW_CHARS, PROBE_PREVIEW_BYTES, MAX_CAPTURE_BODY_BYTES, previewContentType } from './probePayloadPreview.mjs';
 import { captureUrl, HTTP_CAPTURE_VERSION, normalizeCapturedHeaders } from './probeHttpCapture.mjs';
 
 export const MAX_PROBE_ACTIVITY_ITEMS = 256;
@@ -10,18 +10,18 @@ export const PROBE_ACTIVITY_STAGES = Object.freeze([
   'job_started', 'request_started', 'response_received', 'attempt_started',
   'attempt_failed', 'request_not_sent', 'probe_completed',
   'phase_completed',
-  'response_payload', 'response_body_completed',
+  'request_payload', 'response_payload', 'response_body_completed',
 ]);
 const FIELDS = new Set(['sequence', 'at', 'stage', 'operation', 'method', 'url', 'protocol',
   'status_code', 'duration_ms', 'error_class', 'reason', 'requests_sent', 'body_bytes', 'header_names', 'outcome', 'phase',
   'request_content_type', 'response_content_type', 'request_payload_preview', 'request_query_preview', 'response_payload_preview',
   'request_payload_encoding', 'response_payload_encoding', 'request_payload_truncated', 'response_payload_truncated',
   'response_bytes_observed', 'response_bytes_captured', 'capture_version', 'exchange_id', 'attempt_id', 'operation_id',
-  'http_version', 'request_headers', 'response_headers']);
+  'http_version', 'request_headers', 'response_headers', 'request_payload_offset', 'response_payload_offset']);
 FIELDS.add('response_payload_available');
 const TOKEN = /^[a-zA-Z0-9_.:-]{1,80}$/;
 
-/** Keep the observed destination/path and query names; never retain query values or credentials. */
+/** Preserve the recorded HTTP destination and query values. */
 export function activityUrl(value) {
   return captureUrl(value);
 }
@@ -62,7 +62,7 @@ export function normalizeProbeActivityItem(item, now = new Date()) {
     result.url = activityUrl(item.url);
     if (!result.url) return null;
   }
-  for (const field of ['status_code', 'duration_ms', 'requests_sent', 'body_bytes', 'response_bytes_observed', 'response_bytes_captured']) {
+  for (const field of ['status_code', 'duration_ms', 'requests_sent', 'body_bytes', 'response_bytes_observed', 'response_bytes_captured', 'request_payload_offset', 'response_payload_offset']) {
     if (item[field] == null) continue;
     if (!Number.isInteger(item[field]) || item[field] < 0 || item[field] > 1_048_576) return null;
     if (field === 'status_code' && (item[field] < 100 || item[field] > 599)) return null;
@@ -81,26 +81,28 @@ export function normalizeProbeActivityItem(item, now = new Date()) {
   for (const field of ['request_payload_preview', 'request_query_preview', 'response_payload_preview']) {
     if (item[field] == null) continue;
     if (typeof item[field] !== 'string' || item[field].length > PROBE_PREVIEW_CHARS) return null;
-    result[field] = redactPayloadPreview(item[field]);
+    result[field] = capturePayloadText(item[field]);
   }
   for (const field of ['request_payload_truncated', 'response_payload_truncated', 'response_payload_available']) {
     if (item[field] == null) continue;
     if (typeof item[field] !== 'boolean') return null;
     result[field] = item[field];
   }
-  if (result.capture_version === HTTP_CAPTURE_VERSION) {
-    for (const side of ['request', 'response']) {
-      const withheld = result[`${side}_payload_truncated`] === true ? '[Partial payload withheld]'
-        : result[`${side}_payload_encoding`] === 'base64' ? '[Binary payload withheld]'
-          : unsafePayloadPreviewReason(Buffer.from(item[`${side}_payload_preview`] ?? ''), result[`${side}_content_type`]);
-      if (withheld) {
-        result[`${side}_payload_preview`] = withheld;
-        result[`${side}_payload_encoding`] = 'redacted';
-      }
-    }
+  for (const side of ['request', 'response']) {
+    const offset = result[`${side}_payload_offset`];
+    if (offset == null) continue;
+    const preview = result[`${side}_payload_preview`];
+    if (result.capture_version !== HTTP_CAPTURE_VERSION || result.stage !== `${side}_payload`
+      || result[`${side}_payload_encoding`] !== 'base64' || typeof preview !== 'string'
+      || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(preview)) return null;
+    const bytes = Buffer.from(preview, 'base64');
+    if (bytes.toString('base64') !== preview || bytes.length > PROBE_PREVIEW_BYTES
+      || offset + bytes.length > MAX_CAPTURE_BODY_BYTES) return null;
   }
   // Every item fits even the signed 32-KiB body boundary after UTF-8/JSON encoding.
   while (Buffer.byteLength(JSON.stringify(result)) > 24 * 1024) {
+    // Chunk bytes are immutable; shortening them would corrupt offsets and replay identity.
+    if (result.request_payload_offset != null || result.response_payload_offset != null) return null;
     let shortened = false;
     for (const field of ['request_payload_preview', 'request_query_preview', 'response_payload_preview']) {
       if (typeof result[field] !== 'string' || result[field].length <= 512) continue;

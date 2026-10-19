@@ -6,10 +6,10 @@ import net from 'node:net';
 import { Readable } from 'node:stream';
 import tls from 'node:tls';
 import { randomUUID } from 'node:crypto';
-import { captureHttpHeaders, captureHeaderSecrets, captureUrl, HTTP_CAPTURE_VERSION } from './probeHttpCapture.mjs';
+import { captureHttpHeaders, captureUrl, HTTP_CAPTURE_VERSION } from './probeHttpCapture.mjs';
 import { assertProbeDestinationAllowed } from './probeEndpoint.mjs';
 import { emitProbeActivity } from './probeActivity.mjs';
-import { previewRequest, previewContentType, captureResponsePayload, unsafePayloadPreviewReason } from './probePayloadPreview.mjs';
+import { previewRequest, previewContentType, captureResponsePayload, emitPayloadChunks, PROBE_PREVIEW_BYTES, MAX_CAPTURE_BODY_BYTES } from './probePayloadPreview.mjs';
 
 export const ASTRANULL_PROBE_USER_AGENT = 'AstraNull-Probe/1.0 (+https://astranull.io/probe)';
 
@@ -278,31 +278,21 @@ function headersWithHost(url, input = {}) {
   return headers;
 }
 
-function requestActivityDeps(url, options, deps) {
-  const secrets = [...(deps.activitySensitiveValues ?? []), ...captureHeaderSecrets(options.headers), url.username, url.password]
-    .filter((value) => typeof value === 'string' && value.length >= 4);
-  return { ...deps, activitySensitiveValues: [...new Set(secrets.flatMap((value) => [value, encodeURIComponent(value)]))]
-    .sort((left, right) => right.length - left.length) };
-}
-
 function exchangeActivity(url, options, deps, operation) {
   const id = randomUUID();
   return { capture_version: HTTP_CAPTURE_VERSION, exchange_id: id, attempt_id: id, operation_id: id,
-    operation, method: options.method ?? 'GET', url: captureUrl(url.href, { sensitiveValues: deps.activitySensitiveValues ?? [] }),
+    operation, method: options.method ?? 'GET', url: captureUrl(url.href),
     protocol: url.protocol.replace(':', ''), ...(options.activity_phase ? { phase: options.activity_phase } : {}) };
 }
 
-function requestCapture(url, options, deps, headers) {
-  const preview = previewRequest(url.href, options, deps);
+function requestCapture(url, options, deps, headers, common) {
+  const preview = previewRequest(url.href, options);
   const body = options.body == null ? Buffer.alloc(0) : Buffer.from(options.body);
-  const withheld = preview.request_payload_truncated ? '[Partial payload withheld]'
-    : preview.request_payload_encoding === 'base64' ? '[Binary payload withheld]'
-      : unsafePayloadPreviewReason(body, preview.request_content_type);
-  if (withheld) {
-    preview.request_payload_preview = withheld;
-    preview.request_payload_encoding = 'redacted';
+  const captured = { ...preview, request_headers: captureHttpHeaders(headers) };
+  if (body.length > PROBE_PREVIEW_BYTES || Buffer.byteLength(JSON.stringify({ ...common, ...captured })) > 20 * 1024) {
+    try { emitPayloadChunks(deps, common, 'request', body.subarray(0, MAX_CAPTURE_BODY_BYTES)); } catch { /* Capture cannot change transport. */ }
   }
-  return { ...preview, request_headers: captureHttpHeaders(headers, deps.activitySensitiveValues ?? []) };
+  return captured;
 }
 
 /**
@@ -316,7 +306,7 @@ export async function pinnedFetch(urlValue, options = {}, deps = {}) {
     body: options.body,
   });
   const url = assertHttpUrl(urlValue, ['http:', 'https:']);
-  deps = requestActivityDeps(url, options, deps);
+
   const pinned = await resolvePinnedWithinBounds(logicalHostname(url), deps, {
     signal: options.signal,
     ...(options.timeoutMs == null ? {} : { timeout: timeoutMs(options.timeoutMs) }),
@@ -343,17 +333,16 @@ export async function pinnedFetch(urlValue, options = {}, deps = {}) {
         return;
       }
       settled = true;
-      const responseDeps = requestActivityDeps(url, { headers: res.headers }, deps);
-      const contentType = previewContentType(res.headers?.['content-type'], responseDeps.activitySensitiveValues);
+      const contentType = previewContentType(res.headers?.['content-type']);
       const responseActivity = { ...commonActivity, ...(Number.isInteger(res.statusCode) ? { status_code: res.statusCode } : {}),
         ...(['1.0', '1.1'].includes(res.httpVersion) ? { http_version: res.httpVersion } : {}),
-        response_headers: captureHttpHeaders(res.rawHeaders ?? res.headers, deps.activitySensitiveValues ?? []),
+        response_headers: captureHttpHeaders(res.rawHeaders ?? res.headers),
         ...(contentType ? { response_content_type: contentType } : {}) };
       emitProbeActivity(deps, { stage: 'response_received', ...responseActivity,
         response_payload_available: false, reason: 'response_not_consumed', duration_ms: Date.now() - startedAt });
       let body = Readable.toWeb(res);
       if (typeof deps.onProbeActivity === 'function') {
-        const capture = captureResponsePayload(responseDeps, responseActivity, contentType);
+        const capture = captureResponsePayload(deps, responseActivity, contentType);
         if (commonActivity.method === 'HEAD' || [204, 304].includes(res.statusCode)) capture.complete();
         else {
           const reader = body.getReader();
@@ -402,7 +391,7 @@ export async function pinnedFetch(urlValue, options = {}, deps = {}) {
     req.end();
     if (!req.destroyed && !options.signal?.aborted) emitProbeActivity(deps, { stage: 'request_started', ...commonActivity,
       http_version: '1.1', body_bytes: options.body == null ? 0 : Buffer.byteLength(options.body), header_names: Object.keys(headers).slice(0, 16),
-      ...requestCapture(url, options, deps, req.getHeaders?.() ?? headers) });
+      ...requestCapture(url, options, deps, req.getHeaders?.() ?? headers, commonActivity) });
   });
 }
 
@@ -415,7 +404,7 @@ export async function pinnedFetch(urlValue, options = {}, deps = {}) {
  */
 export async function pinnedWebSocketUpgrade(urlValue, options = {}, deps = {}) {
   const url = assertHttpUrl(urlValue, ['http:', 'https:']);
-  deps = requestActivityDeps(url, options, deps);
+
   const boundedTimeout = timeoutMs(options.timeoutMs);
   const deadline = Date.now() + boundedTimeout;
   const pinned = await resolvePinnedWithinBounds(logicalHostname(url), deps, {
@@ -453,7 +442,7 @@ export async function pinnedWebSocketUpgrade(urlValue, options = {}, deps = {}) 
       emitProbeActivity(deps, { stage: 'response_received', ...commonActivity,
         ...(Number.isInteger(res.statusCode) ? { status_code: res.statusCode } : {}),
         ...(['1.0', '1.1'].includes(res.httpVersion) ? { http_version: res.httpVersion } : {}),
-        response_headers: captureHttpHeaders(res.rawHeaders ?? res.headers, deps.activitySensitiveValues ?? []),
+        response_headers: captureHttpHeaders(res.rawHeaders ?? res.headers),
         response_payload_available: false, reason: 'response_not_consumed', duration_ms: Date.now() - startedAt });
       resolve({
         status: res.statusCode ?? 0,
@@ -491,7 +480,7 @@ export async function pinnedWebSocketUpgrade(urlValue, options = {}, deps = {}) 
       req.end();
       if (!req.destroyed) emitProbeActivity(deps, { stage: 'request_started', ...commonActivity, http_version: '1.1',
         body_bytes: options.body == null ? 0 : Buffer.byteLength(options.body),
-        ...requestCapture(url, options, deps, req.getHeaders?.() ?? headers) });
+        ...requestCapture(url, options, deps, req.getHeaders?.() ?? headers, commonActivity) });
     } catch (error) {
       finishReject(error);
     }
@@ -534,7 +523,7 @@ function http2RequestHeaders(url, options) {
  */
 export async function pinnedHttp2Request(urlValue, options = {}, deps = {}) {
   const url = assertHttpUrl(urlValue, ['https:']);
-  deps = requestActivityDeps(url, options, deps);
+
   const boundedTimeout = timeoutMs(options.timeoutMs);
   const deadline = Date.now() + boundedTimeout;
   const pinned = await resolvePinnedWithinBounds(logicalHostname(url), deps, {
@@ -619,14 +608,13 @@ export async function pinnedHttp2Request(urlValue, options = {}, deps = {}) {
       stream = session.request(requestHeaders);
       stream.once('response', (headers) => {
         response = headers;
-        const responseDeps = requestActivityDeps(url, { headers }, deps);
-        const contentType = previewContentType(headers['content-type'], responseDeps.activitySensitiveValues);
+          const contentType = previewContentType(headers['content-type']);
         const activity = { ...commonActivity, ...(Number(headers[':status']) >= 100 ? { status_code: Number(headers[':status']) } : {}) };
         emitProbeActivity(deps, { stage: 'response_received', ...activity,
-          response_headers: captureHttpHeaders(headers, deps.activitySensitiveValues ?? []),
+          response_headers: captureHttpHeaders(headers),
           response_payload_available: false, reason: 'response_not_consumed',
           ...(contentType ? { response_content_type: contentType } : {}), duration_ms: Date.now() - startedAt });
-        if (typeof deps.onProbeActivity === 'function') responseCapture = captureResponsePayload(responseDeps, activity, contentType);
+        if (typeof deps.onProbeActivity === 'function') responseCapture = captureResponsePayload(deps, activity, contentType);
       });
       stream.once('trailers', (headers) => {
         trailers = headers;
@@ -662,7 +650,7 @@ export async function pinnedHttp2Request(urlValue, options = {}, deps = {}) {
       stream.end(body);
       emitProbeActivity(deps, { stage: 'request_started', ...commonActivity, body_bytes: body.length,
         header_names: Object.keys(requestHeaders).filter((name) => !name.startsWith(':')).slice(0, 16),
-        ...requestCapture(url, options, deps, requestHeaders) });
+        ...requestCapture(url, options, deps, requestHeaders, commonActivity) });
     } catch (error) {
       finishReject(error);
     }

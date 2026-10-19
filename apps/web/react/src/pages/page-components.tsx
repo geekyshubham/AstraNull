@@ -1,3 +1,4 @@
+import { checkPresentation } from '../lib/check-presentation.mjs';
 import { Fragment, useEffect, useRef, useState, type ComponentPropsWithoutRef, type CSSProperties, type FormEvent, type HTMLAttributes, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
 import {
   Activity,
@@ -735,8 +736,7 @@ function targetDisplayName(data: PortalData, targetId: string, fallback = '') {
 }
 
 function checkDisplayName(data: PortalData, checkId: string) {
-  const check = data.checks.find((item) => getString(item, ['check_id', 'id'], '') === checkId);
-  return plainCheckName(getString(check ?? {}, ['name', 'title'], checkId || 'Unnamed check'));
+  return checkPresentation(checkId).name;
 }
 
 function runDisplayLabel(data: PortalData, run: DataItem) {
@@ -2367,7 +2367,7 @@ export function PolicyPage({
     { value: '', label: 'Select check' },
     ...safeChecks.map((check) => ({
       value: getString(check, ['check_id']),
-      label: plainCheckName(getString(check, ['name', 'check_id'])),
+      label: checkPresentation(check).name,
       description: getString(check, ['check_id'])
     }))
   ];

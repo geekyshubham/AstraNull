@@ -79,18 +79,19 @@ test('separates missing halves, failures and partial previews from complete capt
   assert.match(exchangeCopyText(failed), /Failure: timeout/);
 });
 
-test('sanitizes nested secrets, duplicate headers, URL credentials and clipboard text', () => {
-  assert.match(safeCaptureText('{"Password":"must-not-leak","nested":{"clientSecret":"also-private"},"marker":"inert"}'), /\[redacted\]/);
-  assert.doesNotMatch(safeCaptureText('{"Password":"must-not-leak","nested":{"clientSecret":"also-private"}}'), /must-not-leak|also-private/);
-  assert.doesNotMatch(safeCaptureUrl('https://person:private@owned.example/a?token=hidden&marker=inert'), /person|private|hidden/);
-  assert.deepEqual(captureHeaders([{ name: 'Set-Cookie', value: 'secret-cookie' }, { name: 'X-Trace', value: 'one' }, { name: 'X-Trace', value: 'two' }]), [
-    { name: 'Set-Cookie', value: '[redacted]' }, { name: 'X-Trace', value: 'one' }, { name: 'X-Trace', value: 'two' },
-  ]);
-  const exchange = recordedExchanges([event('request_started', { url: 'https://a:private@owned.example?token=hidden', request_headers: [{ name: 'Authorization', value: 'Basic secret' }], request_payload_preview: '{"password":"body-private"}' }), event('response_body_completed', { sequence: 2, response_payload_preview: 'c2VjcmV0', response_payload_encoding: 'base64' })]).exchanges[0];
+test('display and clipboard preserve nested values, duplicate headers, URLs and binary data', () => {
+  const body = '{"Password":"must-not-leak","nested":{"clientSecret":"also-private"},"marker":"inert"}';
+  assert.equal(safeCaptureText(body), body);
+  const url = 'https://person:private@owned.example/a?token=hidden&marker=inert';
+  assert.equal(safeCaptureUrl(url), url);
+  const headers = [{ name: 'Set-Cookie', value: 'secret-cookie' }, { name: 'X-Trace', value: 'one' }, { name: 'X-Trace', value: 'two' }];
+  assert.deepEqual(captureHeaders(headers), headers);
+  const exchange = recordedExchanges([event('request_started', { url, request_headers: [{ name: 'Authorization', value: 'Basic secret' }], request_payload_preview: body }), event('response_body_completed', { sequence: 2, response_payload_preview: 'c2VjcmV0', response_payload_encoding: 'base64' })]).exchanges[0];
   const copied = exchangeCopyText(exchange);
-  assert.doesNotMatch(copied, /private|hidden|Basic secret|c2VjcmV0/);
-  assert.match(copied, /Binary preview withheld/);
+  for (const value of [url, body, 'Authorization: Basic secret', 'c2VjcmV0', 'Body encoding: Base64']) assert.ok(copied.includes(value), value);
   assert.match(copied, /Job: job_original/);
+  const long = 'x'.repeat(100_000);
+  assert.equal(safeCaptureText(long), long);
 });
 
 test('accounting labels distinguish logical operations from HTTP requests', () => {

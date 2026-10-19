@@ -14,7 +14,7 @@ const STAGE_LABEL: Record<string, string> = {
   job_started: 'Worker started', attempt_started: 'Attempt started', request_started: 'Request sent',
   response_received: 'Response received', attempt_failed: 'Request failed', request_not_sent: 'Not sent',
   phase_completed: 'Phase finished', probe_completed: 'Probe finished', result_received: 'Probe result',
-  response_payload: 'Response captured', response_body_completed: 'Response body read',
+  request_payload: 'Request payload captured', response_payload: 'Response captured', response_body_completed: 'Response body read',
 };
 const FAMILY = { waf: 'WAF', cdn: 'CDN', dns: 'DNS' } as Record<string, string>;
 

@@ -1,3 +1,4 @@
+import { checkPresentation } from '../lib/check-presentation.mjs';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { HTMLAttributes, MouseEvent as ReactMouseEvent, ReactNode } from 'react';
 import { Check, Eye, FileCheck2, TriangleAlert, Wrench } from 'lucide-react';
@@ -672,7 +673,7 @@ export function FindingDetailView({
         const itemCheckId = getString(item, ['check_id', 'check'], '');
         if (!itemCheckId) return <span className="rule-asset-meta">Not reported</span>;
         const itemCheck = data.checks.find((check) => getString(check, ['check_id', 'id'], '') === itemCheckId);
-        return <span className="rule-asset-stack"><span>{plainCheckName(getString(itemCheck ?? {}, ['name', 'title'], itemCheckId))}</span><small className="mono">{itemCheckId}</small></span>;
+        return <span className="rule-asset-stack"><span>{checkPresentation(itemCheckId).name}</span><small className="mono">{itemCheckId}</small></span>;
       }
     },
     {
@@ -817,7 +818,7 @@ export function FindingDetailView({
         <CardContent>
           <dl className="finding-summary-facts">
             <div className="finding-summary-fact"><dt>SLA due</dt><dd>{slaDueAt ? formatDate(slaDueAt) : 'Not reported'}{isFindingSlaBreach(entity) ? ' · breached' : ''}</dd></div>
-            {checkId ? <div className="finding-summary-fact"><dt>Check</dt><dd><span>{plainCheckName(getString(data.checks.find((check) => getString(check, ['check_id', 'id'], '') === checkId) ?? {}, ['name', 'title'], checkId))}</span><small className="mono">{checkId}</small></dd></div> : null}
+            {checkId ? <div className="finding-summary-fact"><dt>Check</dt><dd><span>{checkPresentation(checkId).name}</span><small className="mono">{checkId}</small></dd></div> : null}
             {vectorFamily ? <div className="finding-summary-fact"><dt>Vector</dt><dd>{formatFindingLabel(vectorFamily)}</dd></div> : null}
             {targetId ? <div className="finding-summary-fact"><dt>Target ID</dt><dd className="mono">{targetId}</dd></div> : null}
             {entity.created_at ? <div className="finding-summary-fact"><dt>Opened</dt><dd>{formatDate(entity.created_at)}</dd></div> : null}
@@ -1055,7 +1056,7 @@ export function FindingDetailView({
                   <dl className="td-review-list">
                     <div><dt>Finding</dt><dd>{title} <span className="mono">{entityId}</span></dd></div>
                     <div><dt>Target</dt><dd className="mono">{getString(retestTarget, ['value'], targetId || 'Not recorded')}</dd></div>
-                    <div><dt>Check</dt><dd>{checkId ? plainCheckName(getString(retestCheck ?? {}, ['name', 'title'], checkId)) : 'Not recorded'}</dd></div>
+                    <div><dt>Check</dt><dd>{checkId ? checkPresentation(checkId).name : 'Not recorded'}</dd></div>
                     {retestAction?.kind === 'safe-run' ? <div><dt>Recorded as</dt><dd>Retest of this finding (same target and check)</dd></div> : null}
                     <div><dt>Upper bound</dt><dd>{retestAction?.kind === 'safe-run' ? (Number.isFinite(retestBound) ? `${retestBound} requests` : 'Not recorded in the catalog') : retestAction?.kind === 'waf-validation' ? 'WAF marker validation for the linked asset' : 'CVE pipeline retest'}</dd></div>
                   </dl>

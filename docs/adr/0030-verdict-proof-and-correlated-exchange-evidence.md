@@ -9,6 +9,8 @@ A validation result could cite informational activity events, then fail the stri
 
 ## Decision
 
+HTTP exchange value redaction and body withholding in decision 4 are superseded by [ADR-0036](0036-unredacted-http-exchange-capture.md), following the explicit request for unredacted diagnostic capture. Other proof, correlation and execution decisions remain in force.
+
 1. Verdict publishers cite only the authoritative result consumed by their evaluator. Current external assurance continues to require explicit signed, same-tenant/run, nonce-bound, temporally available proof. Activity remains inspectable telemetry, never verdict proof. Missing, invalid/unresolved, stale and out-of-scope proof have distinct explanations. Both persistence paths follow the same contract.
 2. Preserve immutable historical verdicts, evidence, exports and custody digests. Existing bad citations are diagnosed, not silently repaired or accepted at read time. Current proof needs an explicitly authorized new run. This decision introduces no correction lineage or automatic retest.
 3. Extend existing bounded activity JSON with `http-exchange.v1`, local operation/attempt/exchange IDs, actual protocol facts and sanitized header entries. Correlation uses the original job/lease plus explicit exchange ID, never URL/time proximity or a newer run. Old records are not assigned invented IDs or headers.
