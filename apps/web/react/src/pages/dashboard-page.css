@@ -268,13 +268,10 @@
 .coverage-unavailable { color: var(--fg-2); font-size: var(--text-sm); }
 .coverage-bar { display: flex; gap: 2px; height: 8px; overflow: hidden; border-radius: var(--radius-pill); background: var(--wash-strong); }
 .coverage-seg { min-width: 4px; flex-basis: 0; background: var(--border-strong); }
-.coverage-legend { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-4); margin: 0; padding: 0; list-style: none; font-size: var(--text-sm); }
-.coverage-legend a { display: inline-flex; align-items: center; gap: var(--space-2); min-height: 32px; color: var(--fg); text-underline-offset: 3px; }
 .coverage-swatch { width: 10px; height: 10px; border-radius: 2px; background: var(--border-strong); }
 .fix-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); justify-content: flex-start; }
 .fix-row:has(.fix-actions) { grid-template-columns: auto minmax(0, 1fr); }
 .fix-row > .fix-actions { grid-column: 2; }
-@media (pointer: coarse) { .coverage-legend a { min-height: 44px; } }
 
 /* Readiness band: donut + weighted factors side by side, divided by a hairline. */
 .readiness-split {
@@ -752,16 +749,25 @@ body .factor-row[data-kind='context'] .factor-score { color: var(--fg-2); font-f
 }
 
 /* Coverage segment groups: neutral attribution, amber for uncertainty, dashed for unmeasured. */
-.coverage-seg[data-segment='detected'], .coverage-swatch[data-segment='detected'] { background: var(--fg-2); }
-.coverage-seg[data-segment='not_detected'], .coverage-swatch[data-segment='not_detected'] { background: color-mix(in oklab, var(--fg-2), transparent 55%); }
+.coverage-seg[data-segment='detected'], .coverage-swatch[data-segment='detected'] { background: var(--fg); }
+.coverage-seg[data-segment='not_detected'], .coverage-swatch[data-segment='not_detected'] { background: var(--warn); }
 .coverage-seg[data-segment='inconclusive'], .coverage-swatch[data-segment='inconclusive'] { background: var(--warn); }
 .coverage-seg[data-segment='conflict'], .coverage-swatch[data-segment='conflict'] { background: repeating-linear-gradient(135deg, var(--warn) 0 2px, color-mix(in oklab, var(--warn), transparent 70%) 2px 4px); }
 .coverage-seg[data-segment='stale'], .coverage-swatch[data-segment='stale'] { background: color-mix(in oklab, var(--warn), var(--bg) 45%); }
 .coverage-seg[data-segment='unmeasured'], .coverage-swatch[data-segment='unmeasured'] { background: color-mix(in oklab, var(--fg-2), transparent 80%); outline: 1px dashed var(--border-strong); outline-offset: -1px; }
 .declared-coverage-head { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: var(--space-4); }
-.coverage-legend-sub { display: inline-flex; align-items: center; gap: var(--space-2); white-space: nowrap; }
-.coverage-legend-sub:not(:last-child) { margin-right: var(--legend-sep-span); }
-.coverage-legend-sub + .coverage-legend-sub { margin-left: calc(-1 * var(--legend-sep-span)); }
-.coverage-legend-sep { display: inline-block; width: 0.5em; text-align: center; color: var(--fg-2); }
 @container dashboard (max-width: 480px) {
 }
+
+.coverage-seg { min-width: 6px; }
+.coverage-seg[data-segment='unmeasured'] { min-width: 0; outline: 0; }
+.coverage-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-2); margin: 0; padding: 0; list-style: none; }
+.coverage-stats li > a,
+.coverage-stats li > span { display: flex; min-height: 44px; align-items: center; gap: var(--space-2); padding: var(--space-2) var(--space-3); border: 1px solid var(--border-soft); border-radius: var(--radius-md); color: var(--fg-2); font-size: var(--text-sm); text-decoration: none; }
+.coverage-stats li > a:hover { border-color: var(--border-strong); background: var(--surface-hover); color: var(--fg); }
+.coverage-stats li > a:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.coverage-stats li[data-segment='unmeasured'] > span { border-style: dashed; }
+.coverage-stats strong { color: var(--fg); font-family: var(--font-display); font-size: var(--text-lg); font-weight: 600; line-height: 1; }
+.coverage-stats .coverage-swatch { flex: none; width: 8px; height: 8px; border-radius: var(--radius-pill); }
+.coverage-stats .coverage-swatch[data-segment='unmeasured'] { background: transparent; outline: 0; box-shadow: inset 0 0 0 1px var(--border-strong); }
+@container dashboard (max-width: 480px) { .coverage-stats { grid-template-columns: minmax(0, 1fr); } }

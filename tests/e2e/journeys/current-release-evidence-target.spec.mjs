@@ -80,6 +80,12 @@ function inspector(page) {
 
 test.describe.configure({ mode: 'serial' });
 
+async function openSetupFold(page) {
+  const fold = page.locator('details.td-fold', { has: page.locator(':scope > summary', { hasText: 'Setup' }) });
+  await fold.waitFor({ state: 'attached' });
+  if (!(await fold.evaluate((node) => node.open))) await fold.locator(':scope > summary').click();
+}
+
 test.describe('current release: evidence inspector and target workspace', () => {
   test.beforeAll(async ({ browser }) => {
     test.setTimeout(240_000);
@@ -203,7 +209,7 @@ test.describe('current release: evidence inspector and target workspace', () => 
     const calls = trackApi(page);
     await open(page, `target-detail?id=${ids.targetId}&tab=protection`);
     await expect(page.getByRole('tab', { name: 'Overview' })).toHaveAttribute('aria-selected', 'true');
-    await expect(page.getByRole('heading', { name: 'Protection observations' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Who protects this domain' })).toBeVisible();
     await page.waitForTimeout(1500);
     expect(mutating(calls), 'viewing a target issues no POST').toEqual([]);
 
@@ -481,7 +487,7 @@ test.describe('current release: server cohorts from dashboard analytics', () => 
     await page.setViewportSize({ width: 1440, height: 1000 });
     const reads = trackTargetReads(page);
     await open(page, 'dashboard');
-    const segment = page.getByRole('link', { name: /^WAF observations not checked: [\d,]+ distinct hostnames/ });
+    const segment = page.getByRole('link', { name: /^WAF unknown: [\d,]+ hosts\. Open the list\./ });
     const label = await segment.getAttribute('aria-label');
     const dashboardCount = Number(label.match(/: ([\d,]+) /)[1].replaceAll(',', ''));
     expect(dashboardCount).toBeGreaterThan(50);
@@ -493,14 +499,6 @@ test.describe('current release: server cohorts from dashboard analytics', () => 
     await expect(cohort(page).getByRole('list', { name: 'Applied filters' })).toContainText('Counted as Distinct hostnames');
     expect(reads.at(-1)).toMatchObject({ family: 'waf', family_status: 'not_checked', unit: 'hostname', limit: '50' });
     await expect(page.locator('.targets-summary, .inventory-card')).toHaveCount(0);
-
-    await page.goto(`${webBase}/app#dashboard`, { waitUntil: 'networkidle' });
-    await page.getByRole('group', { name: 'Count by' }).getByRole('button', { name: 'Declared target records' }).click();
-    const records = page.getByRole('link', { name: /^WAF observations not checked: \d+ declared target records/ });
-    await expect(records).toHaveAttribute('aria-label', new RegExp(`: ${dashboardCount + 1} declared target records`));
-    await records.click();
-    await expect(page).toHaveURL(/unit=target$/);
-    await expect(cohort(page).locator('.cohort-count')).toContainText(`of ${dashboardCount + 1} declared target records.`);
   });
 
   test('paging follows server cursors and a clock mismatch restarts at page one with the same filters', async ({ page }) => {
@@ -756,6 +754,7 @@ test.describe('current release: target history, origin relations and retest line
       if (request.method() === 'POST' && path.startsWith('/v1/origin-bindings')) writes.push({ path, body: request.postDataJSON() });
     });
     await open(page, `target-detail?id=${ids.targetId}`);
+    await openSetupFold(page);
     const section = page.locator('section.td-origin-relations');
     await expect(section.getByText('No origin relation is declared for this hostname.')).toBeVisible();
     await section.getByRole('button', { name: 'Declare origin relation' }).click();
@@ -808,6 +807,7 @@ test.describe('current release: target history, origin relations and retest line
       if (response.request().method() === 'POST' && url.pathname === '/v1/origin-bindings') responses.push({ status: response.status(), body: await response.json().catch(() => null) });
     });
     await open(page, `target-detail?id=${MULTI_PORT}`);
+    await openSetupFold(page);
     const section = page.locator('section.td-origin-relations');
     await expect(section.locator('.td-origin-item')).toHaveCount(1);
     await section.getByRole('button', { name: 'Declare origin relation' }).click();
@@ -846,6 +846,7 @@ test.describe('current release: target history, origin relations and retest line
     test.setTimeout(120_000);
     await page.addInitScript((value) => sessionStorage.setItem('astranull.portal.session.v1', JSON.stringify(value)), { mode: 'dev-headers', principal: 'customer', tenant_id: ids.tenantId, user_id: 'usr_viewer', role: 'viewer' });
     await page.goto(`${webBase}/app#target-detail?id=${ids.targetId}`, { waitUntil: 'networkidle' });
+    await openSetupFold(page);
     const section = page.locator('section.td-origin-relations');
     await expect(section.getByRole('heading', { name: 'Origin relations' })).toBeVisible();
     await expect(section.getByRole('button', { name: 'Declare origin relation' })).toHaveCount(0);
@@ -867,6 +868,7 @@ test.describe('current release: target history, origin relations and retest line
       if (request.method() === 'GET' && (url.pathname.endsWith('/compatible-checks') || url.pathname.startsWith('/v1/checks/') || url.pathname.startsWith('/v1/test-runs/'))) reads.push(url.pathname);
     });
     await open(page, `target-detail?id=${ORIGIN_IP}`);
+    await openSetupFold(page);
     const section = page.locator('section.td-origin-relations');
     const item = section.locator('.td-origin-item').filter({ has: page.getByRole('link', { name: 'checkout.acme.com', exact: true }) });
     await expect(item).toContainText('No finished origin check has run under this relation yet.');
@@ -901,6 +903,7 @@ test.describe('current release: target history, origin relations and retest line
     const starts = [];
     await captureRunStarts(page, starts, { run: { status: 'planned' }, jobs_dispatched: 0 });
     await open(page, `target-detail?id=${ORIGIN_IP}`);
+    await openSetupFold(page);
     const section = page.locator('section.td-origin-relations');
     const item = section.locator('.td-origin-item').filter({ has: page.getByRole('link', { name: 'checkout.acme.com', exact: true }) });
     await item.getByRole('combobox', { name: 'Approved origin check' }).selectOption('origin.direct_bypass.safe');
@@ -920,6 +923,7 @@ test.describe('current release: target history, origin relations and retest line
     const starts = [];
     await captureRunStarts(page, starts, { run: { id: 'run_wrong_check', target_id: ORIGIN_IP, check_id: 'other.check.safe', status: 'planned' } });
     await open(page, `target-detail?id=${ORIGIN_IP}`);
+    await openSetupFold(page);
     const section = page.locator('section.td-origin-relations');
     const item = section.locator('.td-origin-item').filter({ has: page.getByRole('link', { name: 'checkout.acme.com', exact: true }) });
     await item.getByRole('combobox', { name: 'Approved origin check' }).selectOption('origin.direct_bypass.safe');
@@ -945,12 +949,14 @@ test.describe('current release: target history, origin relations and retest line
       return route.fulfill({ response, json: { ...body, checks: body.checks.filter(keep), coverage: { ...body.coverage, pairs: body.coverage.pairs.filter(keep) } } });
     });
     await open(page, `target-detail?id=${ORIGIN_IP}`);
+    await openSetupFold(page);
     const item = page.locator('section.td-origin-relations .td-origin-item').filter({ has: page.getByRole('link', { name: 'checkout.acme.com', exact: true }) });
     await expect(item.getByRole('button', { name: 'Review origin check' })).toBeDisabled();
     await expect(item).toContainText('No approved origin check is available for this target.');
 
     mode = 'error';
     await page.reload({ waitUntil: 'networkidle' });
+    await openSetupFold(page);
     const failed = page.locator('section.td-origin-relations .td-origin-item').filter({ has: page.getByRole('link', { name: 'checkout.acme.com', exact: true }) });
     await expect(failed.getByRole('button', { name: 'Review origin check' })).toBeDisabled();
     await expect(failed).toContainText('Approved origin checks could not load');
@@ -1038,10 +1044,12 @@ test.describe('current release: target history, origin relations and retest line
           expect(await serious('.td-panel'), `history ${width} ${theme}`).toEqual([]);
           expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth), `history overflow ${width} ${theme}`).toBeLessThanOrEqual(0);
           await open(page, `target-detail?id=${ids.targetId}`, { theme });
+          await openSetupFold(page);
           await expect(page.locator('section.td-origin-relations .td-origin-item').filter({ has: page.getByText('Declared relation, no lockdown claim', { exact: true }) })).toBeVisible();
           await page.getByRole('button', { name: 'Declare origin relation' }).click();
           expect(await serious('section.td-origin-relations'), `origin relations ${width} ${theme}`).toEqual([]);
           await open(page, `target-detail?id=${ORIGIN_IP}`, { theme });
+          await openSetupFold(page);
           await expect(page.locator('section.td-origin-relations .td-origin-item').filter({ has: page.getByText('Declared relation, no lockdown claim', { exact: true }) })).toBeVisible();
           expect(await serious('section.td-origin-relations'), `origin side ${width} ${theme}`).toEqual([]);
           await open(page, 'finding-detail?id=fnd_checkout_1', { theme });

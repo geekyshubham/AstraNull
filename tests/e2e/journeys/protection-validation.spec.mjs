@@ -174,6 +174,13 @@ async function openTarget(page, { role = 'owner', target = TARGET, tab } = {}) {
   await injectPortalDevHeadersSession(page, { ...PORTAL_SESSION, role });
   await gotoPortalRoute(page, 'target-detail', getPortalPlaywrightBaseUrl(), { entityIds: { 'target-detail': target } });
   if (tab) await page.getByRole('tab', { name: tab }).click();
+  else await openSetupFold(page);
+}
+
+async function openSetupFold(page) {
+  const fold = page.locator('details.td-fold', { has: page.locator(':scope > summary', { hasText: 'Setup' }) });
+  await fold.waitFor({ state: 'attached' });
+  if (!(await fold.evaluate((node) => node.open))) await fold.locator(':scope > summary').click();
 }
 
 async function expectNoBlockingAxe(page, selector) {
@@ -671,7 +678,7 @@ test.describe('protection validation in the target workspace (PV-07)', () => {
       json: { waf_posture: true, external_discovery: false, connectors: true, protection_validation: false },
     }));
     await openTarget(page);
-    await expect(page.getByTestId('protection-validation-disabled')).toContainText('not enabled for this workspace');
+    await expect(page.getByTestId('protection-validation-disabled')).toHaveCount(0);
     await expect(page.locator('.td-entry-paths')).toHaveCount(0);
     await page.getByRole('tab', { name: 'Changes & history' }).click();
     await expect(page.locator('.td-firewall-change')).toHaveCount(0);

@@ -234,7 +234,7 @@ describe('target-detail React contract', () => {
 
   it('badges the header from the fail-closed eligibility, never a blanket unlock', () => {
     assert.match(DETAIL_SOURCE, /<Badge tone=\{targetEligible \? 'success' : 'warn'\}/);
-    assert.match(DETAIL_SOURCE, /\{targetEligible \? 'Validation unlocked' : 'Ownership pending · checks locked'\}/);
+    assert.match(DETAIL_SOURCE, /\{targetEligible \? 'Ownership verified' : 'Ownership not verified'\}/);
     assert.match(DETAIL_SOURCE, /const proveOwnershipFirst = canStartBoundedRun && !ownershipDone && !scanActive && !activeStandalone/);
     assert.match(DETAIL_SOURCE, /variant=\{proveOwnershipFirst \? 'secondary' : 'default'\}/);
   });

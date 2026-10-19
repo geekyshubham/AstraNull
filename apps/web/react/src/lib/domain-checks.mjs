@@ -746,6 +746,25 @@ export function efficacySentence(efficacy) {
   return `${ratio}. ${plural(efficacy.failed, 'check', 'checks')} reached your application.`;
 }
 
+/** One short customer sentence per layer: what is known and the next step, without scoring jargon. */
+export function plainEfficacySentence(efficacy) {
+  const name = efficacy.layer === 'waf' ? 'WAF' : 'edge';
+  if (efficacy.status === 'unknown') return `Not tested yet. Run the ${name} checks to find out.`;
+  if (efficacy.status === 'absent') return `No ${efficacy.layer === 'waf' ? 'WAF' : 'CDN'} was detected in front of this domain.`;
+  if (efficacy.status === 'present_unmeasured') return `Detected, but not tested yet. Run the ${name} checks to find out.`;
+  if (efficacy.basis === 'fingerprint_markers') return `Only the fingerprint scan ran (${efficacy.passed} of ${efficacy.tested} markers blocked). Run the ${name} checks to confirm.`;
+  if (efficacy.status === 'insufficient') {
+    const more = Math.max(1, EFFICACY_MINIMUM.concluded - efficacy.tested);
+    return efficacy.tested < EFFICACY_MINIMUM.concluded
+      ? `Not enough results yet. Run ${more} more ${name} ${more === 1 ? 'check' : 'checks'} to find out.`
+      : `Not enough results yet. Run ${name} checks from another rule category to find out.`;
+  }
+  const held = `Held on ${efficacy.passed} of ${efficacy.tested} recent checks`;
+  if (efficacy.status === 'bypassable') return `${held}, but your origin answers directly, so attacks can go around it.`;
+  if (efficacy.status === 'protecting') return `${held}.`;
+  return `${efficacy.failed} of ${efficacy.tested} recent checks got through.`;
+}
+
 const SOURCE_COPY = Object.freeze({
   response_header: { method: 'HTTP response header', detail: 'An edge platform header in the HTTP response matched this provider.' },
   response_fingerprint: { method: 'WAF fingerprint', detail: 'AstraNull matched benign probe responses against this WAF\'s fingerprint.' },

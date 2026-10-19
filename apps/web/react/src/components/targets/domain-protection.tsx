@@ -11,7 +11,6 @@ import {
   CircleSlash,
   CircleX,
   Eye,
-  Fingerprint,
   Globe,
   Hourglass,
   LoaderCircle,
@@ -39,7 +38,7 @@ import {
 } from '../../lib/validation-scan.mjs';
 import {
   ROW_STATUS_META,
-  efficacySentence,
+  plainEfficacySentence,
   groupRowsByCategory,
   rowProgress,
   wafRuleSentences,
@@ -160,135 +159,132 @@ export function ProviderObservations({ rows, effectiveness, evaluating, note, ac
     <section className="td-observations" aria-labelledby="td-observations-title" aria-busy={evaluating || undefined}>
       <header className="td-section-head">
         <div>
-          <h2 id="td-observations-title">Protection observations</h2>
-          <p>Who serves this endpoint, from external fingerprints. Detection is a signal, not proof of blocking.</p>
+          <h2 id="td-observations-title">Who protects this domain</h2>
+          <p>Seen from outside. This shows who sits in front of the domain, not whether attacks are blocked.</p>
         </div>
         {action}
       </header>
       {note ? <div className="td-callout">{note}</div> : null}
       <ul className="td-provider-list">
         {rows.map((row) => {
+          const running = evaluating && row.source === 'none' && (row.family === 'waf' || row.family === 'cdn');
+          const stale = row.freshness === 'stale';
+          const failedAttempt = ['attempt_failed', 'error'].includes(row.status);
+          const result = row.status === 'detected' ? (row.providerName || 'Detected')
+            : row.status === 'not_detected' ? 'None detected'
+              : row.status === 'inconclusive' ? 'Inconclusive'
+                : failedAttempt ? 'Detection failed' : 'Unknown';
+          const tone = stale ? 'warn' : row.status === 'detected' ? 'detected' : row.status === 'not_detected' || row.status === 'inconclusive' || failedAttempt ? 'warn' : 'muted';
+          const when = row.observedAt ? `${stale ? 'Stale · ' : ''}${formatDate(row.observedAt)}` : stale ? 'Stale' : '';
+          const how = row.sources.length ? `via ${row.sources.map((source) => source.method).join(', ')}` : '';
           const statusLabel = row.statusLabel;
           let metaText = '';
-
           if (hasEdgeProxy && row.family === 'cloud' && (row.status === 'not_detected' || row.status === 'not_recorded')) {
             metaText = `An edge fingerprint for ${detectedProxyName} does not establish the cloud hosting provider.`;
           } else if (hasEdgeProxy && row.family === 'origin_hosting' && (row.status === 'unknown' || row.status === 'not_recorded')) {
-            metaText = `An edge fingerprint for ${detectedProxyName} does not establish origin hosting, reachability, or lockdown. Declare an origin under Origin Relations to test.`;
+            metaText = `An edge fingerprint for ${detectedProxyName} does not establish origin hosting, reachability, or lockdown. Declare an origin under Setup to test it.`;
           } else if (row.family === 'dns' && (row.status === 'unknown' || row.status === 'not_recorded')) {
-            metaText = 'The edge scan does not look up authoritative nameservers, so the DNS provider is not recorded yet.';
-          } else if (row.observedAt || row.sources.length || row.status === 'detected') {
-            const timeText = row.observedAt ? `Observed ${formatDate(row.observedAt)}` : 'Observation time not recorded';
-            const sourceText = row.sources.length
-              ? ` · ${row.sources.map((source) => source.method).join(', ')}`
-              : row.status === 'detected'
-                ? ' · Source not recorded'
-                : '';
-            metaText = `${timeText}${sourceText}`;
+            metaText = 'The edge scan does not look up nameservers, so the DNS provider is not recorded yet.';
           }
-          const describedBy = `td-provider-${row.family}-value${metaText ? ` td-provider-${row.family}-meta` : ''}`;
-
           return (
             <li key={row.family} className="td-provider-row" data-status={row.status}>
               <button
                 type="button"
-                className="td-provider-tile"
+                className="td-provider-line"
                 data-focus-key={`provider-${row.family}`}
                 aria-label={`How ${row.title} was identified`}
-                aria-describedby={describedBy}
+                aria-describedby={`td-provider-${row.family}-value${metaText ? ` td-provider-${row.family}-meta` : ''}`}
+                title={[statusLabel, metaText].filter(Boolean).join('. ') || undefined}
                 onClick={() => onInspect(row)}
               >
-                <span className="td-provider-top">
+                <span className="td-provider-layer">
                   <span className="td-provider-mark" aria-hidden="true">
-                    {row.logo ? <ProviderLogo provider={row.logo as ProviderLogoId} size={18} /> : <Shield size={16} />}
+                    {row.logo ? <ProviderLogo provider={row.logo as ProviderLogoId} size={16} /> : <Shield size={14} />}
                   </span>
-                  <span className="td-provider-title">{row.title}</span>
-                  <Fingerprint size={14} className="td-provider-inspect" aria-hidden="true" />
+                  {row.title}
                 </span>
-                <span className="td-provider-value" id={`td-provider-${row.family}-value`}>
-                  {evaluating && row.source === 'none' && (row.family === 'waf' || row.family === 'cdn') ? (
-                    <span className="td-evaluating"><Spinner size={14} />Detection running</span>
-                  ) : (
+                <span className="td-provider-result" data-tone={tone} id={`td-provider-${row.family}-value`}>
+                  {running ? <span className="td-evaluating"><Spinner size={14} />Detecting</span> : (
                     <>
-                      {row.providerName ? <strong>{row.providerName}</strong> : null}
-                      <Badge tone={row.tone}>{statusLabel}</Badge>
-                      {row.freshness === 'stale' ? <span className="td-provider-stale">Stale</span> : null}
+                      <span className="td-provider-dot" aria-hidden="true" />
+                      <span className="td-provider-name">{result}</span>
+                      {how ? <span className="td-provider-how">{how}</span> : null}
+                      {when ? <span className="sr-only">{`, ${when}`}</span> : null}
                     </>
                   )}
                 </span>
-                {metaText ? <span className="td-provider-meta" id={`td-provider-${row.family}-meta`}>{metaText}</span> : null}
+                <span className="td-provider-when" data-stale={stale || undefined}>{when}</span>
+                {metaText ? <span className="sr-only" id={`td-provider-${row.family}-meta`}>{metaText}</span> : null}
+                <ChevronRight size={16} className="td-provider-chevron" aria-hidden="true" />
               </button>
             </li>
           );
         })}
       </ul>
-      <div className="td-efficacy" role="group" aria-labelledby="td-efficacy-title">
-        <div className="td-efficacy-head">
-          <h3 id="td-efficacy-title">Is it working?</h3>
-          {onOpenChecks ? <Button size="sm" variant="ghost" onClick={onOpenChecks}>Review checks</Button> : null}
-        </div>
-        {!effectiveness && !wafRules && (!efficacy || ['unknown', 'absent', 'present_unmeasured'].includes(efficacy.waf.status) && ['unknown', 'absent', 'present_unmeasured'].includes(efficacy.cdn.status)) ? (
-          <p className="td-muted">Not measured. Detection alone does not show whether anything is blocked.</p>
-        ) : null}
-        {efficacy ? (
-          <dl className="td-efficacy-list">
-            {([['waf', 'Web application firewall'], ['cdn', 'CDN and edge']] as const).map(([layer, title]) => {
+      {efficacy ? (
+        <div className="td-efficacy" role="group" aria-labelledby="td-efficacy-title">
+          <div className="td-efficacy-head">
+            <h3 id="td-efficacy-title">Is it working?</h3>
+            {onOpenChecks ? <Button size="sm" variant="ghost" onClick={onOpenChecks}>Open checks</Button> : null}
+          </div>
+          <div className="td-efficacy-cards">
+            {([['waf', 'Is the WAF blocking attacks?'], ['cdn', 'Is the edge absorbing traffic?']] as const).map(([layer, question]) => {
               const value = efficacy[layer];
               return (
-                <div key={layer} data-layer={layer}>
-                  <dt>{title}</dt>
-                  <dd>
-                    <Badge tone={value.tone}>{value.label}</Badge>
-                    <span className="td-efficacy-sentence">{efficacySentence(value)}</span>
-                    {layer === 'waf' && ruleLines.length ? (
-                      <ul className="td-rule-lines">
-                        {ruleLines.map((line) => (
-                          <li key={line.id}>
-                            <strong>{line.label}:</strong> <span className="tabular-nums">{line.ratio}</span>
-                            <span className="td-muted"> · {line.detail}</span>
-                            {line.id === 'custom' && canaryMembers.length ? (
-                              <details className="td-canary-members">
-                                <summary><ChevronRight size={14} aria-hidden="true" />Custom rules behind this ratio ({canaryMembers.length})</summary>
-                                <ul aria-label="Custom canary rules and the run each result came from">
-                                  {canaryMembers.map((member) => (
-                                    <li key={`${member.checkId}|${member.runId}`}>
-                                      <span className="td-canary-name">{checkName?.(member.checkId) || member.checkId}</span>
-                                      {member.verdict ? <Badge tone={member.evidence === 'fresh' ? verdictTone(member.verdict) : 'muted'}>{member.evidence === 'fresh' ? plainVerdictShortLabel(member.verdict) : `Stored: ${member.verdict}`}</Badge> : null}
-                                      <span className="td-muted">{member.label}{member.observedAt ? ` · ${formatDate(member.observedAt)}` : ''}</span>
-                                      {member.runId
-                                        ? <a className="detail-entity-link mono" href={buildDetailHref('run-detail', member.runId)} aria-label={`Run ${member.runId} for ${checkName?.(member.checkId) || member.checkId}`}>{member.runId}</a>
-                                        : <span className="td-muted">No run recorded</span>}
-                                    </li>
-                                  ))}
-                                </ul>
-                              </details>
-                            ) : null}
-                          </li>
-                        ))}
-                      </ul>
-                    ) : null}
-                  </dd>
+                <div key={layer} className="td-efficacy-card" data-layer={layer} data-tone={value.tone}>
+                  <span className="td-efficacy-question">{question}</span>
+                  <Badge tone={value.tone}>{value.label}</Badge>
+                  <span className="td-efficacy-sentence">{plainEfficacySentence(value)}</span>
                 </div>
               );
             })}
-          </dl>
-        ) : null}
-        {effectiveness ? (
-          <p className="td-muted">
-            Fingerprint scan only, not counted above: <span className="tabular-nums">{effectiveness.blocked}</span> markers blocked ·{' '}
-            <span className="tabular-nums">{effectiveness.allowed}</span> allowed · <span className="tabular-nums">{effectiveness.inconclusive}</span> inconclusive.
-          </p>
-        ) : null}
-        <details className="td-efficacy-about">
-          <summary>How this is decided</summary>
-          <p className="td-copy">
-            Only results from the coverage freshness window, recorded with the current check version, count. A layer reads <b>Protecting</b> only with at least 3 fresh concluded checks across 2 rule categories and no failure. A DNS zone-transfer refusal never counts toward the CDN, and <b>Bypassable via origin</b> appears only when an origin-lockdown check finds your origin answering directly.
-          </p>
-          <p className="td-copy">
-            <b>Managed rule markers</b> are harmless strings that common managed rule sets (SQL injection, cross-site scripting, path traversal, scanner detection) recognise. <b>Custom canary observations</b> use AstraNull&apos;s own token. Installed rule tokens and placements are not bound to these checks, so they do not verify custom-rule action or attack-class coverage. Only current, verified verdicts count above.
-          </p>
-        </details>
-      </div>
+          </div>
+          {ruleLines.length || effectiveness ? (
+            <details className="td-efficacy-about">
+              <summary>Rule details</summary>
+              {ruleLines.length ? (
+                <ul className="td-rule-lines">
+                  {ruleLines.map((line) => (
+                    <li key={line.id}>
+                      <strong>{line.label}:</strong> <span className="tabular-nums">{line.ratio}</span>
+                      <span className="td-muted"> · {line.detail}</span>
+                      {line.id === 'custom' && canaryMembers.length ? (
+                        <details className="td-canary-members">
+                          <summary><ChevronRight size={14} aria-hidden="true" />Custom rules behind this ratio ({canaryMembers.length})</summary>
+                          <ul aria-label="Custom canary rules and the run each result came from">
+                            {canaryMembers.map((member) => (
+                              <li key={`${member.checkId}|${member.runId}`}>
+                                <span className="td-canary-name">{checkName?.(member.checkId) || member.checkId}</span>
+                                {member.verdict ? <Badge tone={member.evidence === 'fresh' ? verdictTone(member.verdict) : 'muted'}>{member.evidence === 'fresh' ? plainVerdictShortLabel(member.verdict) : `Stored: ${member.verdict}`}</Badge> : null}
+                                <span className="td-muted">{member.label}{member.observedAt ? ` · ${formatDate(member.observedAt)}` : ''}</span>
+                                {member.runId
+                                  ? <a className="detail-entity-link mono" href={buildDetailHref('run-detail', member.runId)} aria-label={`Run ${member.runId} for ${checkName?.(member.checkId) || member.checkId}`}>{member.runId}</a>
+                                  : <span className="td-muted">No run recorded</span>}
+                              </li>
+                            ))}
+                          </ul>
+                        </details>
+                      ) : null}
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+              {effectiveness ? (
+                <p className="td-muted">
+                  Fingerprint scan only, not counted above: <span className="tabular-nums">{effectiveness.blocked}</span> markers blocked ·{' '}
+                  <span className="tabular-nums">{effectiveness.allowed}</span> allowed · <span className="tabular-nums">{effectiveness.inconclusive}</span> inconclusive.
+                </p>
+              ) : null}
+            </details>
+          ) : null}
+          <details className="td-efficacy-about">
+            <summary>How this is decided</summary>
+            <p className="td-copy">
+              Only recent results from the current check version count. A layer reads <b>Protecting</b> after at least 3 recent checks across 2 rule types with no failure. <b>Bypassable via origin</b> appears only when an origin check finds your server answering directly.
+            </p>
+          </details>
+        </div>
+      ) : null}
     </section>
   );
 }

@@ -403,7 +403,7 @@ function CoverageRow({ family, result, onRetry }: { family: CoverageFamily; resu
   const segments = [
     { key: 'detected', label: 'Detected', count: detected?.count ?? 0, href: detected?.href ?? '' },
     { key: 'not_detected', label: 'Not detected', count: notDetected?.count ?? 0, href: notDetected?.href ?? '' },
-    { key: 'unmeasured', label: 'Unknown', count: unknownCount, href: '' }
+    { key: 'unmeasured', label: 'Unknown', count: unknownCount, href: unknownParts.length === 1 ? unknownParts[0].href : '' }
   ];
   const unknownDetail = unknownParts.map((part) => `${part.label} ${formatNumber(part.count)}`).join(' · ');
   return (
@@ -412,22 +412,25 @@ function CoverageRow({ family, result, onRetry }: { family: CoverageFamily; resu
       <span className="coverage-bar" role="img" aria-label={`${title}: ${segments.map((part) => `${part.label} ${part.count}`).join(', ')}, of ${buckets.denominator} hosts`}>
         {segments.filter((part) => part.count > 0).map((part) => <span key={part.key} className="coverage-seg" data-segment={part.key} style={{ flexGrow: part.count }} />)}
       </span>
-      <ul className="coverage-legend">
-        {segments.map((part) => (
-          <li key={part.key}>
-            {part.href && part.count > 0 ? (
-              <a href={part.href} aria-label={`${title} ${part.label.toLowerCase()}: ${formatNumber(part.count)} hosts. Open the list.`}>
-                <span className="coverage-swatch" data-segment={part.key} aria-hidden="true" />
-                {part.label} <span className="tabular-nums">{formatNumber(part.count)}</span>
-              </a>
-            ) : (
-              <span title={part.key === 'unmeasured' && unknownDetail ? unknownDetail : undefined}>
-                <span className="coverage-swatch" data-segment={part.key} aria-hidden="true" />
-                {part.label} <span className="tabular-nums">{formatNumber(part.count)}</span>
-              </span>
-            )}
-          </li>
-        ))}
+      <ul className="coverage-stats">
+        {segments.map((part) => {
+          const body = (
+            <>
+              <span className="coverage-swatch" data-segment={part.key} aria-hidden="true" />
+              <strong className="tabular-nums">{formatNumber(part.count)}</strong>
+              <span>{part.label}</span>
+            </>
+          );
+          return (
+            <li key={part.key} data-segment={part.key}>
+              {part.href && part.count > 0 ? (
+                <a href={part.href} aria-label={`${title} ${part.label.toLowerCase()}: ${formatNumber(part.count)} hosts. Open the list.`}>{body}</a>
+              ) : (
+                <span title={part.key === 'unmeasured' && unknownDetail ? unknownDetail : undefined}>{body}</span>
+              )}
+            </li>
+          );
+        })}
       </ul>
     </div>
   );
@@ -473,7 +476,7 @@ function DeclaredHostCoverage({ waf, cdn, total, onRetry }: { waf: CoverageResul
     <section className="declared-coverage" aria-labelledby="declared-coverage-title">
       <div className="declared-coverage-head">
         <h2 id="declared-coverage-title">WAF and CDN detection</h2>
-        <p>{total !== null ? `Edge fingerprints seen across ${formatNumber(total)} declared ${pluralize(total, 'host')}.` : 'Edge fingerprints seen across your declared hosts.'} Detection runs automatically when a host is added.</p>
+        <p>{total !== null ? `Across ${formatNumber(total)} declared ${pluralize(total, 'host')}` : 'Across your declared hosts'}</p>
       </div>
       <CoverageRow family="waf" result={waf} onRetry={onRetry} />
       <CoverageRow family="cdn" result={cdn} onRetry={onRetry} />

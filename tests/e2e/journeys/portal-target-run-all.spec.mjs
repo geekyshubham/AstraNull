@@ -141,7 +141,6 @@ test.describe('target workspace: recorded attribution, checks and reviewed runs 
     const observations = page.locator('.td-observations');
     const wafRow = observations.locator('.td-provider-row').filter({ hasText: 'WAF' }).first();
     const cdnRow = observations.locator('.td-provider-row').filter({ hasText: /^CDN/ });
-    await expect(wafRow).toContainText('Detected');
     await expect(wafRow).toContainText('Cloudflare');
     await expect(wafRow).toContainText('WAF fingerprint');
     await expect(cdnRow).toContainText('Cloudflare');
@@ -152,7 +151,7 @@ test.describe('target workspace: recorded attribution, checks and reviewed runs 
     await expect(observations.locator('.td-provider-row').filter({ hasText: 'DNS provider' })).toContainText('Unknown');
     // Detection is not efficacy: only recorded marker counts appear, no client-side protection label.
     await expect(observations.locator('.td-efficacy')).toContainText('3 markers blocked');
-    await expect(observations.locator('.td-efficacy')).toContainText('fresh concluded WAF checks');
+    await expect(observations.locator('.td-efficacy')).toContainText('Is the WAF blocking attacks?');
     await expect(page.locator('.target-detail-view')).not.toContainText(/Sources agree/);
 
     await page.getByRole('tab', { name: /Validate/ }).click();
@@ -215,6 +214,7 @@ test.describe('target workspace: recorded attribution, checks and reviewed runs 
     });
     await injectPortalDevHeadersSession(page);
     await gotoPortalRoute(page, 'target-detail', getPortalPlaywrightBaseUrl(), { entityIds: { 'target-detail': VERIFIED_FRESH_TARGET } });
+    await page.locator('.td-coverage').getByText('Coverage breakdown', { exact: true }).click();
     for (const theme of ['light', 'dark']) {
       await page.evaluate(value => document.documentElement.setAttribute('data-theme', value), theme);
       for (const width of [375, 1440]) {
@@ -281,8 +281,8 @@ test.describe('target workspace: recorded attribution, checks and reviewed runs 
     await gotoPortalRoute(page, 'target-detail', getPortalPlaywrightBaseUrl(), { entityIds: { 'target-detail': UNVERIFIED_TARGET } });
 
     const header = page.locator('.td-page-head');
-    await expect(header).toContainText('Ownership pending · checks locked');
-    await expect(header).not.toContainText('Validation unlocked');
+    await expect(header).toContainText('Ownership not verified');
+    await expect(header).not.toContainText('Ownership verified');
     await expect(page.locator('.td-next[data-kind="ownership"]')).toContainText('Prove ownership to unlock validation');
     await expect(page.locator('.td-observations').getByRole('button', { name: 'Detect WAF and CDN' })).toHaveCount(0);
 

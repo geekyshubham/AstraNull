@@ -1,5 +1,10 @@
 # AstraNull Progress Tracker
 
+## Target workspace and WAF/CDN legend redesign (2026-10-18)
+
+- [x] Dashboard WAF/CDN detection: three count tiles (Detected, Not detected, Unknown) with distinct colours; the unknown breakdown stays in a tooltip.
+- [x] Target Overview: plain header (ownership chip, kind, last check), at-a-glance strip (status, open findings, checks run, edge provider), one ruled provider list with plain "Is it working?" cards (`plainEfficacySentence`, `tests/unit/plain-efficacy.test.mjs`), compact check progress with the breakdown folded, Setup (authorization, origin relations, entry paths) and About folds; the initial-detection line shows only a known blocking reason. Detection stays neutral, never a protection claim; stale and failed detection are labelled.
+
 ## Portal UI review fixes (2026-10-18)
 
 - [x] Dashboard: readiness score no longer hidden when results sit on subdomains (domain rows roll up their subdomains; an open finding or the server's own posture counts as evidence); tenant badge, context summary, KPI sub-copy, "Evidence attached" chip and the Recent validation activity widget removed; "Open finding" is a real button; ownership chip and tags no longer wrap (one tag + "+N", redundant `domain:` tag hidden).

@@ -608,7 +608,12 @@ export function EvidenceInspectorHost({ config, session, data, locationKey }: Ev
               </Button>
             </nav>
           ) : null}
-          {subtitle ? <p className="ei-subtitle">{subtitle}</p> : null}
+          {subtitle || ref.test_run_id ? (
+            <p className="ei-subtitle">
+              {subtitle}
+              {ref.test_run_id ? <>{subtitle ? ' · ' : ''}Run <span className="mono">{ref.test_run_id}</span></> : null}
+            </p>
+          ) : null}
         </>
       )}
       footer={actions.length ? <div className="ei-actions">{actions}</div> : undefined}

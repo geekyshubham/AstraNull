@@ -142,7 +142,7 @@ test.describe('portal executive clarity', () => {
 
       await gotoPortalRoute(page, 'target-detail', getPortalPlaywrightBaseUrl());
       await expect(page.getByRole('heading', { level: 1, name: 'checkout.acme.com' })).toBeVisible();
-      await expect(page.getByRole('region', { name: 'Protection observations' })).toBeVisible();
+      await expect(page.getByRole('region', { name: 'Who protects this domain' })).toBeVisible();
       await expectNoPageOverflow(page);
     }
   });
@@ -154,12 +154,10 @@ test.describe('portal executive clarity', () => {
     const main = page.locator('#portal-main');
     const heading = page.getByRole('heading', { level: 1, name: 'checkout.acme.com' });
     await expect(heading).toBeVisible();
-    await expect(main).toContainText('Validation unlocked');
-    // Declared context is listed once: set fields as terms, unset ones named in a single line.
+    await expect(main).toContainText('Ownership verified');
+    // Declared context shows only what is set; unset fields never fill the header with a list.
     const context = main.locator('.td-context-row');
-    for (const term of ['Purpose', 'Service roles', 'Owner', 'Criticality']) {
-      await expect(context).toContainText(new RegExp(term, 'i'));
-    }
+    await expect(context).not.toContainText('No declared context');
     await expect(context).not.toContainText('Unassigned');
     await expect(page.getByRole('link', { name: /^Group:/ })).toHaveCount(0);
     // Identity and declared context come before the workspace tabs.
@@ -170,16 +168,17 @@ test.describe('portal executive clarity', () => {
     });
     expect(order).toBe(true);
 
-    // Proof of ownership is recorded fact, not inferred.
-    const facts = page.locator('.td-metaline');
-    await expect(facts).toContainText('Ownership via DNS TXT record');
+    // Proof of ownership is recorded fact, not inferred; it lives under About this target.
+    const facts = page.locator('.td-about-list');
+    await expect(facts).toContainText('Verified via DNS TXT record');
     await expect(facts).toContainText('Manual declaration');
+    await expect(page.locator('.td-metaline')).not.toContainText('tgt_');
     await expect(page.locator('section.td-facts')).toHaveCount(0);
 
     // Detection is never proof of blocking.
-    const observations = page.getByRole('region', { name: 'Protection observations' });
-    await expect(observations).toContainText('Detection is a signal, not proof of blocking.');
-    await expect(observations).toContainText('Not measured. Detection alone does not show whether anything is blocked.');
+    const observations = page.getByRole('region', { name: 'Who protects this domain' });
+    await expect(observations).toContainText('not whether attacks are blocked');
+    await expect(observations.getByRole('group', { name: 'Is it working?' })).toBeVisible();
 
     await page.getByRole('tab', { name: /^Validate/ }).click();
     const checks = page.getByRole('region', { name: 'Checks for this target' });

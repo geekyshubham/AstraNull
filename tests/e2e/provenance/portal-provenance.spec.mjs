@@ -150,12 +150,11 @@ test.describe('portal dynamic provenance', () => {
     await injectPortalDevHeadersSession(page);
     await gotoPortalRoute(page, 'target-detail', baseUrl);
     // Configuration metadata for a WAF asset is not an external observation: the WAF family stays
-    // "Not checked" and blocking stays unmeasured, whatever posture the configuration records.
-    const observations = page.getByRole('region', { name: 'Protection observations' });
+    // "Unknown" and blocking stays unmeasured, whatever posture the configuration records.
+    const observations = page.getByRole('region', { name: 'Who protects this domain' });
     const wafFamily = observations.getByRole('listitem').filter({ hasText: /^WAF/ });
-    await expect(wafFamily).toContainText('Not checked');
+    await expect(wafFamily).toContainText('Unknown');
     await expect(wafFamily.locator('.td-provider-meta')).toHaveCount(0);
-    await expect(observations).toContainText('Not measured. Detection alone does not show whether anything is blocked.');
     // The declared expectation ("Expected: Protected path baseline") is customer context, not an observation.
     await expect(observations).not.toContainText(/Protection worked|\bprotected\b/i);
 
@@ -167,7 +166,7 @@ test.describe('portal dynamic provenance', () => {
     expect(mutatedDetail.protection_profile?.families?.waf?.status).toBe('not_checked');
 
     await page.goto(`${mutatedBaseUrl}/app#target-detail?id=${encodeURIComponent(PROVENANCE_WAF_POSTURE.targetId)}`, { waitUntil: 'networkidle', timeout: 60_000 });
-    await expect(wafFamily).toContainText('Not checked');
+    await expect(wafFamily).toContainText('Unknown');
     await expect(observations).not.toContainText(/\bdrift\b|policy_exception/i);
     await expect(page.locator('#portal-main')).not.toContainText('policy_exception');
 
@@ -195,7 +194,7 @@ test.describe('portal dynamic provenance', () => {
     expect(recorded.producer_kind).toBe('internal_simulation');
 
     await page.reload({ waitUntil: 'networkidle' });
-    await expect(wafFamily).toContainText('Not checked');
+    await expect(wafFamily).toContainText('Unknown');
     await page.getByRole('tab', { name: /^Changes/ }).click();
     const layers = page.getByRole('region', { name: 'Current state by layer' });
     const wafLayer = layers.getByRole('listitem').filter({ hasText: /^WAF/ });

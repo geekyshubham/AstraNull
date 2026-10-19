@@ -1,8 +1,6 @@
 import { useEffect, useState } from 'react';
 import { requestJson } from '../../lib/api';
 import type { DataItem, PortalConfig, Session } from '../../lib/types';
-import { apiErrorMessage } from '../../lib/error-messages';
-import { buildDetailHref } from '../../lib/route-params';
 
 const REASONS: Record<string, string> = {
   ownership_not_verified: 'Waiting for domain ownership verification.',
@@ -21,27 +19,29 @@ export function InitialEdgeStatus({ targetId, config, session, onDispatched }: {
   targetId: string; config: PortalConfig; session: Session; onDispatched: () => Promise<unknown>;
 }) {
   const [request, setRequest] = useState<DataItem | null>(null);
-  const [error, setError] = useState('');
   useEffect(() => {
     const controller = new AbortController(); let timer: number | undefined;
     let reportedRunId = '';
-    setRequest(null); setError('');
+    let failures = 0;
+    setRequest(null);
     async function read() {
       try {
         const result = await requestJson(config, session, `/v1/targets/${encodeURIComponent(targetId)}/initial-detection`, { signal: controller.signal });
         if (controller.signal.aborted) return;
-        setRequest(result.initial_detection ?? null); setError('');
+        failures = 0;
+        setRequest(result.initial_detection ?? null);
         const runId = result.initial_detection?.test_run_id;
         if (runId && runId !== reportedRunId) { reportedRunId = runId; await onDispatched(); }
         if (['queued', 'leased'].includes(result.initial_detection?.status)) timer = window.setTimeout(() => void read(), 5000);
-      } catch (failure) {
-        if (!controller.signal.aborted) setError(apiErrorMessage(failure, 'Automatic provider detection status is unavailable.'));
+      } catch {
+        if (controller.signal.aborted || failures >= 5) return;
+        failures += 1;
+        timer = window.setTimeout(() => void read(), 5000 * 2 ** failures);
       }
     }
     void read(); return () => { controller.abort(); window.clearTimeout(timer); };
   }, [config, session, targetId, onDispatched]);
-  if (error) return <p className="td-muted" role="status">{error}</p>;
-  if (!request || request.status === 'cancelled') return null;
-  if (request.status === 'dispatched') return <p className="td-muted">Initial WAF/CDN detection was queued automatically. <a href={`${buildDetailHref('target-detail', targetId)}&tab=validate&check=waf.fingerprint.safe`}>Review its observation</a>.</p>;
-  return <p role="status" className="td-muted">WAF/CDN detection queued automatically. {REASONS[String(request.blocked_reason)] ?? 'The scheduler will start it when this target’s execution requirements are met.'}</p>;
+  if (!request || request.status === 'cancelled' || request.status === 'dispatched') return null;
+  const reason = REASONS[String(request.blocked_reason)];
+  return reason ? <p role="status" className="td-muted td-edge-waiting">{`WAF and CDN detection: ${reason.charAt(0).toLowerCase()}${reason.slice(1)}`}</p> : null;
 }

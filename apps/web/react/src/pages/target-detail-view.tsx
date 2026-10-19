@@ -740,6 +740,8 @@ export function TargetDetailView({
     const frame = window.requestAnimationFrame(() => {
       const heading = document.getElementById('td-origin-relations-title');
       if (!heading) return;
+      const fold = heading.closest('details');
+      if (fold) fold.open = true;
       heading.scrollIntoView({ block: 'start' });
       heading.focus({ preventScroll: true });
     });
@@ -1224,7 +1226,7 @@ export function TargetDetailView({
   const proveOwnershipFirst = canStartBoundedRun && !ownershipDone && !scanActive && !activeStandalone;
 
   function renderContext() {
-    if (!declared) return <p className="td-muted td-context-missing">Declared purpose, owner and criticality are not reported by this server yet.</p>;
+    if (!declared) return null;
     const facts = [
       { label: 'Owner', value: declared.owner.source ? declared.owner.text : '', source: declared.owner.source },
       { label: 'Criticality', value: declared.criticality.source ? declared.criticality.text : '', source: declared.criticality.source },
@@ -1240,9 +1242,8 @@ export function TargetDetailView({
             {set.map((fact) => <div key={fact.label}><dt>{fact.label}</dt><dd>{fact.value}{fact.source === 'inherited' ? <small> · inherited</small> : null}</dd></div>)}
           </dl>
         ) : null}
-        {unset.length ? <span className="td-muted td-context-unset">{set.length ? 'Not declared' : 'No declared context'}: {unset.join(', ')}</span> : null}
         {canWrite && !editingContext ? (
-          <Button size="sm" variant="ghost" className="td-context-edit" onClick={() => setEditingContext(true)}><Pencil size={13} aria-hidden="true" />Edit context</Button>
+          <Button size="sm" variant="ghost" className="td-context-edit" title={unset.length ? `Not set: ${unset.join(', ')}` : undefined} onClick={() => setEditingContext(true)}><Pencil size={13} aria-hidden="true" />{set.length ? 'Edit details' : 'Add details'}</Button>
         ) : null}
       </div>
     );
@@ -1251,7 +1252,6 @@ export function TargetDetailView({
   function renderHeader() {
     const hasTarget = Boolean(target);
     const title = hasTarget ? targetDisplayValue(target) : entityId;
-    const expected = getString(target, ['expected_behavior', 'expected'], '');
     return (
       <header className="page-head td-page-head">
         <div className="td-identity">
@@ -1261,7 +1261,7 @@ export function TargetDetailView({
             {hasTarget ? (
               <div className="td-title-badges">
                 <Badge tone={targetEligible ? 'success' : 'warn'} title={`Reported eligibility ${eligibility}; ownership ${verificationState}`}>
-                  {targetEligible ? 'Validation unlocked' : 'Ownership pending · checks locked'}
+                  {targetEligible ? 'Ownership verified' : 'Ownership not verified'}
                 </Badge>
               </div>
             ) : null}
@@ -1270,11 +1270,6 @@ export function TargetDetailView({
             <>
               <p className="td-metaline">
                 <span>{formatLabel(kind)}</span>
-                <span className="mono td-meta-id">{entityId}</span>
-                <span>{plainCheckName(targetDeclarationProvenanceLabel(target))}</span>
-                {ownershipDone ? <span>Ownership via {ownershipMethodText(verification)}</span> : null}
-                {detail?.loa ? <span>LOA {formatLabel(getString(detail.loa, ['state'], 'Not reported')).toLowerCase()}</span> : null}
-                {expected ? <span>Expected: {formatLabel(expected)}</span> : null}
                 <span className="td-last-check">{lastCheckAt ? <>Last check <time dateTime={lastCheckAt}>{formatDate(lastCheckAt)}</time></> : 'No checks recorded yet'}</span>
               </p>
               <div className="td-context">
@@ -1293,7 +1288,7 @@ export function TargetDetailView({
             ) : null}
             {canStartBoundedRun && (tab !== 'validate' || scanActive || activeStandalone) ? (
               <Button variant={proveOwnershipFirst ? 'secondary' : 'default'} onClick={() => { setTab('validate'); window.requestAnimationFrame(() => document.getElementById('td-all-checks')?.scrollIntoView({ behavior: prefersReducedMotion() ? 'auto' : 'smooth', block: 'start' })); }}>
-                <Play size={15} aria-hidden="true" />{scanActive || activeStandalone ? 'View activity' : 'Plan validation'}
+                <Play size={15} aria-hidden="true" />{scanActive || activeStandalone ? 'View activity' : 'Open checks'}
               </Button>
             ) : null}
             {canStartBoundedRun && (scanActive || activeStandalone) ? (
@@ -1394,7 +1389,7 @@ export function TargetDetailView({
       const hasEvidence = Array.isArray(topFinding.evidence_ids) && (topFinding.evidence_ids as unknown[]).some((value) => typeof value === 'string' && value.trim());
       return (
         <section className="td-next" data-kind="finding" aria-labelledby="td-next-title">
-          <span className="td-eyebrow">Highest-priority open finding</span>
+          <span className="td-eyebrow">Fix first</span>
           <div className="td-next-head">
             <h2 id="td-next-title">{plainFindingTitle(topFinding, [target], checks)}</h2>
             <Badge tone={severityTone(getString(topFinding, ['severity'], ''))}>{formatSeverityLabel(getString(topFinding, ['severity'], 'unknown'))}</Badge>
@@ -1402,12 +1397,11 @@ export function TargetDetailView({
           </div>
           <p className="td-copy">
             Opened {formatDate(topFinding.created_at ?? topFinding.opened_at)}
-            {openFindings.length > 1 ? ` · ${openFindings.length - 1} more open on this target` : ''}.
-            {' '}A later passing check does not close it{hasEvidence ? '; review the original evidence first.' : '; open the full finding to review its run.'}
+            {openFindings.length > 1 ? ` · ${openFindings.length - 1} more open on this target` : ''}
           </p>
           <div className="td-actions">
             <Button size="sm" variant="secondary" data-focus-key={`finding-${id}`} onClick={() => inspectFinding(topFinding)}><Eye size={14} aria-hidden="true" />View evidence</Button>
-            <AnchorButton size="sm" variant="ghost" href={buildDetailHref('finding-detail', id)}>Open full finding</AnchorButton>
+            <AnchorButton size="sm" variant="secondary" href={buildDetailHref('finding-detail', id)}>Open finding</AnchorButton>
             {openFindings.length > 1 ? <Button size="sm" variant="ghost" onClick={() => setTab('findings')}>All {openFindings.length} open findings</Button> : null}
           </div>
         </section>
@@ -1470,23 +1464,23 @@ export function TargetDetailView({
         <section className="td-coverage" aria-labelledby="td-coverage-title">
           <header className="td-section-head">
             <div>
-              <h2 id="td-coverage-title">Check coverage</h2>
-              <p className="td-coverage-scope tabular-nums">
-                Catalog {fullCatalog ? fullCatalog.length : 'not loaded'} · Runnable on this target {runAll.length} · Scored for readiness {countText(coverage.applicable_count)}
-              </p>
+              <h2 id="td-coverage-title">Check progress</h2>
+              <p>{applicable > 0 ? `${conclusiveCount} of ${applicable} scored checks have a clear result.` : 'No scored checks apply to this target.'}</p>
             </div>
+            <Button size="sm" variant="secondary" onClick={() => setTab('validate')}>Open checks</Button>
           </header>
-          <div className="td-coverage-body">
-            <div className="td-coverage-hero" title={planTitle}>
-              {applicable > 0 ? (
-                <>
-                  <p className="td-coverage-ratio tabular-nums"><strong>{conclusiveCount}</strong><span>/ {applicable}</span></p>
-                  <p className="td-coverage-caption">readiness-scored checks have a conclusive result</p>
-                  <Progress value={conclusivePercent} size="sm" tone={conclusivePercent >= 80 ? 'success' : 'accent'} label="Readiness-scored checks conclusive" className="td-coverage-meter" />
-                </>
-              ) : <p className="td-coverage-caption">No readiness-scored checks for this target.</p>}
-            </div>
-            <dl className="td-count-grid">
+          {applicable > 0 ? <Progress value={conclusivePercent} size="sm" tone={conclusivePercent >= 80 ? 'success' : 'accent'} label="Scored checks with a clear result" className="td-coverage-meter" /> : null}
+          <ul className="td-progress-chips" aria-label="Check results on this target">
+            {([['failed', 'Gap found', 'danger'], ['passed', 'Passing', 'success'], ['inconclusive', 'Inconclusive', 'warn'], ['not_run', 'Not run', 'muted']] as const).map(([key, label, tone]) => (
+              <li key={key} data-tone={tone} data-empty={(rowCounts[key] ?? 0) === 0 || undefined}><strong className="tabular-nums">{rowCounts[key] ?? 0}</strong>{label}</li>
+            ))}
+          </ul>
+          <details className="td-coverage-about">
+            <summary>Coverage breakdown</summary>
+            <p className="td-coverage-scope tabular-nums">
+              Catalog {fullCatalog ? fullCatalog.length : 'not loaded'} · Runnable on this target {runAll.length} · Scored for readiness {countText(coverage.applicable_count)}
+            </p>
+            <dl className="td-count-grid" title={planTitle}>
               {cell('Evaluated', 'evaluated_count')}
               {cell('Inconclusive', 'inconclusive_count')}
               {cell('Not run', 'not_run_count')}
@@ -1494,7 +1488,6 @@ export function TargetDetailView({
               {cell('Unknown', 'unknown_count')}
               {cell('Partial', 'partial_count')}
             </dl>
-          </div>
           {observationOnly > 0 ? (
             <p className="td-muted td-coverage-note">{String(observationOnly)} runnable checks are observations only; they run under Validate but are not scored for readiness.</p>
           ) : null}
@@ -1576,6 +1569,7 @@ export function TargetDetailView({
             ) : null}
             <p className="td-copy">Coverage shows which readiness-scored checks have results, not whether they passed. Launch gates are re-evaluated by the server when you start a check.</p>
             <p className="td-muted" title={planTitle}>Counts come from the server applicability plan.</p>
+          </details>
           </details>
         </section>
       );
@@ -1770,6 +1764,79 @@ export function TargetDetailView({
     },
   ];
 
+  function renderGlance(): ReactNode {
+    const highCount = openFindings.filter((finding) => ['critical', 'high', 's1', 's2'].includes(getString(finding, ['severity'], '').toLowerCase())).length;
+    const passed = rowCounts.passed ?? 0;
+    const failed = rowCounts.failed ?? 0;
+    const inconclusive = rowCounts.inconclusive ?? 0;
+    const status = !ownershipDone
+      ? { label: 'Locked', tone: 'warn', sub: 'Prove ownership to start checks' }
+      : openFindings.length || failed
+        ? { label: 'Gap found', tone: 'danger', sub: openFindings.length ? countLabel(openFindings.length, 'open finding') : countLabel(failed, 'failed check') }
+        : passed > 0
+          ? { label: 'No open gaps', tone: 'success', sub: 'In the scenarios tested' }
+          : inconclusive > 0
+            ? { label: 'Needs review', tone: 'warn', sub: 'Results were inconclusive' }
+            : { label: 'Not tested yet', tone: 'muted', sub: 'Run checks to get a result' };
+    const edgeRows = providerRows.filter((row) => row.family === 'waf' || row.family === 'cdn');
+    const detected = edgeRows.filter((row) => row.status === 'detected');
+    const absent = edgeRows.filter((row) => row.status === 'not_detected');
+    const names = [...new Set(detected.map((row) => row.providerName).filter(Boolean))];
+    const unknownTitles = edgeRows.filter((row) => row.status !== 'detected' && row.status !== 'not_detected').map((row) => row.title);
+    const edgeValue = detected.length ? (names.join(', ') || 'Detected') : absent.length && absent.length === edgeRows.length ? 'None detected' : 'Unknown';
+    const edgeSub = detected.length
+      ? `${detected.map((row) => row.title).join(' and ')} detected${unknownTitles.length ? `; ${unknownTitles.join(' and ')} unknown` : ''}`
+      : absent.length && absent.length === edgeRows.length
+        ? 'No WAF or CDN detected'
+        : absent.length ? `No ${absent.map((row) => row.title).join(' or ')} detected; ${unknownTitles.join(' and ')} unknown` : 'Detection has not finished';
+    const ran = passed + failed + inconclusive + (rowCounts.observed ?? 0);
+    const total = selectableRows.length;
+    const resultPercent = total > 0 ? Math.min(100, Math.round((ran / total) * 100)) : 0;
+    return (
+      <div className="td-glance" role="group" aria-label="Target at a glance">
+        <div className="td-glance-tile" data-tone={status.tone}>
+          <span className="td-glance-label">Status</span>
+          <strong>{status.label}</strong>
+          <span className="td-glance-sub">{status.sub}</span>
+        </div>
+        <button type="button" className="td-glance-tile" onClick={() => setTab('findings')}>
+          <span className="td-glance-label">Open findings</span>
+          <strong className="tabular-nums">{openFindings.length}</strong>
+          <span className="td-glance-sub">{openFindings.length ? `${highCount} high or critical` : 'Nothing open'}</span>
+        </button>
+        <button type="button" className="td-glance-tile" onClick={() => setTab('validate')}>
+          <span className="td-glance-label">Checks run</span>
+          <strong className="tabular-nums">{ran}<span className="td-glance-of"> / {total}</span></strong>
+          <Progress value={resultPercent} size="sm" tone="accent" label="Checks run" />
+        </button>
+        <div className="td-glance-tile">
+          <span className="td-glance-label">Edge provider</span>
+          <strong className="td-glance-edge" title={edgeValue}>{edgeValue}</strong>
+          <span className="td-glance-sub">{edgeSub}</span>
+        </div>
+      </div>
+    );
+  }
+
+  function renderAbout(): ReactNode {
+    const expected = getString(target, ['expected_behavior', 'expected'], '');
+    const facts = [
+      { label: 'Target ID', value: entityId, mono: true },
+      { label: 'Added by', value: plainCheckName(targetDeclarationProvenanceLabel(target)) },
+      { label: 'Ownership', value: ownershipDone ? `Verified via ${ownershipMethodText(verification)}` : plainVerificationLabel(verificationState) },
+      { label: 'Authorization letter', value: detail?.loa ? formatLabel(getString(detail.loa, ['state'], 'Not reported')) : '' },
+      { label: 'Expected behavior', value: expected ? formatLabel(expected) : '' },
+    ].filter((fact) => fact.value);
+    return (
+      <details className="td-fold" aria-label="About this target">
+        <summary><span>About this target</span><span className="td-muted">ID, source and ownership</span></summary>
+        <dl className="td-about-list">
+          {facts.map((fact) => <div key={fact.label}><dt>{fact.label}</dt><dd className={fact.mono ? 'mono' : undefined}>{fact.value}</dd></div>)}
+        </dl>
+      </details>
+    );
+  }
+
   const workspaceTabs = [
     { id: 'overview' as const, label: 'Overview' },
     { id: 'validate' as const, label: 'Validate', count: checkRows.length },
@@ -1876,6 +1943,7 @@ export function TargetDetailView({
         ) : null}
         {tab === 'overview' ? (
           <div className="td-overview">
+            {renderGlance()}
             {renderNextAction()}
             <ProviderObservations
               rows={providerRows}
@@ -1891,37 +1959,38 @@ export function TargetDetailView({
               onOpenChecks={() => setTab('validate')}
             />
             {renderCoverage()}
-            {target?.kind === 'fqdn' ? <OriginExposure key={`${entityId}:${sessionIdentity(session)}`} config={config} session={session} target={target} canWrite={canWrite} enabled={deploymentFeatures?.origin_clues === true} /> : null}
-            {target ? <TargetAuthorization target={target} config={config} session={session} canWrite={canWrite} ownershipDone={ownershipDone} /> : null}
+            {target?.kind === 'fqdn' && deploymentFeatures?.origin_clues === true ? <OriginExposure key={`${entityId}:${sessionIdentity(session)}`} config={config} session={session} target={target} canWrite={canWrite} enabled /> : null}
             {target ? (
-              <OriginRelations
-                config={config}
-                session={session}
-                target={target}
-                profile={(detail?.protection_profile as DataItem | undefined) ?? null}
-                canWrite={canWrite}
-                canStart={canStartBoundedRun}
-                ownershipDone={ownershipDone}
-                onStarted={onReviewedExecutionStarted}
-                onChanged={() => { void reload(); }}
-              />
+              <details className="td-fold" open={getRouteParam('section') === 'origin-relations' || undefined}>
+                <summary><span>Setup</span><span className="td-muted">Authorization, origin and entry paths</span></summary>
+                <div className="td-fold-body">
+                  <TargetAuthorization target={target} config={config} session={session} canWrite={canWrite} ownershipDone={ownershipDone} />
+                  <OriginRelations
+                    config={config}
+                    session={session}
+                    target={target}
+                    profile={(detail?.protection_profile as DataItem | undefined) ?? null}
+                    canWrite={canWrite}
+                    canStart={canStartBoundedRun}
+                    ownershipDone={ownershipDone}
+                    onStarted={onReviewedExecutionStarted}
+                    onChanged={() => { void reload(); }}
+                  />
+                  {protectionValidationEnabled ? (
+                    <DeclaredEntryPaths
+                      config={config}
+                      session={session}
+                      target={target}
+                      canWrite={canWrite}
+                      canStart={canStartBoundedRun}
+                      ownershipDone={ownershipDone}
+                      onStarted={onReviewedExecutionStarted}
+                    />
+                  ) : null}
+                </div>
+              </details>
             ) : null}
-            {target && !protectionValidationEnabled ? (
-              <p className="td-muted small" role="status" data-testid="protection-validation-disabled">
-                Declared entry paths and entry-path comparisons are not enabled for this workspace. Nothing is checked until an administrator enables them.
-              </p>
-            ) : null}
-            {target && protectionValidationEnabled ? (
-              <DeclaredEntryPaths
-                config={config}
-                session={session}
-                target={target}
-                canWrite={canWrite}
-                canStart={canStartBoundedRun}
-                ownershipDone={ownershipDone}
-                onStarted={onReviewedExecutionStarted}
-              />
-            ) : null}
+            {target ? renderAbout() : null}
           </div>
         ) : null}
 

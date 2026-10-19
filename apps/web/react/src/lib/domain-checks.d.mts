@@ -117,6 +117,7 @@ export function rowProgress(rows: CheckRow[]): { total: number; done: number; pe
 export type EdgeEfficacy = { waf: LayerEfficacy; cdn: LayerEfficacy; originExposed: boolean };
 export function assessEdgeEfficacy(input: { rows?: CheckRow[]; edge?: DataItem | null; coverage?: DataItem | null; nowMs?: number }): EdgeEfficacy;
 export function efficacySentence(efficacy: LayerEfficacy): string;
+export function plainEfficacySentence(efficacy: LayerEfficacy): string;
 export function providerName(code: string, displayName?: string): string;
 export function providerLogoId(code: string): EvidenceLayer['logo'];
 export function edgeEvidenceSignals(edge: DataItem | null | undefined): { layers: EvidenceLayer[]; facts: Array<{ id: string; label: string; value: string }> };

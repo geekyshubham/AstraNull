@@ -99,7 +99,7 @@ test.describe('current release inspector accessibility (EI-10)', () => {
     for (const theme of ['dark', 'light']) {
       await page.setViewportSize({ width: 1440, height: 1000 });
       await open(page, `target-detail?id=${ids.targetId}`, theme);
-      await expect(page.getByRole('heading', { name: 'Protection observations' })).toBeVisible();
+      await expect(page.getByRole('heading', { name: 'Who protects this domain' })).toBeVisible();
       expect(await blockingViolations(page, '#portal-main'), `target workspace ${theme}`).toEqual([]);
       await page.getByRole('button', { name: 'How WAF was identified' }).click();
       await expect(page.locator('.inspector-panel')).toBeVisible();
@@ -147,7 +147,7 @@ test.describe('current release inspector accessibility (EI-10)', () => {
       for (const theme of ['dark', 'light']) {
         await open(page, 'dashboard', theme);
         const coverage = page.locator('section.declared-coverage');
-        await expect(coverage.getByRole('group', { name: 'Count by' })).toBeVisible();
+        await expect(coverage.getByRole('heading', { name: 'WAF and CDN detection' })).toBeVisible();
         expect(await blockingViolations(page, 'section.declared-coverage'), `coverage ${width} ${theme}`).toEqual([]);
         await open(page, 'targets?family=waf&family_status=not_checked&unit=hostname', theme);
         await expect(page.locator('section.cohort-panel .cohort-count')).toBeVisible();
@@ -165,7 +165,7 @@ test.describe('current release inspector accessibility (EI-10)', () => {
         await page.emulateMedia({ reducedMotion: 'reduce' });
         await page.setViewportSize({ width, height: 900 });
         await open(page, `target-detail?id=${ids.targetId}`, theme);
-        await expect(page.getByRole('heading', { name: 'Protection observations' })).toBeVisible();
+        await expect(page.getByRole('heading', { name: 'Who protects this domain' })).toBeVisible();
         const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
         expect(overflow, 'no page-level horizontal overflow').toBeLessThanOrEqual(0);
         expect(await blockingViolations(page, '#portal-main'), `workspace ${width} ${theme}`).toEqual([]);
