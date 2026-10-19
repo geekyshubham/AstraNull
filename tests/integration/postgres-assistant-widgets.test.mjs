@@ -5,7 +5,10 @@ import { createAssistantWidgetRepository } from '../../src/persistence/postgres/
 import { createAuditRepository } from '../../src/persistence/postgres/auditRepository.mjs';
 import { createPgPool, closePgPool } from '../../src/persistence/postgres/pool.mjs';
 import { withTenantContext } from '../../src/persistence/postgres/tenantContext.mjs';
-import { databaseUrlWithDatabase, resolvePostgresHarnessAvailability, withEphemeralPostgres } from '../helpers/pg-harness.mjs';
+import { createCoreCatalogRepository } from '../../src/persistence/postgres/coreCatalogRepository.mjs';
+import { assertLatestMigrationApplied, listMigrationFiles, runMigrations } from '../../src/persistence/postgres/migrations.mjs';
+import { grantPostgresAppRolePrivileges } from '../../scripts/postgres-grant-app-role.mjs';
+import { databaseUrlWithDatabase, resolvePostgresHarnessAvailability, withEphemeralPostgres, ensureHarnessAppRole, MIGRATIONS_DIR } from '../helpers/pg-harness.mjs';
 
 const TENANT = 'ten_widgets', OTHER = 'ten_widgets_other';
 const ctx = { tenantId: TENANT, userId: 'usr_widget', role: 'viewer', persistenceMode: 'postgres' };
@@ -108,5 +111,73 @@ test('real local PostgreSQL personal widgets: migration, RLS, bounds, races and 
         assert.equal(Object.hasOwn(raw, 'result'), false); assert.equal(Object.hasOwn(raw, 'commentary'), false);
       });
     } finally { await closePgPool(pool); }
-  }, { env: availability.env, tryDocker: false });
+  }, availability.env);
+});
+
+test('additive 0084 to 0085 preserves legacy catalog writes and widget definitions across simulated code rollback', { timeout: 120_000 }, async (t) => {
+  const availability = await resolvePostgresHarnessAvailability(localEnv(), { tryDocker: false });
+  if (!availability.available) return t.skip(availability.reason);
+  await withEphemeralPostgres(async (owner, { databaseName }) => {
+    const files = listMigrationFiles(MIGRATIONS_DIR).filter((file) => file.version <= '0085_assistant_widgets');
+    const oldFiles = files.filter((file) => file.version <= '0084_origin_clue_retention');
+    assert.equal(oldFiles.at(-1).version, '0084_origin_clue_retention');
+    assert.equal(files.at(-1).version, '0085_assistant_widgets');
+    await runMigrations(owner, { migrationsDir: MIGRATIONS_DIR, files: oldFiles });
+    await ensureHarnessAppRole(owner);
+    assert.equal((await owner.query("SELECT to_regclass('public.assistant_widgets') AS widgets")).rows[0].widgets, null);
+    await owner.query(`INSERT INTO tenants (id,name) VALUES ($1,'Upgrade widgets'),($2,'Other upgrade widgets')`, [TENANT, OTHER]);
+    await owner.query(`INSERT INTO users (id,tenant_id,email,role) VALUES ($1,$2,'upgrade-widget@example.test','admin')`, [ctx.userId, TENANT]);
+    await owner.query(`INSERT INTO target_groups (id,tenant_id,name) VALUES ('tg_widget_upgrade',$1,'Declared')`, [TENANT]);
+    await owner.query(`INSERT INTO targets (id,tenant_id,target_group_id,kind,value,normalized_value,protocol,port,expected_behavior)
+      VALUES ('tgt_widget_upgrade',$1,'tg_widget_upgrade','fqdn','upgrade.example.test','upgrade.example.test','https',443,'intentionally_public')`, [TENANT]);
+    const url = new URL(databaseUrlWithDatabase(owner.options.connectionString, databaseName));
+    url.username = 'astranull_app'; url.password = 'astranull_app_local_dev';
+    const pool = createPgPool({ ASTRANULL_DATABASE_URL: url.toString() });
+    const actor = { ...ctx, role: 'admin' };
+    const audit = createAuditRepository(pool);
+    // These catalog and audit implementations are unchanged from the pre-feature release.
+    const catalog = createCoreCatalogRepository(pool, { auditRepository: audit });
+    const snapshot = () => withTenantContext(pool, TENANT, async (client) => ({
+      tenants: (await client.query('SELECT * FROM tenants ORDER BY id')).rows,
+      users: (await client.query('SELECT * FROM users ORDER BY id')).rows,
+      targets: (await client.query('SELECT * FROM targets ORDER BY id')).rows,
+      audits: (await client.query('SELECT * FROM audit_logs ORDER BY id')).rows,
+    }));
+    const legacySchema = async () => ({
+      rls: (await owner.query(`SELECT relname,relrowsecurity,relforcerowsecurity FROM pg_class
+        WHERE oid IN ('tenants'::regclass,'users'::regclass,'targets'::regclass,'audit_logs'::regclass) ORDER BY relname`)).rows,
+      constraints: (await owner.query(`SELECT conname,pg_get_constraintdef(oid) AS definition FROM pg_constraint
+        WHERE conrelid IN ('tenants'::regclass,'users'::regclass,'targets'::regclass,'audit_logs'::regclass) ORDER BY conname`)).rows,
+    });
+    try {
+      assert.deepEqual((await pool.query('SELECT rolsuper,rolbypassrls FROM pg_roles WHERE rolname=current_user')).rows[0],
+        { rolsuper: false, rolbypassrls: false });
+      assert.deepEqual((await pool.query(`SELECT relrowsecurity,relforcerowsecurity,pg_get_userbyid(relowner)=current_user AS is_owner
+        FROM pg_class WHERE oid='targets'::regclass`)).rows[0], { relrowsecurity: true, relforcerowsecurity: true, is_owner: false });
+      assert.equal((await catalog.patchTargetById(actor, 'tgt_widget_upgrade', { tags: ['before-upgrade'] })).id, 'tgt_widget_upgrade');
+      const before = await snapshot(), schema = await legacySchema();
+      const target = await catalog.getTarget(actor, 'tgt_widget_upgrade');
+      const upgraded = await runMigrations(owner, { migrationsDir: MIGRATIONS_DIR, files });
+      assert.deepEqual(upgraded.results.filter((result) => result.status === 'applied'), [{ version: '0085_assistant_widgets', status: 'applied' }]);
+      assert.deepEqual(await snapshot(), before);
+      assert.deepEqual(await legacySchema(), schema);
+      await grantPostgresAppRolePrivileges(owner);
+      await assertLatestMigrationApplied(pool, '0084_origin_clue_retention');
+      assert.deepEqual(await catalog.getTarget(actor, target.id), target);
+      assert.equal(await catalog.getTarget({ ...actor, tenantId: OTHER }, target.id), null);
+      const repository = createAssistantWidgetRepository(pool, { auditRepository: audit });
+      const widget = await repository.create(actor, { ...config, target_id: target.id });
+      // Simulate the old application using only its existing catalog, retaining 0085 in place.
+      assert.equal((await catalog.patchTargetById(actor, target.id, { tags: ['old-code-active'] })).id, target.id);
+      assert.deepEqual((await snapshot()).targets[0].metadata_json.tags, ['old-code-active']);
+      assert.deepEqual(await catalog.getTarget(actor, target.id), target);
+      const restored = createAssistantWidgetRepository(pool, { auditRepository: createAuditRepository(pool) });
+      assert.deepEqual(await restored.list(actor), [widget]);
+      const beforeRerun = await snapshot();
+      const rerun = await runMigrations(owner, { migrationsDir: MIGRATIONS_DIR, files });
+      assert.ok(rerun.results.every((result) => result.status === 'skipped'));
+      assert.deepEqual(await snapshot(), beforeRerun);
+      assert.deepEqual(await restored.list(actor), [widget]);
+    } finally { await closePgPool(pool); }
+  }, availability.env, { applyMigrations: false });
 });
