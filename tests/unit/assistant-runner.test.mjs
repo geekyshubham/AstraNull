@@ -151,3 +151,15 @@ if(p.includes('cannot call more data tools'))say('Final without tools.');else if
     assert.equal((await runAgyJob({ ...job, timeout_seconds: 0 }, { agyBin: hang, graceSeconds: 0.3 })).error, 'runner_timeout');
   });
 });
+
+describe('assistant runner page-read allowlist', () => {
+  it('kills a read_url_content call to a non-documentation or private host', async () => {
+    const { parseAgyStream } = await import('../../workers/assistant-runner.mjs');
+    const step = (url) => JSON.stringify({ event: 'step_update', step_update: { step_type: 'tool', state: 'ACTIVE', tool_name: 'read_url_content', tool_info: { name: 'read_url_content', parameters: { url } } } });
+    const allowed = new Set(['search_web', 'read_url_content']);
+    assert.equal(parseAgyStream(step('https://developers.cloudflare.com/waf/rate-limiting-rules/'), allowed).disallowedTool, '');
+    for (const url of ['http://169.254.169.254/latest/meta-data/', 'https://evil.example.com/?d=secret', 'http://localhost:3006/v1/findings', 'https://10.0.0.5/', 'https://docs.aws.amazon.com.evil.net/x']) {
+      assert.equal(parseAgyStream(step(url), allowed).disallowedTool, 'read_url_content:blocked_host', url);
+    }
+  });
+});

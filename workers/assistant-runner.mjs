@@ -4,6 +4,7 @@
  * local `agy` CLI (signed in on this machine, e.g. through VibeRouter). Read-only research only.
  */
 
+import { isAllowedDocUrl } from '../src/lib/assistantDocDomains.mjs';
 import { spawn } from 'node:child_process';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -57,7 +58,8 @@ export function parseAgyStream(output, allowedTools) {
         if (name === 'search_web' && params.query && !searches.includes(text(params.query))) searches.push(text(params.query).slice(0, 200));
         if (name === 'read_url_content') {
           const url = cleanUrl(params.url ?? params.Url);
-          if (url && !readUrls.includes(url)) readUrls.push(url);
+          if (!isAllowedDocUrl(url) && !disallowedTool) disallowedTool = 'read_url_content:blocked_host';
+          else if (url && !readUrls.includes(url)) readUrls.push(url);
         }
       } else if (step.step_type === 'agent_response' && typeof step.text_delta === 'string') {
         deltas += step.text_delta;

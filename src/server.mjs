@@ -138,7 +138,6 @@ import {
 } from './routes/wafEdgeDetectionRoutes.mjs';
 import { tryHandleProtectionValidationRoutes } from './routes/protectionValidationRoutes.mjs';
 import { handleAssistantRunnerApi, isAssistantRunnerRoute, tryHandleAssistantRoutes } from './routes/assistantRoutes.mjs';
-import { roleHasPermission } from './contracts/roles.mjs';
 import {
   configureProtectionValidationRuntime,
   devProtectionValidationFacade,
@@ -890,7 +889,7 @@ function buildAssistantDeps(runtimeConfig, serviceDeps) {
   };
   const resolveEntity = async (ctx, type, id) => {
     const permission = ASSISTANT_ENTITY_PERMISSIONS[type];
-    if (!permission || !roleHasPermission(ctx.role, permission)) return null;
+    if (!permission || !requirePermission(ctx, permission).ok) return null;
     if (type === 'run') return getRun(ctx, id);
     if (type === 'check') return getCheck(ctx, id);
     if (type === 'scan') return serviceDeps.validationScans?.getValidationScan?.(ctx, id, { runtimeConfig, advance: false }) ?? null;
