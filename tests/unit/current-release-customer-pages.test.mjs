@@ -519,13 +519,14 @@ describe('schedule creation expected verdicts', () => {
   it('uses the plain expected-verdict wording and limits observation-only checks to manual review', () => {
     assert.match(pageComponents, /const POLICY_VERDICT_OPTIONS: SelectOption\[\] = Object\.entries\(EXPECTED_VERDICT_LABELS as Record<string, string>\)/);
     assert.match(pageComponents, /\.map\(\(\[value, label\]\) => \(\{ value, label, description: value \}\)\);/);
-    assert.match(policyPage, /const policyCheckObservationOnly = isObservationOnlyCheck\(selectedPolicyCheck\);/);
+    assert.match(policyPage, /const policyCheckObservationOnly = selectedPolicyChecks\.length > 0 && selectedPolicyChecks\.every\(isObservationOnlyCheck\);/);
+    assert.match(policyPage, /expected_verdict: isObservationOnlyCheck\(check\) \? OBSERVATION_ONLY_VERDICT : policyExpectedVerdict/);
     assert.match(policyPage, /option\.value === OBSERVATION_ONLY_VERDICT/);
     assert.doesNotMatch(policyPage, /description: `\$\{option\.value\} · /);
     assert.match(policyPage, /setPolicyExpectedVerdict\(OBSERVATION_ONLY_VERDICT\)/);
     assert.match(policyPage, /useState\('pass'\)/);
     assert.match(policyPage, /verdictOptions: policyVerdictOptions,/);
-    assert.match(policyPage, /`Created \$\{successes\.length\} of \$\{policyTargetIds\.length\} schedules\. `/);
+    assert.match(policyPage, /`Created \$\{successes\.length\} of \$\{policyBindings\.length\} schedules\. `/);
     assert.doesNotMatch(policyPage, /policies\. `/);
   });
 });
