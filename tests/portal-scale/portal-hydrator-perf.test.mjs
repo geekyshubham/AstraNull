@@ -285,6 +285,15 @@ describePortalScalePostgres('portal hydrator performance — postgres (doc 16 §
           : () => run(pgCtx);
 
         if (spec.method === 'getState') {
+          const { rows: runtime } = await pool.query(`SELECT
+            current_user AS role, rolsuper, rolbypassrls,
+            current_setting('server_version') AS postgres_version,
+            current_setting('jit') AS jit,
+            current_setting('jit_above_cost') AS jit_above_cost,
+            current_setting('work_mem') AS work_mem,
+            current_setting('max_parallel_workers_per_gather') AS max_parallel_workers_per_gather
+            FROM pg_roles WHERE rolname = current_user`);
+          console.log('FT-PERF-PG-RUNTIME', JSON.stringify(runtime[0]));
           await withTenantContext(pool, pgIds.tenantId, async (client) => {
             const { rows } = await client.query(
               `SELECT
@@ -325,6 +334,7 @@ describePortalScalePostgres('portal hydrator performance — postgres (doc 16 §
         }
 
         const measured = p95(samples);
+        console.log(`${spec.id} postgres samples_ms`, JSON.stringify(samples.map((sample) => Number(sample.toFixed(2)))));
         console.log(
           `${spec.id} postgres ${pgProfile.targetGroups} groups / ${pgProfile.runs} runs `
           + `measured p95 ${measured.toFixed(2)}ms (budget ${spec.budgetMs}ms)`,
