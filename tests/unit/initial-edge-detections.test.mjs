@@ -2,7 +2,8 @@ import '../helpers/dev-data-dir.mjs';
 import assert from 'node:assert/strict';
 import { test, beforeEach } from 'node:test';
 import { freshStore } from '../helpers/reset.mjs';
-import { getStore } from '../../src/store.mjs';
+import { statSync } from 'node:fs';
+import { getStore, persistStore, resolveDataFile } from '../../src/store.mjs';
 import { createTargetDirect, importTargets } from '../../src/services/targetGroups.mjs';
 import { devInitialEdgeDetections } from '../../src/services/initialEdgeDetections.mjs';
 import { startTestRun } from '../../src/services/testRuns.mjs';
@@ -43,6 +44,28 @@ test('domain, child and CSV creation queue one initial detection without client 
   assert.equal(getStore().testRuns.filter((run) => [parent.id, child.id].includes(run.target_id)).length, 2);
   await devInitialEdgeDetections.dispatchPending(ctx, { runtimeConfig, now: new Date(Date.now() + 62_000) });
   assert.equal(getStore().testRuns.length, 2, 'accepted initial requests never duplicate');
+});
+
+test('idle dispatch ticks leave the dev store file untouched while real claims persist', async () => {
+  const oldNoPersist = process.env.ASTRANULL_NO_PERSIST;
+  const oldMode = process.env.ASTRANULL_PERSISTENCE_MODE;
+  delete process.env.ASTRANULL_NO_PERSIST;
+  delete process.env.ASTRANULL_PERSISTENCE_MODE;
+  try {
+    const target = createTargetDirect(ctx, { kind: 'fqdn', value: 'idle.test' });
+    persistStore();
+    const before = statSync(resolveDataFile()).ino;
+    const later = new Date(Date.now() + 31_000);
+    const claimed = await devInitialEdgeDetections.dispatchPending(ctx, { runtimeConfig, now: later });
+    assert.deepEqual(claimed.map((row) => row.target_id), [target.id]);
+    const afterClaim = statSync(resolveDataFile()).ino;
+    assert.notEqual(afterClaim, before, 'a claimed lease is durably persisted');
+    assert.deepEqual(await devInitialEdgeDetections.dispatchPending(ctx, { runtimeConfig, now: later }), []);
+    assert.equal(statSync(resolveDataFile()).ino, afterClaim, 'an idle tick performs no store write');
+  } finally {
+    if (oldNoPersist === undefined) delete process.env.ASTRANULL_NO_PERSIST; else process.env.ASTRANULL_NO_PERSIST = oldNoPersist;
+    if (oldMode === undefined) delete process.env.ASTRANULL_PERSISTENCE_MODE; else process.env.ASTRANULL_PERSISTENCE_MODE = oldMode;
+  }
 });
 
 test('independent targets sharing policy can run together while same-target overlap remains denied', () => {

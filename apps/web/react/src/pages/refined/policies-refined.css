@@ -255,6 +255,8 @@
 
 .refined.rf-policies .rf-check-selection { min-width: 0; border: 1px solid var(--border); border-radius: var(--radius-md); overflow: hidden; }
 .refined.rf-policies .rf-check-selection-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-2); padding: var(--space-3); border-bottom: 1px solid var(--border-soft); color: var(--fg-2); font-size: var(--text-xs); }
+.refined.rf-policies .rf-check-selection-toolbar button,
+.refined.rf-policies .rf-policy-form .rf-link-button { min-height: 44px; }
 .refined.rf-policies .rf-check-options { max-height: 280px; overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
 .refined.rf-policies .rf-check-options > p { padding: var(--space-4); }
 .refined.rf-policies .rf-policy-form .rf-check-option { display: flex; flex: none; flex-direction: row; align-items: flex-start; gap: var(--space-3); min-height: 44px; padding: var(--space-3); border-bottom: 1px solid var(--border-soft); cursor: pointer; transition: background var(--motion-fast); }

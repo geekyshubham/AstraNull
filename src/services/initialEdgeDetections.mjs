@@ -53,7 +53,7 @@ export const devInitialEdgeDetections = createInitialEdgeDetectionService({
       && (row.status === 'queued' || (row.status === 'leased' && Date.parse(row.lease_expires_at) <= now.getTime()))
       && Date.parse(row.next_attempt_at) <= now.getTime()).sort((a, b) => String(a.next_attempt_at).localeCompare(String(b.next_attempt_at))).slice(0, limit);
     for (const row of rows) { row.status = 'leased'; row.lease_token = randomUUID(); row.lease_expires_at = new Date(now.getTime() + 60_000).toISOString(); row.attempts += 1; }
-    persistStore();
+    if (rows.length) persistStore();
     return rows.map((row) => ({ ...row }));
   },
   finish: (ctx, request, outcome) => {
