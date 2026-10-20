@@ -54,9 +54,12 @@ export function createPostgresStateServices(repositories, options = {}) {
       // Do not hydrate group list pages (finding/LOA joins) merely to count or assess scope.
       const scopePromise = inputPromise.then((input) => input?.scope_complete === true && Array.isArray(input.groups) && Array.isArray(input.targets)
         ? [input.groups, input.targets] : Promise.all([coreCatalog.listTargetGroups(ctx), coreCatalog.listTargets(ctx)]));
-      const [[groups, targets], feedRuns, openFindingsCount, highScaleRequests, killSwitchRecord, completeInputs, tenant] = await Promise.all([
+      // Only compatibility readers need the capped feed; retain overlap with other reads.
+      const evidencePromise = inputPromise.then((input) => input ? [] : validationEvidence.listEvidence(ctx, { limit: EVIDENCE_LIST_LIMIT }));
+      const [[groups, targets], feedRuns, evidenceItems, openFindingsCount, highScaleRequests, killSwitchRecord, completeInputs, tenant] = await Promise.all([
         scopePromise,
         validationEvidence.listTestRuns(ctx, { limit: TEST_RUN_LIST_LIMIT }),
+        evidencePromise,
         validationEvidence.countOpenFindings(ctx), highScale.listHighScaleRequests(ctx), killSwitch.getKillSwitchRecord(ctx),
         inputPromise,
         typeof coreCatalog.getCurrentTenant === 'function' ? coreCatalog.getCurrentTenant(ctx) : null,
@@ -65,8 +68,6 @@ export function createPostgresStateServices(repositories, options = {}) {
       let inputs = completeInputs;
       if (!inputs) {
         // Compatibility readers are capped presentation feeds, not an estate assessment.
-        // Snapshot readers already supply evidence; do not fetch and discard another feed.
-        const evidenceItems = await validationEvidence.listEvidence(ctx, { limit: EVIDENCE_LIST_LIMIT });
         const eligibleRuns = feedRuns.filter((run) => ['completed', 'verdicted'].includes(run.status));
         const eventRunIds = new Set(sortedRuns.filter((run) => ['completed', 'verdicted'].includes(run.status)).slice(0, RUN_EVENT_FETCH_RUN_LIMIT).map((run) => run.id));
         for (const item of evidenceItems) if (item.related_event_id && item.test_run_id) eventRunIds.add(item.test_run_id);

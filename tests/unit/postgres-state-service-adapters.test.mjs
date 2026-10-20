@@ -318,6 +318,23 @@ describe('postgres state service adapter', () => {
     });
   }
 
+  it('starts compatibility evidence without waiting for unrelated presentation reads', async () => {
+    const repositories = stubRepositories();
+    repositories.validationEvidence.readReadinessInputs = async () => null;
+    const presentation = Promise.withResolvers();
+    let evidenceStarted = false;
+    repositories.validationEvidence.listTestRuns = async () => presentation.promise;
+    repositories.validationEvidence.listEvidence = async () => { evidenceStarted = true; return []; };
+    const pending = createPostgresStateServices(repositories, { now: () => FIXED_NOW }).getState({ tenantId: 'ten_demo' });
+    try {
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(evidenceStarted, true, 'independent evidence read must start while the presentation feed is held');
+    } finally {
+      presentation.resolve([]);
+      await pending;
+    }
+  });
+
   it('propagates a failed snapshot read without falling back to capped evidence', async () => {
     const repositories = stubRepositories();
     const failure = new Error('snapshot unavailable');
