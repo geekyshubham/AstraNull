@@ -1,4 +1,5 @@
 const TARGET_KIND_ALIASES = Object.freeze({ domain: 'fqdn', hostname: 'fqdn' });
+import { isDeclarationOnlyCheck } from './check-classification.mjs';
 
 function text(value) {
   return String(value ?? '').trim();
@@ -86,7 +87,7 @@ export function vectorTargetAvailability(vector, checks, target) {
   }
 
   const safeIds = new Set(values(vector?.safe_check_ids));
-  const mappedChecks = checks.filter((check) => safeIds.has(text(check.check_id)) && text(check.safety_class) === 'safe');
+  const mappedChecks = checks.filter((check) => !isDeclarationOnlyCheck(check) && safeIds.has(text(check.check_id)) && text(check.safety_class) === 'safe');
   const runnableChecks = mappedChecks.filter((check) => vectorCheckSupportsTarget(check, target));
   if (runnableChecks.length > 0) {
     return {
@@ -147,7 +148,7 @@ const TARGET_FIT_ORDER = Object.freeze(['safe_runnable', 'additional_input', 'ta
 export function sortVectorsByTargetFit(vectors, checks, target) {
   const rows = Array.isArray(vectors) ? [...vectors] : [];
   if (!target) return rows;
-  const catalog = Array.isArray(checks) ? checks : [];
+  const catalog = (Array.isArray(checks) ? checks : []).filter((check) => !isDeclarationOnlyCheck(check));
   const rank = (vector) => {
     const index = TARGET_FIT_ORDER.indexOf(vectorTargetAvailability(vector, catalog, target).id);
     return index < 0 ? TARGET_FIT_ORDER.length : index;
@@ -166,7 +167,7 @@ export function sortVectorsByTargetFit(vectors, checks, target) {
  * within each group (callers sort vectors first).
  */
 export function groupVectorsByCheck(vectors, checks) {
-  const catalog = Array.isArray(checks) ? checks : [];
+  const catalog = (Array.isArray(checks) ? checks : []).filter((check) => !isDeclarationOnlyCheck(check));
   const checkById = new Map(catalog.map((check) => [text(check?.check_id), check]));
   const groups = new Map();
   const unmapped = [];
@@ -198,6 +199,7 @@ export function countCompatibleSafeChecks(pairs, checks) {
   for (const pair of Array.isArray(pairs) ? pairs : []) {
     const checkId = text(pair?.check_id);
     if (!checkId) continue;
+    if (isDeclarationOnlyCheck(pair?.catalog) || isDeclarationOnlyCheck(catalog.get(checkId))) continue;
     const safetyClass = text(pair?.catalog?.safety_class) || text(catalog.get(checkId)?.safety_class);
     if (safetyClass === 'safe') safeIds.add(checkId);
   }

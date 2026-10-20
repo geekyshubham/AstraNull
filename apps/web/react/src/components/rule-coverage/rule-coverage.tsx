@@ -71,7 +71,7 @@ function CheckList({ category, mode }: { category: CoverageCategory; mode: 'cata
       <ul className="rc-checks">{visible.map(item)}</ul>
       {hidden.length ? (
         <details className="rc-more">
-          <summary>{hidden.length} more {hidden.length === 1 ? 'check' : 'checks'}</summary>
+          <summary><span className="rc-more-show">{hidden.length} more {hidden.length === 1 ? 'check' : 'checks'}</span><span className="rc-more-hide">Hide checks</span></summary>
           <ul className="rc-checks">{hidden.map(item)}</ul>
         </details>
       ) : null}
@@ -194,7 +194,7 @@ export function RuleCoverageView({ payload, mode, targetId = '', canWrite = fals
                         >
                           {category.assurance === 'partial' ? <CircleDot size={12} aria-hidden="true" /> : null}{category.assuranceLabel}
                         </Badge>
-                        {category.assuranceReason ? <small className="rc-assurance-reason">{category.assuranceReason}</small> : null}
+                        {mode === 'target' && category.assuranceReason ? <small className="rc-assurance-reason">{category.assuranceReason}</small> : null}
                       </td>
                       {mode === 'target' ? <td><StatusBadge category={category} /></td> : null}
                       <td><CheckList category={category} mode={mode} /></td>

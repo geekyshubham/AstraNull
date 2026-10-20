@@ -21,21 +21,22 @@ assert.ok(policyStart >= 0 && policyEnd > policyStart, 'PolicyPage source block 
 assert.ok(CREATE_PANEL_SOURCE.length > 0, 'single create-schedule panel source must be discoverable');
 
 describe('Policy page truthfulness contract', () => {
-  it('writes exact domain schedules sequentially and retries only failed domains', () => {
-    assert.match(POLICY_SOURCE, /for \(const targetId of policyTargetIds\)/);
-    assert.match(POLICY_SOURCE, /body: \{ \.\.\.bodyBase, target_id: targetId \}/);
+  it('writes exact check/domain schedules sequentially and retries only failed pairs', () => {
+    assert.match(POLICY_SOURCE, /for \(const \{ targetId, checkId \} of policyBindings\)/);
+    assert.match(POLICY_SOURCE, /body: \{ \.\.\.bodyBase, check_id: checkId, target_id: targetId,/);
     assert.match(POLICY_SOURCE, /setPolicyTargetIds\(\[\.\.\.failedIds\]\)/);
+    assert.match(POLICY_SOURCE, /setRetryBindings\(failures\.map\(\(\{ checkId, targetId \}\) => \(\{ checkId, targetId \}\)\)\)/);
     assert.doesNotMatch(POLICY_SOURCE, /target_group_id:|\/v1\/target-groups/);
     assert.match(CREATE_PANEL_SOURCE, /<DomainPicker/);
-    assert.match(POLICY_SOURCE, /isPolicyTargetCompatible\(selectedPolicyCheck, target\)/);
+    assert.match(POLICY_SOURCE, /isPolicyTargetCompatible\(check, target\)/);
   });
   it('does not inject a hidden default safe window from the collapsed optional section', () => {
     const safeWindowDetails = CREATE_PANEL_SOURCE.match(/<details className="rf-disclosure full">[\s\S]*?<\/details>/)?.[0] ?? '';
     assert.ok(safeWindowDetails, 'optional safe-window details must render in the single create panel');
     assert.doesNotMatch(safeWindowDetails, /defaultValue="(?:Mon|02:00|04:00|UTC)"/);
     assert.match(safeWindowDetails, /name="safe_window_day" value=\{form\.windowDay\}/);
-    assert.match(safeWindowDetails, /<input name="safe_window_start" type="time" \/>/);
-    assert.match(safeWindowDetails, /<input name="safe_window_end" type="time" \/>/);
+    assert.match(safeWindowDetails, /<input name="safe_window_start" type="time"[^>]*\/>/);
+    assert.match(safeWindowDetails, /<input name="safe_window_end" type="time"[^>]*\/>/);
     assert.match(POLICY_SOURCE, /const \[policyWindowDay, setPolicyWindowDay\] = useState\(''\);/);
     assert.match(POLICY_SOURCE, /const hasSafeWindow = \[day, start, end\]\.some\(Boolean\)/);
     assert.match(POLICY_SOURCE, /hasSafeWindow && !safeWindowValues\.every\(Boolean\)/);

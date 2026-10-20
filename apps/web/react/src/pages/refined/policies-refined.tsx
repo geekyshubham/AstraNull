@@ -42,10 +42,12 @@ export interface PolicyCreateFormModel {
   selectedTargetIds: string[];
   onTargetsChange: (ids: string[]) => void;
   selectionReady: boolean;
-  selectedCheck: DataItem | null;
-  checkId: string;
+  selectedChecks: DataItem[];
+  checkIds: string[];
+  bindings: Array<{ checkId: string; targetId: string }>;
+  retrying: boolean;
   checkOptions: SelectOption[];
-  onCheckChange: (checkId: string) => void;
+  onChecksChange: (checkIds: string[]) => void;
   cadence: string;
   cadenceOptions: SelectOption[];
   onCadenceChange: (cadence: string) => void;
@@ -757,15 +759,18 @@ function CreateSchedulePanel({
 
   const query = checkQuery.trim().toLowerCase();
   const filteredCheckOptions = query
-    ? form.checkOptions.filter((option) => !option.value || option.value === form.checkId || `${option.label} ${option.value}`.toLowerCase().includes(query))
+    ? form.checkOptions.filter((option) => `${option.label} ${option.value}`.toLowerCase().includes(query))
     : form.checkOptions;
   const matchCount = filteredCheckOptions.filter((option) => option.value).length;
+  const scheduleCount = form.bindings.length;
+  const skippedCount = form.retrying ? 0 : form.checkIds.length * selectedCount - scheduleCount;
+  const observationOnly = form.selectedChecks.length > 0 && form.selectedChecks.every(isObservationOnlyCheck);
 
   const readiness = noTargets
     ? 'Declare a domain before creating a schedule.'
     : noChecks
       ? 'No customer-runnable checks are available to schedule.'
-      : !form.checkId
+      : !form.checkIds.length
         ? 'Select a check to continue.'
         : selectedCount === 0
           ? 'Select a domain or domains.'
@@ -773,12 +778,11 @@ function CreateSchedulePanel({
             ? 'Select active domains compatible with this check.'
             : !timezoneValid
               ? 'Enter a valid IANA timezone, for example Europe/London.'
-              : `Ready to create ${selectedCount} ${selectedCount === 1 ? 'schedule' : 'schedules'}, one per selected domain.`;
-  const submitDisabled = noTargets || noChecks || !form.checkId || !form.selectionReady || !timezoneValid || busy !== '';
-  const checkName = str(form.selectedCheck, ['name', 'check_id']);
-  const reviewRows = form.selectedTargetIds.map((targetId) => {
+              : `Ready to create ${scheduleCount} ${scheduleCount === 1 ? 'schedule' : 'schedules'}.`;
+  const submitDisabled = noTargets || noChecks || !form.checkIds.length || !form.selectionReady || !timezoneValid || busy !== '';
+  const reviewRows = form.bindings.map(({ targetId, checkId }) => {
     const target = form.targets.find((candidate) => str(candidate, ['id']) === targetId);
-    return { targetId, targetLabel: str(target, ['value'], 'Unavailable domain') };
+    return { targetId, checkId, targetLabel: str(target, ['value'], 'Unavailable domain') };
   });
 
   return (
@@ -787,22 +791,21 @@ function CreateSchedulePanel({
         <div className="rf-create-heading">
           <h2 id={headingId} ref={headingRef} tabIndex={-1}>New validation schedule</h2>
           <p>
-            Bind a customer-runnable check to the declared domains you select. Schedules are written one at a time, and failed domains stay selected for retry.
+            Choose checks, select domains, and set a cadence. Each compatible check and domain gets its own schedule.
           </p>
         </div>
         <Button type="button" size="sm" variant="ghost" disabled={busy !== ''} onClick={form.onClose}>Cancel</Button>
       </div>
 
       <form className="product-form rf-policy-form" onSubmit={form.onSubmit} aria-busy={busy === 'create-test-policy' || undefined}>
-        <input type="hidden" name="check_id" value={form.checkId} />
         <input type="hidden" name="cadence" value={form.cadence} />
         <input type="hidden" name="expected_verdict" value={form.expectedVerdict} />
         <input type="hidden" name="timezone" value={form.timezone} />
 
         <div className="rf-form-section">
           <div className="rf-form-intro">
-            <h3 id={checkSectionId}><span className="rf-step" aria-hidden="true">1</span>Check</h3>
-            <p>Only customer-runnable checks can be scheduled. The check decides which target kinds can be bound.</p>
+            <h3 id={checkSectionId}>Checks</h3>
+            <p>Select any or all customer-runnable checks. SOC-governed checks require a separate approval.</p>
           </div>
           <fieldset className="rf-form-fields" aria-labelledby={checkSectionId}>
             <label className="full">
@@ -813,30 +816,42 @@ function CreateSchedulePanel({
                 onChange={(event) => setCheckQuery(event.target.value)}
                 placeholder="Name or check ID"
                 autoComplete="off"
-                disabled={noChecks}
+                disabled={noChecks || busy !== ''}
                 aria-describedby={`${checkSectionId}-matches`}
               />
               <span className="muted small" id={`${checkSectionId}-matches`} aria-live="polite">
                 {query ? `${formatNumber(matchCount)} of ${formatNumber(safeCheckCount)} runnable checks match` : `${formatNumber(safeCheckCount)} runnable checks`}
               </span>
             </label>
-            <Select
-              label="Check"
-              value={form.checkId}
-              options={filteredCheckOptions}
-              disabled={noChecks}
-              onChange={form.onCheckChange}
-            />
+            <div className="rf-check-selection full">
+              <div className="rf-check-selection-toolbar">
+                <span aria-live="polite">{form.checkIds.length} of {safeCheckCount} selected</span>
+                <div className="row-actions">
+                  <Button type="button" size="sm" variant="secondary" disabled={noChecks || busy !== '' || form.checkIds.length === safeCheckCount} onClick={() => form.onChecksChange(form.checkOptions.filter((option) => option.value).map((option) => option.value))}>Select all checks</Button>
+                  <Button type="button" size="sm" variant="ghost" disabled={!form.checkIds.length || busy !== ''} onClick={() => form.onChecksChange([])}>Clear</Button>
+                </div>
+              </div>
+              <div className="rf-check-options" role="group" aria-label="Checks to schedule" tabIndex={0}>
+                {filteredCheckOptions.filter((option) => option.value).map((option) => (
+                  <label key={option.value} className="rf-check-option">
+                    <input type="checkbox" checked={form.checkIds.includes(option.value)} disabled={busy !== ''} onChange={(event) => form.onChecksChange(event.target.checked ? [...form.checkIds, option.value] : form.checkIds.filter((id) => id !== option.value))} />
+                    <span><strong>{option.label}</strong><small>{option.description}</small></span>
+                  </label>
+                ))}
+                {!matchCount ? <p className="rf-help">{noChecks ? 'No runnable checks available.' : 'No checks match. Try another name or check ID.'}</p> : null}
+              </div>
+            </div>
             <Select
               label="Expected verdict"
               value={form.expectedVerdict}
               options={form.verdictOptions}
-              hint={isObservationOnlyCheck(form.selectedCheck) ? OBSERVATION_ONLY_HINT : undefined}
+              disabled={busy !== ''}
+              hint={observationOnly ? OBSERVATION_ONLY_HINT : form.selectedChecks.some(isObservationOnlyCheck) ? 'Observation-only checks use Manual review automatically. This verdict applies to the other selected checks.' : undefined}
               onChange={form.onExpectedVerdictChange}
             />
             <p className="rf-help full">
               The expected verdict is a declaration. It is compared against external probe evidence once a run records it.
-              {form.checkId ? <> <a href={`${buildDetailHref('check-detail', form.checkId)}`}>Review this check</a>.</> : null}
+              {form.checkIds.length === 1 ? <> <a href={`${buildDetailHref('check-detail', form.checkIds[0])}`}>Review this check</a>.</> : null}
               {noChecks ? <> <a href="#checks">Review the check catalog</a>.</> : null}
             </p>
           </fieldset>
@@ -844,7 +859,7 @@ function CreateSchedulePanel({
 
         <div className="rf-form-section">
           <div className="rf-form-intro">
-            <h3 id={scopeSectionId}><span className="rf-step" aria-hidden="true">2</span>Scope</h3>
+            <h3 id={scopeSectionId}>Domains</h3>
             <p>Select one or more declared domains directly. The bound identity cannot change after creation.</p>
           </div>
           <fieldset className="rf-form-fields" aria-labelledby={scopeSectionId}>
@@ -855,7 +870,7 @@ function CreateSchedulePanel({
 
         <div className="rf-form-section">
           <div className="rf-form-intro">
-            <h3 id={cadenceSectionId}><span className="rf-step" aria-hidden="true">3</span>Timing</h3>
+            <h3 id={cadenceSectionId}>Timing</h3>
             <p>How often the check runs, in which timezone, and optionally when runs may start.</p>
           </div>
           <fieldset className="rf-form-fields" aria-labelledby={cadenceSectionId}>
@@ -863,12 +878,14 @@ function CreateSchedulePanel({
               label="Cadence"
               value={form.cadence}
               options={form.cadenceOptions}
-              onChange={form.onCadenceChange}
+                onChange={form.onCadenceChange}
+                disabled={busy !== ''}
             />
             <label>
               <span>Schedule timezone (IANA)</span>
               <input
                 value={form.timezone}
+                disabled={busy !== ''}
                 onChange={(event) => form.onTimezoneChange(event.target.value)}
                 autoComplete="off"
                 spellCheck={false}
@@ -878,7 +895,7 @@ function CreateSchedulePanel({
               <span className="muted small" id={`${cadenceSectionId}-tz`}>
                 {timezoneValid ? 'Cadence and windows are evaluated in this timezone.' : 'Not a recognised IANA timezone.'}
                 {viewerZone && viewerZone !== form.timezone ? (
-                  <> <button type="button" className="rf-link-button" onClick={() => form.onTimezoneChange(viewerZone)}>Use {viewerZone}</button></>
+                  <> <button type="button" className="rf-link-button" disabled={busy !== ''} onClick={() => form.onTimezoneChange(viewerZone)}>Use {viewerZone}</button></>
                 ) : null}
               </span>
             </label>
@@ -886,39 +903,41 @@ function CreateSchedulePanel({
               <summary>Safe window (optional)</summary>
               <div className="rf-disclosure-body">
                 <p className="rf-help full">Leave every field blank for no safe window, or complete day, start, and end. The window uses the schedule timezone.</p>
-                <Select label="Safe window day" name="safe_window_day" value={form.windowDay} options={SCHEDULE_DAY_OPTIONS} onChange={form.onWindowDayChange} />
+                <Select label="Safe window day" name="safe_window_day" value={form.windowDay} options={SCHEDULE_DAY_OPTIONS} onChange={form.onWindowDayChange} disabled={busy !== ''} />
                 <label>
                   <span>Window start</span>
-                  <input name="safe_window_start" type="time" />
+                  <input name="safe_window_start" type="time" disabled={busy !== ''} />
                 </label>
                 <label>
                   <span>Window end</span>
-                  <input name="safe_window_end" type="time" />
+                  <input name="safe_window_end" type="time" disabled={busy !== ''} />
                 </label>
               </div>
             </details>
           </fieldset>
         </div>
 
-        {form.checkId && selectedCount > 0 ? (
+        {form.checkIds.length > 0 && selectedCount > 0 ? (
           <div className="rf-form-section rf-review" aria-labelledby={reviewSectionId}>
             <div className="rf-form-intro">
-              <h3 id={reviewSectionId}><span className="rf-step" aria-hidden="true">4</span>Review</h3>
+              <h3 id={reviewSectionId}>Review · {formatNumber(scheduleCount)} {scheduleCount === 1 ? 'schedule' : 'schedules'}</h3>
               <p>Exactly these records are written. The scheduler computes each first run after creation.</p>
             </div>
             <div className="rf-form-fields">
               <ul className="rf-review-list full" aria-label="Schedules to create">
                 {reviewRows.map((row) => (
-                  <li key={row.targetId}>
-                    <strong>{checkPresentation(form.checkId).name}</strong>
+                  <li key={`${row.targetId}:${row.checkId}`}>
+                    <strong>{checkPresentation(row.checkId).name}</strong>
                     <span> on </span>
                     <strong className="rf-mono">{row.targetLabel || 'target not selected'}</strong>
                   </li>
                 ))}
               </ul>
               <p className="rf-help full">
-                {optionLabel(form.cadenceOptions, form.cadence)} cadence · {timezoneValid ? form.timezone : 'timezone invalid'} · {plainExpectedVerdictLabel(form.expectedVerdict)} · {formatNumber(selectedCount)} {selectedCount === 1 ? 'record' : 'records'}
+                {optionLabel(form.cadenceOptions, form.cadence)} cadence · {timezoneValid ? form.timezone : 'timezone invalid'} · {plainExpectedVerdictLabel(form.expectedVerdict)}{!observationOnly && form.selectedChecks.some(isObservationOnlyCheck) ? ' (Manual review for observation-only checks)' : ''}
               </p>
+              {skippedCount > 0 ? <p className="rf-help full">{skippedCount} incompatible check/domain {skippedCount === 1 ? 'pair is' : 'pairs are'} excluded. Only the compatible pairs listed above will be created.</p> : null}
+              {form.retrying ? <p className="rf-help full">Only failed check/domain pairs are listed for retry. Successful schedules are already saved.</p> : null}
             </div>
           </div>
         ) : null}
@@ -1087,7 +1106,7 @@ export function PoliciesRefined(props: PoliciesRefinedProps) {
           compact
           onCreateReplacement={(checkId) => {
             props.onCreateSchedule();
-            createForm.onCheckChange(checkId);
+            createForm.onChecksChange([checkId]);
           }}
           onChanged={async (success) => {
             props.onActionResult(success, '');

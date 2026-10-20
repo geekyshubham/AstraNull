@@ -50,6 +50,8 @@ body .badge.rc-status, body [data-ui='badge'].rc-status { display: inline-flex; 
 .rc-checks li { display: grid; gap: 0; }
 .rc-check-meta { color: var(--fg-2); font-size: var(--text-xs); }
 .rc-more summary { cursor: pointer; color: var(--fg-2); font-size: var(--text-xs); min-height: 28px; display: flex; align-items: center; }
+.rc-more-hide, .rc-more[open] .rc-more-show { display: none; }
+.rc-more[open] .rc-more-hide { display: inline; }
 .rc-reason { display: block; max-width: 30ch; color: var(--fg-2); font-size: var(--text-xs); line-height: 1.45; }
 .rc-ctas { display: grid; gap: var(--space-2); justify-items: start; }
 

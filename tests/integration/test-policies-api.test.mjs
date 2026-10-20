@@ -1,22 +1,38 @@
+import '../helpers/dev-data-dir.mjs';
+
 import assert from 'node:assert/strict';
 import { after, before, beforeEach, describe, it } from 'node:test';
 import { createServer } from '../../src/server.mjs';
-import { demoHeaders, request } from '../helpers/http.mjs';
+import { getStore } from '../../src/store.mjs';
+import { closeServer, demoHeaders, request } from '../helpers/http.mjs';
 import { freshStore } from '../helpers/reset.mjs';
 
 let server;
 let baseUrl;
 
-before(() => {
+const previousNoPersist = process.env.ASTRANULL_NO_PERSIST;
+
+before(async () => {
   freshStore();
   server = createServer();
-  server.listen(0);
-  const { port } = server.address();
-  baseUrl = `http://127.0.0.1:${port}`;
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  const address = server.address();
+  assert.equal(address.address, '127.0.0.1');
+  assert.equal(address.family, 'IPv4');
+  assert.ok(address.port > 0);
+  baseUrl = `http://127.0.0.1:${address.port}`;
 });
 
-after(() => {
-  server?.close();
+after(async () => {
+  try {
+    await closeServer(server);
+  } finally {
+    if (previousNoPersist === undefined) delete process.env.ASTRANULL_NO_PERSIST;
+    else process.env.ASTRANULL_NO_PERSIST = previousNoPersist;
+  }
 });
 
 beforeEach(() => {
@@ -85,7 +101,8 @@ describe('test policies API', () => {
   });
 
   it('rejects SOC-gated checks as customer-runnable policy bindings', async () => {
-    const engineer = demoHeaders('engineer');
+    // Exercise a normal customer; usr_admin is the explicit demo-account exception.
+    const engineer = demoHeaders('engineer', 'ten_demo', 'usr_engineer');
     const created = await request(baseUrl, 'POST', '/v1/test-policies', {
       headers: engineer,
       body: {
@@ -99,6 +116,43 @@ describe('test policies API', () => {
     assert.equal(created.status, 403);
     assert.equal(created.json.error, 'soc_gated_check');
   });
+
+  it('retains a successful policy and its audit across later failed and duplicate pair writes', async () => {
+    const headers = demoHeaders('engineer', 'ten_demo', 'usr_engineer');
+    const body = { target_group_id: 'tg_1', target_id: 'tgt_1', check_id: 'dns.authoritative_response.safe', cadence: 'weekly', timezone: 'UTC' };
+    const created = await request(baseUrl, 'POST', '/v1/test-policies', { headers, body });
+    assert.equal(created.status, 201);
+    const incompatible = await request(baseUrl, 'POST', '/v1/test-policies', { headers, body: { ...body, check_id: 'path.protected_canary.safe' } });
+    assert.equal(incompatible.status, 400);
+    const duplicate = await request(baseUrl, 'POST', '/v1/test-policies', { headers, body });
+    assert.equal(duplicate.status, 409);
+    assert.equal(duplicate.json.error, 'test_policy_exists');
+    assert.deepEqual(getStore().testPolicies.map((policy) => policy.id), [created.json.id]);
+    const audits = getStore().auditLog.filter((entry) => entry.action === 'test_policy.created');
+    assert.equal(audits.length, 1);
+    assert.equal(audits[0].resource_id, created.json.id);
+    assert.equal(audits[0].metadata.target_id, body.target_id);
+    assert.equal(audits[0].metadata.check_id, body.check_id);
+    assert.equal(getStore().testRuns.length, 0);
+    assert.equal(getStore().probeJobs.length, 0);
+  });
+
+  for (const scenario of ['read-only role', 'foreign tenant', 'foreign target', 'archived target']) {
+    it(`rejects ${scenario} without creating policies or execution jobs`, async () => {
+      const body = { target_group_id: 'tg_1', target_id: 'tgt_1', check_id: 'dns.authoritative_response.safe' };
+      let headers = demoHeaders('engineer', 'ten_demo', 'usr_engineer');
+      if (scenario === 'read-only role') headers = demoHeaders('auditor', 'ten_demo', 'usr_auditor');
+      if (scenario === 'foreign tenant') headers = demoHeaders('engineer', 'ten_other', 'usr_other');
+      if (scenario === 'foreign target') getStore().targets[0].tenant_id = 'ten_other';
+      if (scenario === 'archived target') getStore().targets[0].deleted_at = new Date().toISOString();
+      const response = await request(baseUrl, 'POST', '/v1/test-policies', { headers, body });
+      assert.equal(response.status, scenario === 'read-only role' ? 403 : 404);
+      assert.equal(getStore().testPolicies.length, 0);
+      assert.equal(getStore().auditLog.filter((entry) => entry.action === 'test_policy.created').length, 0);
+      assert.equal(getStore().testRuns.length, 0);
+      assert.equal(getStore().probeJobs.length, 0);
+    });
+  }
 
   it('rejects check and effective target-kind incompatibility before persistence', async () => {
     const engineer = demoHeaders('engineer');

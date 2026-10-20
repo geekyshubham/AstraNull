@@ -32,7 +32,7 @@ const CSP_POLICY = [
   // Inline boot styles plus the Google Fonts stylesheet link.
   "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
   "font-src 'self' https://fonts.gstatic.com",
-  "img-src 'self' data:",
+  "img-src 'self' data: https://icons.duckduckgo.com",
   "connect-src 'self'",
   "object-src 'none'",
   "base-uri 'self'",

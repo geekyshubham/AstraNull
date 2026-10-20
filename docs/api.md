@@ -584,6 +584,8 @@ Tenant-scoped ledger: `agentUpdateTrustKeys` in developer validation; `agent_upd
 
 ## Test policies
 
+The portal can select several checks and domains together. It sends one sequential `POST /v1/test-policies` per compatible check/domain pair, using exact `target_id` bindings. Incompatible target kinds are excluded in the review before submission. Bulk selection introduces no new endpoint or persistence schema: each successful policy retains the existing validation and audit behavior. Partial failures retry only failed exact pairs. Observation-only checks receive `expected_verdict: manual_review`, independently of the verdict chosen for other checks.
+
 | Method | Path | Permission | Request | Response |
 |---|---|---|---|---|
 | GET | `/v1/test-policies` | `test_policy:read` | — | `{ items }` active, non-archived per-target rules enriched with exact active target, target-group, and check metadata. Policies for archived groups are omitted. |

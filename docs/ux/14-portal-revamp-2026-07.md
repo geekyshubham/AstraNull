@@ -203,8 +203,13 @@ Both `target-group-detail` and `target-detail` show a Findings panel with **an e
 
 - **Prototype:** `#screen-test-policies` + `modal-policy`.
 - **React target:** `pages/page-components.tsx` → `PolicyPage`.
-- **New:** the Target groups field is a **multi-select dropdown of the tenant's groups**, not a free-text input. Structure: `.tg-picker-trigger.input` (button, `aria-haspopup="listbox"`, `aria-expanded`, `aria-controls`) → `.tg-picker-menu` (`role="listbox"`, `aria-multiselectable="true"`) → 6 `.tg-picker-row` (`role="option"`) with real `<input type="checkbox">` + `<span class="tg-check-box">` + `<span>` name + `<span class="tg-meta">` (env + criticality + target count). Chips inside the trigger for selected rows with an `×` remove button (aria-label per-group).
-- Outside-click closes the menu; ESC closes. Keep the tri-state pattern of `.checkrow` for the existing High-scale-opt-in field.
+- **Current:** inline create form with ruled Checks, Domains, Timing, and Review sections, using shared spacing, surface, typography, and focus tokens. A searchable native checkbox list supports individual selection, **Select all checks** across the complete runnable catalog (including when searching), and **Clear**. Only safe checks without a customer-run restriction are offered; governance remains enforced by the API.
+- Domains are selected directly per ADR-0019. Review lists the exact compatible check/domain pairs and counts incompatible pairs excluded from creation. Every selected domain must support at least one selected check. Each pair gets one schedule through the existing API, sequentially, with the selected cadence, timezone, and safe window. Observation-only checks always receive `manual_review`; other checks use the chosen expected verdict.
+- A partial failure retains only failed exact check/domain pairs for retry, including non-rectangular failures across several domains/checks. Successful writes remain saved. Changing checks or domains explicitly starts a new selection. Selection and timing controls lock during submission; no probe starts merely from selecting a check or domain.
+- Checks catalog: a covering-check disclosure reads **Hide checks** while expanded; the catalog omits the redundant assurance-reason paragraph. Target-specific assurance explanations remain alongside their evidence.
+- Targets: both inventory variants show domain favicons from `https://icons.duckduckgo.com/ip3/<hostname>.ico`, loaded lazily without a referrer. Only a syntactically valid parsed DNS hostname is sent; URL paths/queries/credentials are excluded. IPs, malformed values, failed image loads, special-use suffixes (`.arpa`, `.onion`, `.alt`, `.local`, `.localhost`, `.test`, `.invalid`, `.example`), example.com/net/org and their subdomains, and conventional private suffixes (`.internal`, `.home`, `.lan`, `.corp`, `.intranet`, `.private`) retain a type icon without an external image URL. Hostname syntax does not prove public resolvability: other public-shaped names, including split-horizon names, are disclosed to the icon service. CSP allows only that dedicated additional image origin; no server-side favicon fetch is introduced.
+- Legacy `env:` / `environment:` tags are omitted from both target inventories, their tag-filter choices, and target-detail chips. Existing stored tags are retained for compatibility; tag examples use team and tier labels.
+- Statement-only E1 / `metadata_marker` entries do not appear as executable check groups, schedule choices, or runnable-count totals. Their vectors stay in the informational unmapped bucket so coverage gaps are visible. Evidence/history still truthfully identifies declaration-only records; they are never relabelled as live probes.
 
 ### 4.10 Reports, Integrations, Notifications, Audit, Settings, Support, Billing
 
@@ -364,7 +369,7 @@ The Remediation panel renders `remSteps` as an ordered list with mono zero-padde
 7. **Dashboard** — Overview tab (WAF summary added, Business services + Evidence feed tabs deleted) + Risk trends tab. Segmented donut with the `::before`-mask pattern (§7.4).
 8. **Runs SOC-gated queue** — inline panel, page-head Request action, deep-link into staff SOC console.
 9. **Agents / Agent detail** — 8-tab install matrix; move Heartbeat + Placement panels to agent-detail.
-10. **Test policies target-group picker** — multi-select dropdown.
+10. **Validation schedule picker** — searchable multi-check selection and direct domain selection (§4.9).
 11. **Reports / Integrations / Notifications / Audit / Settings / Support / Billing** — rename + small polish; wire the create-rule form + connector-poll runner state.
 12. **Staff surfaces** — Admin signup queue, Tenant detail Users tab.
 13. **CRUD gaps** — work through [`15-crud-operations-backlog.md`](15-crud-operations-backlog.md).

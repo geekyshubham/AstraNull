@@ -26,7 +26,7 @@ function requestRoute({ url = PORTAL_FONT_STYLESHEET, method = 'GET', type = 'st
 test('only the exact shell stylesheet GET uses the explicit local system-font fixture', async () => {
   const page = new Page();
   await installPortalBrowserResources(page);
-  const [{ match, handler }] = page.registrations;
+  const { match, handler } = page.registrations.find(({ match }) => typeof match === 'function');
   assert.equal(match(new URL(PORTAL_FONT_STYLESHEET)), true);
   const route = requestRoute();
   await handler(route);
@@ -48,7 +48,7 @@ for (const url of [
   test(`unrelated URL is neither matched nor fulfilled: ${url}`, async () => {
     const page = new Page();
     await installPortalBrowserResources(page);
-    const [{ match, handler }] = page.registrations;
+    const { match, handler } = page.registrations.find(({ match }) => typeof match === 'function');
     assert.equal(match(new URL(url)), false);
     const route = requestRoute({ url });
     await handler(route);
@@ -62,7 +62,7 @@ for (const options of [{ method: 'POST' }, { method: 'HEAD' }, { type: 'xhr' }, 
     const page = new Page();
     await installPortalBrowserResources(page);
     const route = requestRoute(options);
-    await page.registrations[0].handler(route);
+    await page.registrations.find(({ match }) => typeof match === 'function').handler(route);
     assert.equal(route.fallbacks, 1);
     assert.deepEqual(route.responses, []);
   });
@@ -73,8 +73,21 @@ test('concurrent installation is idempotent per page, not global', async () => {
   const second = new Page();
   await Promise.all([installPortalBrowserResources(first), installPortalBrowserResources(first), installPortalBrowserResources(second)]);
   await installPortalBrowserResources(first);
-  assert.equal(first.registrations.length, 1);
-  assert.equal(second.registrations.length, 1);
+  assert.equal(first.registrations.length, 2);
+  assert.equal(second.registrations.length, 2);
+  assert.equal(first.registrations.filter(({ match }) => match === 'https://icons.duckduckgo.com/**').length, 1);
+});
+
+test('favicon requests use an owned inert image fixture, not the external service', async () => {
+  const page = new Page();
+  await installPortalBrowserResources(page);
+  const { handler } = page.registrations.find(({ match }) => match === 'https://icons.duckduckgo.com/**');
+  const route = requestRoute({ url: 'https://icons.duckduckgo.com/ip3/checkout.acme.com.ico', type: 'image' });
+  await handler(route);
+  assert.equal(route.fallbacks, 0);
+  assert.equal(route.responses.length, 1);
+  assert.equal(route.responses[0].contentType, 'image/svg+xml');
+  assert.doesNotMatch(route.responses[0].body, /href=|url\(|<script|<image/);
 });
 
 test('failed route installation rejects without masking the failure', async () => {
@@ -93,7 +106,8 @@ for (const [name, invoke] of [
     const page = new Page();
     await invoke(page);
     assert.equal(page.events[0], 'route');
-    assert.equal(page.events.length, 2);
+    assert.equal(page.events.length, 3);
+    assert.deepEqual(page.events.slice(0, 2), ['route', 'route']);
   });
 }
 
