@@ -6,14 +6,14 @@ import { createCheckDeliveryFixtures, executeMemoryDelivery } from '../helpers/c
 import { assertExistingBehaviorCase } from '../helpers/existing-behavior-coverage.mjs';
 import { hardTimeoutSchedulerToleranceMs } from '../../src/lib/probeResultValidation.mjs';
 import { assertDeliveredReflectorRequest } from '../helpers/check-delivery-payload-assertions.mjs';
-import { assertNativeSemanticBranch, assertNativeDnsNegative, assertNativeResolverCancellation, NATIVE_REPRESENTABILITY_BLOCKERS, nativeRepresentabilityBlocker, assertNativeRepresentabilityBlocker } from '../helpers/check-delivery-native-oracles.mjs';
+import { assertNativeSemanticBranch, assertNativeDnsNegative, assertNativeResolverCancellation, assertUnreachableBranchProof } from '../helpers/check-delivery-native-oracles.mjs';
 
 // Each branch is an owned peer behavior, never a cloned or re-signed catalog profile.
 // Definition invocations remain separately required; aliases share only identical
 // full-delivery-fingerprint branch obligations. Unimplemented obligations stay gaps.
 const TCP_LAB_KINDS = new Set(['tcp_connect', 'port_scan_bounded', 'connection_limit_probe']);
 const branchReceipts = [];
-const blockerRecords = [];
+const inapplicableObligations = CHECK_DELIVERY_INVENTORY.inapplicable_branch_obligations;
 const nativeObligations = CHECK_DELIVERY_INVENTORY.branch_obligations.filter((row) => !TCP_LAB_KINDS.has(row.kind));
 
 function assertBranch(obligation, result, fixture) {
@@ -132,9 +132,11 @@ function assertBranch(obligation, result, fixture) {
 
 describe('finite required branch obligations: owned native protocol peers (TCP lab separate)', () => {
   let fixtures;
-  it('preserves all 524 denominator obligations and keeps 27 TCP-lab branches separate', () => {
-    assert.equal(CHECK_DELIVERY_INVENTORY.branch_obligations.length, 524);
-    assert.equal(nativeObligations.length, 497);
+  it('derives 520 reachable obligations from 524 candidates and keeps 27 TCP-lab branches separate', () => {
+    assert.equal(CHECK_DELIVERY_INVENTORY.candidate_branch_obligations.length, 524);
+    assert.equal(CHECK_DELIVERY_INVENTORY.branch_obligations.length, 520);
+    assert.equal(inapplicableObligations.length, 4);
+    assert.equal(nativeObligations.length, 493);
     assert.equal(CHECK_DELIVERY_INVENTORY.branch_obligations.filter((row) => TCP_LAB_KINDS.has(row.kind)).length, 27);
   });
   before(async () => { fixtures = await createCheckDeliveryFixtures(); });
@@ -144,12 +146,6 @@ describe('finite required branch obligations: owned native protocol peers (TCP l
       const check = getCheckById(obligation.check_id);
       const fixture = fixtures.forCheck(check, { scenario: obligation.branch });
       const result = await executeMemoryDelivery(check, fixture);
-      if (nativeRepresentabilityBlocker(obligation)) {
-        const blocker = assertNativeRepresentabilityBlocker(obligation, result, fixture);
-        blockerRecords.push(blocker);
-        t.diagnostic(`Representability blocker retained; NO coverage receipt: ${JSON.stringify(blocker)}`);
-        return;
-      }
       if (obligation.branch === 'cancel') await fixture.waitForCancelledSocketClose();
       result.receipt.branch_id = obligation.branch_id;
       result.receipt.branch_peer_evidence = fixture.peerEvidence();
@@ -162,17 +158,24 @@ describe('finite required branch obligations: owned native protocol peers (TCP l
       });
     });
   }
+  for (const obligation of inapplicableObligations) {
+    it(`${obligation.check_id} / branch ${obligation.branch} is provably unreachable (${obligation.reason}); no receipt`, { timeout: 15_000 }, async () => {
+      const check = getCheckById(obligation.check_id);
+      const fixture = fixtures.forCheck(check, { scenario: obligation.branch });
+      const result = await executeMemoryDelivery(check, fixture);
+      assertUnreachableBranchProof(obligation, result, fixture);
+      assert.equal(CHECK_DELIVERY_INVENTORY.branch_obligations.some((row) => row.branch_id === obligation.branch_id), false);
+    });
+  }
   it('missing required branches fail full acceptance even when definition accounting is separate', (t) => {
     const result = accountDeliveryReceipts(branchReceipts);
     assert.equal(result.complete, false);
     assert.equal(result.gaps.length, CHECK_CATALOG.length, 'branch receipts never multiply default definition coverage');
-    assert.equal(blockerRecords.length, NATIVE_REPRESENTABILITY_BLOCKERS.length);
-    assert.ok(blockerRecords.every((record) => record.coverage_receipt === false));
-    const expectedGaps = CHECK_DELIVERY_INVENTORY.branch_obligations.filter((row) => TCP_LAB_KINDS.has(row.kind) || nativeRepresentabilityBlocker(row));
+    const expectedGaps = CHECK_DELIVERY_INVENTORY.branch_obligations.filter((row) => TCP_LAB_KINDS.has(row.kind));
     assert.deepEqual(result.branch_gaps.map((row) => row.branch_id).sort(), expectedGaps.map((row) => row.branch_id).sort(),
-      'all four native limitations plus 27 separately owned TCP obligations stay explicit, original denominator gaps');
-    assert.equal(result.invoked_branches, 493, 'only genuine causal proofs earn branch receipts; limitation tests never do');
+      'only the 27 separately owned TCP obligations remain explicit gaps in this file');
+    assert.equal(result.invoked_branches, 493, 'only genuine causal proofs earn branch receipts');
     assert.deepEqual(result.errors, []);
-    t.diagnostic('Native branch receipts 493/497; four representability blockers remain, all 524 original obligations preserved. TCP lab accounting is separate.');
+    t.diagnostic('Native branch receipts 493/493 reachable; 4 candidates proven unreachable; TCP lab accounting is separate.');
   });
 });

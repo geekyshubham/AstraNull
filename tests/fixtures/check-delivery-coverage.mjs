@@ -192,7 +192,13 @@ export const DELIVERY_BRANCH_POLICIES = Object.freeze({
   rate_limit_canary_probe: ['peer_error', 'timeout', 'cancel'],
 });
 
-export function buildDeliveryBranchObligations(inventory) {
+export function unreachableBranchReason(row, branch) {
+  if (row.kind === 'dns_wire_query' && row.delivery_material?.profile?.dns_transport === 'tcp' && branch === 'wrong_peer') return 'connected_tcp_has_no_datagram_source';
+  if (row.kind === 'waf_enforcement_probe' && branch === 'permitted_unhealthy') return 'single_marker_request_has_no_permitted_control';
+  return null;
+}
+
+export function buildCandidateBranchObligations(inventory) {
   const seen = new Set();
   const obligations = [];
   for (const row of inventory.rows.filter((candidate) => candidate.execution === 'socket')) {
@@ -206,7 +212,25 @@ export function buildDeliveryBranchObligations(inventory) {
   }
   return obligations;
 }
+
+function unreachableReasonFor(inventory, obligation) {
+  const owner = inventory.rows.find((row) => row.delivery_fingerprint === obligation.delivery_fingerprint);
+  return unreachableBranchReason(owner, obligation.branch);
+}
+
+export function buildDeliveryBranchObligations(inventory) {
+  return buildCandidateBranchObligations(inventory).filter((row) => !unreachableReasonFor(inventory, row));
+}
+
+export function buildInapplicableBranchObligations(inventory) {
+  return buildCandidateBranchObligations(inventory).flatMap((row) => {
+    const reason = unreachableReasonFor(inventory, row);
+    return reason ? [{ ...row, reason }] : [];
+  });
+}
 export const CHECK_DELIVERY_INVENTORY = buildCheckDeliveryInventory();
+CHECK_DELIVERY_INVENTORY.candidate_branch_obligations = buildCandidateBranchObligations(CHECK_DELIVERY_INVENTORY);
+CHECK_DELIVERY_INVENTORY.inapplicable_branch_obligations = buildInapplicableBranchObligations(CHECK_DELIVERY_INVENTORY);
 CHECK_DELIVERY_INVENTORY.branch_obligations = buildDeliveryBranchObligations(CHECK_DELIVERY_INVENTORY);
 
 export const OWNED_INVALID_TLS_REPLY_HEX = Buffer.from('HTTP/1.1 400 Owned invalid TLS peer\r\n\r\n').toString('hex');

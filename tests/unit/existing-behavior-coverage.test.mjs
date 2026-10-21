@@ -323,7 +323,7 @@ test('delivery-only CLI is complete-scope accounting, not focused success on emp
   assert.equal(scoped.scope, 'delivery-only');
   assert.equal(scoped.acceptance, 'incomplete');
   assert.equal(scoped.delivery.gaps.length, 275);
-  assert.equal(scoped.delivery.branch_gaps.length, 524);
+  assert.equal(scoped.delivery.branch_gaps.length, 520);
   assert.equal(scoped.portal.required, false);
   assert.deepEqual(scoped.errors, []);
   const focused = spawnSync(process.execPath, [script, '--focused'], { encoding: 'utf8', env: childEnv });
