@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /**
  * AstraNull assistant runner: leases chat jobs from the control plane and answers them with the
- * local `agy` CLI (signed in on this machine, e.g. through VibeRouter). Read-only research only.
+ * local `agy` CLI (signed in on this machine, e.g. through VibeRouter) or, when configured, an
+ * OpenAI-compatible chat completions API. Read-only advice only.
  */
 
 import { spawn } from 'node:child_process';
@@ -9,6 +10,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createOpenAiStepRunner, resolveOpenAiConfig, resolveRunnerBackend } from './assistant-openai-backend.mjs';
 
 const URL_PATTERN = /https?:\/\/[^\s<>()\[\]"'`]+/g;
 const KILL_GRACE_SECONDS = 15;
@@ -165,10 +167,10 @@ function mergeSources(target, entries) {
 }
 
 /**
- * Runs a leased job: agy steps with a stateless transcript, executing data-tool fences through
- * the control plane between steps. Returns the result body to post.
+ * Runs a leased job: model steps with a stateless transcript, executing data-tool fences through
+ * the control plane between steps. `runStep(job, prompt, timeoutSeconds)` resolves to `{ parsed }` or `{ error, detail }`.
  */
-export async function runAgyJob(job, { agyBin = 'agy', env = process.env, graceSeconds = KILL_GRACE_SECONDS, callTool = null, now = () => Date.now() } = {}) {
+export async function runAssistantJob(job, runStep, { callTool = null, now = () => Date.now() } = {}) {
   const deadline = now() + (Number(job.deadline_seconds) || Number(job.timeout_seconds) || 120) * 1000;
   const maxCalls = job.tools && callTool ? Math.max(0, Number(job.max_tool_calls) || 0) : 0;
   const searches = [];
@@ -183,7 +185,7 @@ export async function runAgyJob(job, { agyBin = 'agy', env = process.env, graceS
     const closing = forceAnswer
       ? '\n\nYou cannot call more data tools. Write the final answer now using the results above, with no tool fence.'
       : transcript ? '\n\nContinue: call another data tool with one fenced block, or write the final answer.' : '';
-    const outcome = await runAgyStep(job, `${job.prompt}${transcript}${closing}`, step === 0 ? Number(job.timeout_seconds) || 0 : Math.min(Number(job.timeout_seconds) || 120, remaining), { agyBin, env, graceSeconds });
+    const outcome = await runStep(job, `${job.prompt}${transcript}${closing}`, step === 0 ? Number(job.timeout_seconds) || 0 : Math.min(Number(job.timeout_seconds) || 120, remaining));
     if (outcome.error) return { status: 'failed', error: outcome.error, detail: `step ${step + 1}${outcome.detail ? ` ${outcome.detail}` : ''}` };
     const { parsed } = outcome;
     for (const query of parsed.searches) if (!searches.includes(query) && searches.length < 10) searches.push(query);
@@ -218,6 +220,10 @@ export async function runAgyJob(job, { agyBin = 'agy', env = process.env, graceS
   return { status: 'failed', error: 'runner_timeout' };
 }
 
+export function runAgyJob(job, { agyBin = 'agy', env = process.env, graceSeconds = KILL_GRACE_SECONDS, callTool = null, now } = {}) {
+  return runAssistantJob(job, (leased, prompt, timeoutSeconds) => runAgyStep(leased, prompt, timeoutSeconds, { agyBin, env, graceSeconds }), { callTool, now });
+}
+
 async function api(baseUrl, token, pathname, body) {
   const response = await fetch(new URL(pathname, baseUrl), {
     method: 'POST',
@@ -242,7 +248,10 @@ export async function runAssistantRunner({ env = process.env, log = console } = 
   const agyBin = text(env.AGY_BIN || 'agy');
   const concurrency = Math.max(1, Math.min(8, Number(env.ASTRANULL_ASSISTANT_RUNNER_CONCURRENCY) || 2));
   if (token.length < 32) throw new Error('ASTRANULL_ASSISTANT_RUNNER_TOKEN must be set (at least 32 characters).');
-  log.info?.(`assistant runner: polling ${baseUrl} with ${concurrency} slot(s), agy=${agyBin}`);
+  const backend = resolveRunnerBackend(env);
+  const llm = backend === 'openai' ? await resolveOpenAiConfig(env) : null;
+  const openAiStep = llm ? createOpenAiStepRunner(llm) : null;
+  log.info?.(`assistant runner: polling ${baseUrl} with ${concurrency} slot(s), ${llm ? `backend=openai model=${llm.model} endpoint=${llm.origin}` : `backend=agy agy=${agyBin}`}`);
   let active = 0;
   let backoffMs = 2000;
   for (;;) {
@@ -268,7 +277,7 @@ export async function runAssistantRunner({ env = process.env, log = console } = 
     log.info?.(`assistant runner: job ${lease.job_id} started`);
     const callTool = (name, args) => api(baseUrl, token, `/internal/assistant/runner/jobs/${encodeURIComponent(lease.job_id)}/tool`, { name, args })
       .catch((error) => ({ error: error.code || 'tool_failed', message: text(error.payload?.message) }));
-    runAgyJob(lease, { agyBin, env, callTool })
+    (openAiStep ? runAssistantJob(lease, openAiStep, { callTool }).then((result) => ({ ...result, model: llm.model })) : runAgyJob(lease, { agyBin, env, callTool }))
       .then(({ detail, ...result }) => api(baseUrl, token, `/internal/assistant/runner/jobs/${encodeURIComponent(lease.job_id)}/result`, result)
         .then(() => log.info?.(`assistant runner: job ${lease.job_id} ${result.status}${result.error ? ` (${result.error}${detail ? `, ${detail}` : ''})` : ''}`)))
       .catch((error) => log.warn?.(`assistant runner: job ${lease.job_id} could not be reported (${error.message})`))

@@ -1,0 +1,131 @@
+name: Configure AI assistant
+on:
+  workflow_dispatch:
+    inputs:
+      release_sha:
+        description: Exact 40-character release SHA that is deployed on astranull.site (must equal main)
+        required: true
+        type: string
+      enabled:
+        description: Turn the assistant on (1) or off (0)
+        required: true
+        type: choice
+        options: ['1', '0']
+      tenants:
+        description: Opted-in tenants (* for all, or comma-separated tenant ids)
+        required: true
+        type: string
+        default: '*'
+      model:
+        description: Model name reported for the runner
+        required: false
+        type: string
+        default: deepseek-v4-flash
+      backend:
+        description: Runner backend the control plane advertises (agy or openai)
+        required: true
+        type: choice
+        options: ['openai', 'agy']
+concurrency:
+  group: deploy-aws
+  cancel-in-progress: false
+permissions:
+  contents: read
+jobs:
+  configure:
+    if: github.ref == 'refs/heads/main'
+    environment: production
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the exact requested release revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.release_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Apply assistant settings and redeploy the same release
+        env:
+          SSH_KEY: ${{ secrets.ASTRANULL_AWS_SSH_KEY }}
+          HOST: ${{ secrets.ASTRANULL_AWS_HOST }}
+          SSH_USER: ${{ secrets.ASTRANULL_AWS_USER }}
+          KNOWN_HOSTS: ${{ secrets.ASTRANULL_AWS_KNOWN_HOSTS }}
+          RUNNER_TOKEN: ${{ secrets.ASTRANULL_ASSISTANT_RUNNER_TOKEN }}
+          RELEASE_SHA: ${{ inputs.release_sha }}
+          ASSISTANT_ENABLED: ${{ inputs.enabled }}
+          ASSISTANT_TENANTS: ${{ inputs.tenants }}
+          ASSISTANT_MODEL: ${{ inputs.model }}
+          ASSISTANT_BACKEND: ${{ inputs.backend }}
+        run: |
+          set -euo pipefail
+          : "${SSH_KEY:?missing SSH key}"; : "${HOST:?missing host}"; : "${KNOWN_HOSTS:?missing pinned host key}"
+          [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$ASSISTANT_ENABLED" =~ ^[01]$ ]]
+          [[ "$ASSISTANT_TENANTS" =~ ^(\*|[a-z0-9_]{1,64}(,[a-z0-9_]{1,64}){0,49})?$ ]]
+          [[ -z "$ASSISTANT_MODEL" || "$ASSISTANT_MODEL" =~ ^[a-z0-9][a-z0-9._-]{1,80}$ ]]
+          [[ "$ASSISTANT_BACKEND" =~ ^(agy|openai)$ ]]
+          if [[ "$ASSISTANT_ENABLED" == 1 ]]; then [[ "$RUNNER_TOKEN" =~ ^[A-Za-z0-9_-]{32,256}$ ]]; fi
+          [[ "$(git rev-parse HEAD)" == "$RELEASE_SHA" ]]
+          [[ -z "$(git status --porcelain --untracked-files=all)" ]]
+          remote_main=$(git ls-remote "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git" refs/heads/main | awk '{print $1}')
+          [[ "$remote_main" == "$RELEASE_SHA" ]]
+
+          transferred_files=(
+            ops/aws/configure-assistant.sh
+            ops/aws/deploy.sh
+            ops/aws/release-state.sh
+            scripts/postgres-retention-helper.py
+          )
+          for transferred_file in "${transferred_files[@]}"; do
+            [[ -f "$transferred_file" && ! -L "$transferred_file" ]]
+            git ls-files --error-unmatch -- "$transferred_file" >/dev/null
+          done
+          [[ -x ops/aws/configure-assistant.sh && -x ops/aws/deploy.sh ]]
+          git diff --exit-code HEAD -- "${transferred_files[@]}"
+          configure_sha256=$(sha256sum ops/aws/configure-assistant.sh | awk '{print $1}')
+          deploy_sha256=$(sha256sum ops/aws/deploy.sh | awk '{print $1}')
+          state_lib_sha256=$(sha256sum ops/aws/release-state.sh | awk '{print $1}')
+          retention_helper_sha256=$(sha256sum scripts/postgres-retention-helper.py | awk '{print $1}')
+          [[ "$GITHUB_RUN_ID" =~ ^[0-9]+$ && "$GITHUB_RUN_ATTEMPT" =~ ^[0-9]+$ ]]
+
+          user="${SSH_USER:-ubuntu}"
+          suffix="${RELEASE_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          remote_configure="/tmp/astranull-configure-assistant-${suffix}.sh"
+          remote_deploy="/tmp/astranull-deploy-${suffix}.sh"
+          remote_state="/tmp/astranull-release-state-${suffix}.sh"
+          remote_retention="/tmp/astranull-postgres-retention-helper-${suffix}.py"
+          mkdir -p "$HOME/.ssh"; chmod 700 "$HOME/.ssh"
+          printf '%s\n' "$SSH_KEY" > "$HOME/.ssh/astranull-assistant"; chmod 600 "$HOME/.ssh/astranull-assistant"
+          printf '%s\n' "$KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"; chmod 600 "$HOME/.ssh/known_hosts"
+          ssh_base=(-i "$HOME/.ssh/astranull-assistant" -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=20)
+          uploaded=0
+          cleanup() {
+            if ((uploaded)); then
+              timeout -k 5 30 ssh "${ssh_base[@]}" "${user}@${HOST}" \
+                "rm -f -- '$remote_configure' '$remote_deploy' '$remote_state' '$remote_retention'" >/dev/null 2>&1 || true
+            fi
+            rm -f "$HOME/.ssh/astranull-assistant"
+          }
+          trap cleanup EXIT
+          trap 'exit 129' HUP
+          trap 'exit 130' INT
+          trap 'exit 143' TERM
+
+          uploaded=1
+          timeout -k 5 60 scp "${ssh_base[@]}" ops/aws/configure-assistant.sh "${user}@${HOST}:${remote_configure}"
+          timeout -k 5 60 scp "${ssh_base[@]}" ops/aws/deploy.sh "${user}@${HOST}:${remote_deploy}"
+          timeout -k 5 60 scp "${ssh_base[@]}" ops/aws/release-state.sh "${user}@${HOST}:${remote_state}"
+          timeout -k 5 60 scp "${ssh_base[@]}" scripts/postgres-retention-helper.py "${user}@${HOST}:${remote_retention}"
+          verify="chmod 700 '$remote_configure' '$remote_deploy'; chmod 600 '$remote_state' '$remote_retention'; printf '%s  %s\n' '$configure_sha256' '$remote_configure' | sha256sum -c - >/dev/null; printf '%s  %s\n' '$deploy_sha256' '$remote_deploy' | sha256sum -c - >/dev/null; printf '%s  %s\n' '$state_lib_sha256' '$remote_state' | sha256sum -c - >/dev/null; printf '%s  %s\n' '$retention_helper_sha256' '$remote_retention' | sha256sum -c - >/dev/null"
+
+          printf '%s\n' "${RUNNER_TOKEN:-}" | timeout -k 10 300 ssh "${ssh_base[@]}" -o ServerAliveInterval=30 -o ServerAliveCountMax=3 "${user}@${HOST}" \
+            "set -euo pipefail; $verify; bash '$remote_configure' '$RELEASE_SHA' '$remote_deploy' '$remote_state' '$ASSISTANT_ENABLED' '$ASSISTANT_TENANTS' '$ASSISTANT_MODEL' '$ASSISTANT_BACKEND'"
+          unset RUNNER_TOKEN
+
+          timeout 1800 ssh "${ssh_base[@]}" -o ServerAliveInterval=30 -o ServerAliveCountMax=3 "${user}@${HOST}" \
+            "set -euo pipefail; $verify; ASTRANULL_RELEASE_STATE_LIB='$remote_state' ASTRANULL_DEPLOY_POSTGRES_RETENTION_HELPER='$remote_retention' bash '$remote_deploy' '$RELEASE_SHA'"
+
+          for path in /health /ready; do
+            curl --fail --silent --show-error --max-time 20 --retry 8 --retry-delay 3 --retry-all-errors "https://astranull.site${path}" >/dev/null
+          done
+          unset SSH_KEY
