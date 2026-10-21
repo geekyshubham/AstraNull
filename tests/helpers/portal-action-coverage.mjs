@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { canAccessRoute } from '../../apps/web/react/src/lib/route-access.mjs';
 import { canReadDataset, sessionHasPermission, staffSessionHasPermission, CUSTOMER_DATASET_PERMISSIONS, STAFF_DATASET_PERMISSIONS } from '../../apps/web/react/src/lib/dataset-access.mjs';
 import { PORTAL_ROUTE_DATASETS } from '../../apps/web/react/src/lib/types.ts';
-import { ACTION_STATES, CUSTOMER_ACTION_ROLES, STAFF_ACTION_ROLES, actionStateApplicability } from '../fixtures/portal-action-coverage.mjs';
+import { ACTION_STATES, CUSTOMER_ACTION_ROLES, DELEGATING_OWNERS, STAFF_ACTION_ROLES, actionStateApplicability } from '../fixtures/portal-action-coverage.mjs';
 import { buildPortalActionInventory, inventorySourceDigest } from './portal-action-inventory.mjs';
 import { buildPublicPortalActionInventory, buildPublicPortalActionCoverage, reconcilePublicPortalActionCoverage } from './portal-public-action-coverage.mjs';
 
@@ -60,6 +60,7 @@ export function actionPermissionDecision(identity, permission) {
 
 export function actionEligibilityDecision(identity, guards = []) {
   const evaluate = (guard) => {
+    if (guard.principals) { const matches = guard.principals.includes(identity.principal); return guard.invert ? !matches : matches; }
     if (guard.roles) { const allowed = identity.principal === guard.principal && guard.roles.includes(identity.role); return guard.invert ? !allowed : allowed; }
     if (guard.permission) {
       const allowed = identity.principal === guard.principal && actionPermissionDecision(identity, guard.permission);
@@ -76,7 +77,6 @@ export function actionCellId(cell) {
   return [cell.action, cell.route, cell.principal, cell.role, cell.dataset, cell.state, cell.channel ?? 'ui'].join('|');
 }
 
-const DELEGATING_OWNERS = new Set(['Button', 'AnchorButton', 'Select', 'EmptyState', 'EmptyStateAction', 'TabButton', 'Tabs', 'ShellIconButton', 'NavLink', 'FormModal', 'ConfirmModal', 'ConfirmModalProvider', 'Toast', 'DataTableBodyRow', 'VariantSwitch']);
 
 /** One actual action entrypoint per equivalent source callback; shared primitives delegate to semantic callsites. */
 export function buildPortalActionCoverage({ inventory = buildPortalActionInventory(), publicAuth = inventory.mountSource ? buildPublicPortalActionCoverage({ inventory: buildPublicPortalActionInventory({ root: inventory.sourceRoot }) }) : null } = {}) {

@@ -32,6 +32,7 @@ export function buildPortalActionInventory({ root = PORTAL_SOURCE_ROOT } = {}) {
   const unresolved = [];
   const uiPrefix = path.join(root, UI_ROOT) + path.sep;
   const relative = (file) => path.relative(root, file).split(path.sep).join('/');
+  const routeAccessPolicy = (file) => relative(file).startsWith(`${UI_ROOT}/lib/route-access.`);
   const keyFor = (file, name) => `${relative(file)}#${name}`;
   function resolve(file, specifier) {
     if (!specifier.startsWith('.')) return null;
@@ -81,6 +82,7 @@ export function buildPortalActionInventory({ root = PORTAL_SOURCE_ROOT } = {}) {
   }
   const raw = (module, node) => node ? compact(module.source.slice(node.start, node.end)) : '';
   const attrValue = (module, attr) => !attr?.value ? '' : attr.value.type === 'Literal' ? String(attr.value.value) : attr.value.type === 'JSXExpressionContainer' ? raw(module, attr.value.expression) : raw(module, attr.value);
+  const softGates = new WeakSet();
   const lexicalCache = new Map();
   const writtenReceivers = new Map();
   function lexicalBindings(module, owner, within = null) {
@@ -127,7 +129,7 @@ export function buildPortalActionInventory({ root = PORTAL_SOURCE_ROOT } = {}) {
     if (!target) return;
     const key = keyFor(target.module.file, target.name);
     if (!callerProps.has(key)) callerProps.set(key, []);
-    callerProps.get(key).push({ module, owner, props: new Map(node.attributes.filter((attr) => attr.type === 'JSXAttribute').map((attr) => [raw(module, attr.name), attr.value?.expression])) });
+    callerProps.get(key).push({ module, owner, spread: node.attributes.some((attr) => attr.type === 'JSXSpreadAttribute'), props: new Map(node.attributes.filter((attr) => attr.type === 'JSXAttribute').map((attr) => [raw(module, attr.name), attr.value?.expression])) });
   }
   function returnedExpression(fn) {
     const body = fn?.body;
@@ -144,7 +146,7 @@ export function buildPortalActionInventory({ root = PORTAL_SOURCE_ROOT } = {}) {
   }
   // Resolve only one demonstrably equivalent source declaration, never a union
   // of differing callers' business effects. Ambiguity remains a blocking gap.
-  function resolveCallbackDeclaration(module, owner, node, seen = new Set()) {
+  function resolveCallbackDeclaration(module, owner, node, seen = new Set(), options = {}) {
     if (!node) return null;
     const marker = `${module.file}:${owner}:${node.start}:${node.end}`;
     if (seen.has(marker)) return null;
@@ -172,12 +174,20 @@ export function buildPortalActionInventory({ root = PORTAL_SOURCE_ROOT } = {}) {
         const imported = resolveValue(module.file, node.name);
         return imported ? resolveCallbackDeclaration(imported.module, imported.name, imported.node, seen) : null;
       }
-      const callers = callerProps.get(keyFor(module.file, owner)) ?? [];
-      if (!callers.length || callers.some((caller) => !caller.props.get(node.name))) return null;
+      const allCallers = callerProps.get(keyFor(module.file, owner)) ?? [];
+      const callers = options.suppliedOnly?.has(node.name) ? allCallers.filter((caller) => caller.props.get(node.name)) : allCallers;
+      if (!callers.length || callers.some((caller) => !caller.props.get(node.name) || caller.spread)) return null;
       const candidates = callers.map((caller) => resolveCallbackDeclaration(caller.module, caller.owner, caller.props.get(node.name), seen));
       if (candidates.some((candidate) => !candidate)) return null;
       const identity = (candidate) => `${candidate.module.file}:${candidate.node.start}:${candidate.node.end}`;
       return candidates.every((candidate) => identity(candidate) === identity(candidates[0])) ? candidates[0] : null;
+    }
+    if (node.type === 'ConditionalExpression') {
+      const absent = (branch) => branch.type === 'Literal' && branch.raw === 'null'
+        || branch.type === 'Identifier' && branch.name === 'undefined' && !lexicalBindings(module, owner, branch).bindings.has('undefined');
+      if (absent(node.alternate)) return resolveCallbackDeclaration(module, owner, node.consequent, seen, options);
+      if (absent(node.consequent)) return resolveCallbackDeclaration(module, owner, node.alternate, seen, options);
+      return null;
     }
     if (node.type === 'MemberExpression') return resolveMemberCallback(module, owner, node, seen);
     if (['ArrowFunctionExpression', 'FunctionExpression', 'FunctionDeclaration'].includes(node.type)) {
@@ -287,9 +297,19 @@ export function buildPortalActionInventory({ root = PORTAL_SOURCE_ROOT } = {}) {
       if (exits.some((child) => child.type === 'ReturnStatement' && (!child.argument || child.argument.type === 'Literal' && child.argument.value === null))) earlyGates.push(node.test);
     }
     gates = [...gates, ...earlyGates];
+    const opening = container.type === 'JSXElement' ? container.openingElement : container;
+    const calleeName = opening?.name?.type === 'JSXIdentifier' && /^[A-Z]/.test(opening.name.name) ? opening.name.name : null;
+    const callee = calleeName ? resolveValue(module.file, calleeName) : null;
+    const calleeFunction = callee?.node?.type === 'VariableDeclarator' ? callee.node.init : callee?.node;
+    const calleeGates = callee && callee.name !== owner ? (calleeFunction?.body?.body ?? []).filter((node) => {
+      if (node.type !== 'IfStatement') return false;
+      const exits = node.consequent.type === 'BlockStatement' ? node.consequent.body : [node.consequent];
+      return exits.some((child) => child.type === 'ReturnStatement' && (!child.argument || child.argument.type === 'Literal' && child.argument.value === null));
+    }).map((node) => ({ module: callee.module, owner: callee.name, node: node.test })) : [];
     const { bindings } = lexicalBindings(module, owner);
     const callbackNodes = [...attrs].filter(([name]) => EVENTS.test(name)).map(([, attr]) => attr.value?.expression).filter(Boolean);
-    const pending = callbackNodes.map((node) => resolveCallbackDeclaration(module, owner, node) ?? { module, owner, node });
+    const suppliedOnly = new Set(gates.filter((gate) => gate.type === 'Identifier').map((gate) => gate.name));
+    const pending = callbackNodes.map((node) => resolveCallbackDeclaration(module, owner, node, new Set(), { suppliedOnly }) ?? { module, owner, node });
     const visited = new Map();
     const effects = new Map();
     const fragments = [];
@@ -298,7 +318,7 @@ export function buildPortalActionInventory({ root = PORTAL_SOURCE_ROOT } = {}) {
     const earlyCallbackGuards = [];
     const unresolvedCallbacks = new Set();
     const bindInjected = (active, activeOwner, node, schedule = (resolved) => pending.push(resolved)) => {
-      const resolved = resolveCallbackDeclaration(active, activeOwner, node);
+      const resolved = resolveCallbackDeclaration(active, activeOwner, node, new Set(), active === module && activeOwner === owner ? { suppliedOnly } : {});
       if (!resolved) return false;
       schedule(resolved);
       return true;
@@ -307,6 +327,11 @@ export function buildPortalActionInventory({ root = PORTAL_SOURCE_ROOT } = {}) {
       if (node.type === 'Identifier' && !bindings.has(node.name) && !lexicalBindings(module, owner).setterNames.has(node.name) && !module.imports.has(node.name) && !bindInjected(module, owner, node)) unresolvedCallbacks.add(node.name);
       if (node.type === 'MemberExpression' && !resolveMemberCallback(module, owner, node)) unresolvedCallbacks.add(raw(module, node));
     }
+    const callerBindings = Object.fromEntries(callbackNodes.filter((node) => node.type === 'Identifier' && unresolvedCallbacks.has(node.name)).map((node) => {
+      const callers = callerProps.get(keyFor(module.file, owner)) ?? [];
+      const resolved = callers.filter((caller) => !caller.spread && caller.props.get(node.name) && resolveCallbackDeclaration(caller.module, caller.owner, caller.props.get(node.name))).length;
+      return [node.name, { callers: callers.length, resolved }];
+    }));
     let localChange = false;
     function argumentBinding(binding, seen = new Set()) {
       const node = binding?.node;
@@ -418,7 +443,7 @@ export function buildPortalActionInventory({ root = PORTAL_SOURCE_ROOT } = {}) {
         // initializer. Only actual invoked callees contribute transaction effects.
         if (child.type !== 'CallExpression') return;
         const callee = raw(active, child.callee);
-        if (beforeBoundary !== false && /^(?:sessionHasPermission|staffSessionHasPermission|roleHasPermission)$/.test(callee)) eligibilityPermissionCalls.push({ module: active, owner: activeOwner, node: child });
+        if (beforeBoundary !== false && !routeAccessPolicy(active.file) && /^(?:sessionHasPermission|staffSessionHasPermission|roleHasPermission)$/.test(callee)) eligibilityPermissionCalls.push({ module: active, owner: activeOwner, node: child });
         if (['requestJson', 'requestSocJson', 'fetch'].includes(callee)) {
           const endpointBinding = boundArgument(child.arguments[callee === 'fetch' ? 0 : 2]);
           const optionsBinding = boundArgument(child.arguments[callee === 'fetch' ? 1 : 3]);
@@ -481,20 +506,31 @@ export function buildPortalActionInventory({ root = PORTAL_SOURCE_ROOT } = {}) {
       }
       return children(node).some((child) => !['FunctionDeclaration', 'FunctionExpression', 'ArrowFunctionExpression'].includes(child.type) && hasAuthorizationReference(active, activeOwner, child, seen));
     }
-    function permissionGuard(active, activeOwner, node, invert = false, seen = new Set()) {
+    const literalStrings = (active, activeOwner, node) => {
+      let value = node;
+      if (value?.type === 'Identifier') { const binding = lexicalBindings(active, activeOwner, value).bindings.get(value.name); value = binding?.type === 'VariableDeclarator' ? binding.init : binding; }
+      if (value?.type === 'CallExpression' && raw(active, value.callee) === 'Object.freeze' && value.arguments.length === 1) value = value.arguments[0];
+      return value?.type === 'ArrayExpression' && value.elements.every((element) => element?.type === 'Literal' && typeof element.value === 'string') ? value.elements.map((element) => element.value) : null;
+    };
+    function permissionGuard(active, activeOwner, node, invert = false, seen = new Set(), principalHint = null) {
       if (!node) return null;
       if (node.type === 'Identifier') {
         const marker = `${active.file}:${activeOwner}:${node.name}`;
         if (seen.has(marker)) return null;
-        const binding = lexicalBindings(active, activeOwner, node).bindings.get(node.name);
-        return binding ? permissionGuard(active, activeOwner, binding, invert, new Set([...seen, marker])) : null;
+        const scope = lexicalBindings(active, activeOwner, node);
+        const binding = scope.bindings.get(node.name);
+        if (binding) return permissionGuard(active, activeOwner, binding, invert, new Set([...seen, marker]), principalHint);
+        const callers = callerProps.get(keyFor(active.file, activeOwner)) ?? [];
+        if (!scope.parameterOwners.has(node.name) || !callers.length || callers.some((caller) => caller.spread || !caller.props.get(node.name))) return null;
+        const guards = callers.map((caller) => permissionGuard(caller.module, caller.owner, caller.props.get(node.name), invert, new Set([...seen, marker])));
+        return guards.every((guard) => guard && JSON.stringify(guard) === JSON.stringify(guards[0])) ? guards[0] : null;
       }
-      if (node.type === 'VariableDeclarator') return permissionGuard(active, activeOwner, node.init, invert, seen);
-      if (node.type === 'UnaryExpression' && node.operator === '!') return permissionGuard(active, activeOwner, node.argument, !invert, seen);
+      if (node.type === 'VariableDeclarator') return permissionGuard(active, activeOwner, node.init, invert, seen, principalHint);
+      if (node.type === 'UnaryExpression' && node.operator === '!') return permissionGuard(active, activeOwner, node.argument, !invert, seen, principalHint);
       if (node.type === 'LogicalExpression') {
         const operator = invert ? (node.operator === '&&' ? '||' : '&&') : node.operator;
-        const left = permissionGuard(active, activeOwner, node.left, invert, seen);
-        const right = permissionGuard(active, activeOwner, node.right, invert, seen);
+        const left = permissionGuard(active, activeOwner, node.left, invert, seen, principalHint);
+        const right = permissionGuard(active, activeOwner, node.right, invert, seen, principalHint);
         if (operator === '&&') return left && right ? { operator, left, right } : left ?? right;
         return left && right ? { operator, left, right } : null;
       }
@@ -502,17 +538,24 @@ export function buildPortalActionInventory({ root = PORTAL_SOURCE_ROOT } = {}) {
         const roleNode = node.left.type === 'Literal' ? node.right : node.left;
         const literal = node.left.type === 'Literal' ? node.left : node.right;
         const roleSource = raw(active, roleNode);
+        if (literal.type === 'Literal' && ['staff', 'customer'].includes(literal.value) && /(?:^|\.)principal$/.test(roleSource)) return { principals: [literal.value], invert: invert !== (node.operator === '!==') };
         const declaration = active.values.get(activeOwner);
         const roleParameter = roleNode.type === 'Identifier' && declaration?.params?.some((param) => param.name === roleNode.name && /role/i.test(param.name));
-        if (literal.type === 'Literal' && typeof literal.value === 'string' && (roleParameter || /^session\.(?:role|staff_role)$/.test(roleSource))) return { roles: [literal.value], principal: roleSource.includes('staff_role') ? 'staff' : 'customer', invert: invert !== (node.operator === '!==') };
+        if (literal.type === 'Literal' && typeof literal.value === 'string' && (roleParameter || /^session\.(?:role|staff_role)$/.test(roleSource))) return { roles: [literal.value], principal: principalHint ?? (roleSource.includes('staff_role') ? 'staff' : 'customer'), invert: invert !== (node.operator === '!==') };
       }
       if (node.type === 'CallExpression' && node.callee.type === 'Identifier' && node.arguments.some((arg) => /^session\.(?:role|staff_role)$/.test(raw(active, arg)))) {
         const helper = resolveValue(active.file, node.callee.name);
         const statements = helper?.node?.body?.body;
         if (statements?.length === 1 && statements[0].type === 'ReturnStatement') {
           const marker = `${helper.module.file}:${helper.name}:role-helper`;
-          if (!seen.has(marker)) return permissionGuard(helper.module, helper.name, statements[0].argument, invert, new Set([...seen, marker]));
+          const hint = node.arguments.some((arg) => /^session\.staff_role$/.test(raw(active, arg))) ? 'staff' : 'customer';
+          if (!seen.has(marker)) return permissionGuard(helper.module, helper.name, statements[0].argument, invert, new Set([...seen, marker]), hint);
         }
+      }
+      if (node.type === 'CallExpression' && node.callee.type === 'MemberExpression' && node.callee.property?.name === 'includes' && node.arguments.length === 1) {
+        const list = literalStrings(active, activeOwner, node.callee.object);
+        const parameters = (active.values.get(activeOwner)?.params ?? []).filter((param) => param.type === 'Identifier' && /role/i.test(param.name));
+        if (list && parameters.some((param) => raw(active, node.arguments[0]).includes(param.name))) return { roles: list, principal: principalHint ?? 'customer', invert };
       }
       if (node.type === 'CallExpression' && /^(sessionHasPermission|staffSessionHasPermission|roleHasPermission)$/.test(raw(active, node.callee))) {
         const permission = node.arguments.find((arg) => arg.type === 'Literal' && typeof arg.value === 'string' && /^[a-z_]+(?::[a-z_]+)+$/.test(arg.value))?.value;
@@ -535,8 +578,8 @@ export function buildPortalActionInventory({ root = PORTAL_SOURCE_ROOT } = {}) {
       if (node.type === 'LogicalExpression') return unresolvedGuard(active, activeOwner, node.left, invert, seen) || unresolvedGuard(active, activeOwner, node.right, invert, seen);
       return false;
     }
-    let unresolvedAuthorization = gates.some((gate) => unresolvedGuard(module, owner, gate, earlyGates.includes(gate)));
-    const authorizationGuards = [...gates.filter((gate) => !earlyGates.includes(gate)).map((gate) => permissionGuard(module, owner, gate)), ...earlyGates.map((gate) => permissionGuard(module, owner, gate, true))].filter(Boolean);
+    let unresolvedAuthorization = gates.some((gate) => !softGates.has(gate) && unresolvedGuard(module, owner, gate, earlyGates.includes(gate)));
+    const authorizationGuards = [...gates.filter((gate) => !earlyGates.includes(gate)).map((gate) => permissionGuard(module, owner, gate)), ...earlyGates.map((gate) => permissionGuard(module, owner, gate, true)), ...calleeGates.map(({ module: active, owner: activeOwner, node }) => permissionGuard(active, activeOwner, node, true))].filter(Boolean);
     for (const { node: child, module: active, owner: activeOwner } of earlyCallbackGuards) {
       const exits = child.consequent.type === 'BlockStatement' ? child.consequent.body : [child.consequent];
       if (!exits.some((statement) => statement.type === 'ReturnStatement' && (!statement.argument || statement.argument.type === 'Literal' && statement.argument.value === null))) continue;
@@ -556,7 +599,7 @@ export function buildPortalActionInventory({ root = PORTAL_SOURCE_ROOT } = {}) {
     };
     const guardSources = permissionSource.map((node) => ({ node, module }));
     const permissions = permissionNames([...guardSources, ...eligibilityPermissionCalls]);
-    const referencedPermissions = permissionNames([...guardSources, ...visited.values()]);
+    const referencedPermissions = permissionNames([...guardSources, ...[...visited.values()].filter((entry) => !routeAccessPolicy(entry.module.file))]);
     const resolvedPermissions = new Set();
     const guardPermissions = (guard) => { if (guard.permission) resolvedPermissions.add(guard.permission); if (guard.left) guardPermissions(guard.left); if (guard.right) guardPermissions(guard.right); };
     for (const guard of authorizationGuards) guardPermissions(guard);
@@ -565,7 +608,7 @@ export function buildPortalActionInventory({ root = PORTAL_SOURCE_ROOT } = {}) {
     return {
       callbackProvenance: [...visited.values()].map(({ module: active, owner: activeOwner, node }) => ({ file: relative(active.file), owner: activeOwner, line: active.source.slice(0, node.start).split('\n').length })),
       requests: [...new Map(requests.map((request) => [JSON.stringify(request), request])).values()],
-      localChange, unresolvedCallbacks: [...unresolvedCallbacks], permissions: [...permissions], referencedPermissions: [...referencedPermissions], authorizationGuards, authorizationUnresolved: unresolvedAuthorization || [...permissions].some((permission) => !resolvedPermissions.has(permission)) || eligibilityPermissionCalls.some(({ module: active, owner: activeOwner, node }) => !permissionGuard(active, activeOwner, node)), guards: compact(guardSource),
+      localChange, unresolvedCallbacks: [...unresolvedCallbacks], callerBindings, permissions: [...permissions], referencedPermissions: [...referencedPermissions], authorizationGuards, authorizationUnresolved: unresolvedAuthorization || [...permissions].some((permission) => !resolvedPermissions.has(permission)) || eligibilityPermissionCalls.some(({ module: active, owner: activeOwner, node }) => !permissionGuard(active, activeOwner, node)), guards: compact(guardSource),
       validation: controls.some(([name]) => ['required', 'min', 'max', 'pattern', 'minLength', 'maxLength'].includes(name)) || /validate\w*\(|setFieldErrors\(|setError\(/.test(callbackSource),
       confirmation: /(?:confirm\(|confirmAction\(|setReviewing\(true\)|set\w*Review\()/.test(callbackSource),
       busy: controls.some(([name, value]) => /loading|busy|disabled/.test(name) && /busy|loading|pending|submitting|saving|creating|sending|rotating|revoking|working/i.test(value)) || /setBusy\(|runSettingsAction\(/.test(callbackSource),
@@ -609,6 +652,14 @@ export function buildPortalActionInventory({ root = PORTAL_SOURCE_ROOT } = {}) {
         walk(child.test, child, constraint);
         walk(child.consequent, child, literalRoutes.length ? literalRoutes : constraint);
         walk(child.alternate, child, constraint);
+        return;
+      }
+      if (child.type === 'IfStatement') {
+        const negated = { type: 'UnaryExpression', operator: '!', argument: child.test, start: child.test.start, end: child.test.end };
+        softGates.add(child.test); softGates.add(negated);
+        walk(child.test, child, constraint, gates);
+        walk(child.consequent, child, constraint, [...gates, child.test]);
+        if (child.alternate) walk(child.alternate, child, constraint, [...gates, negated]);
         return;
       }
       if (child.type === 'ConditionalExpression') {
@@ -701,7 +752,27 @@ export function buildPortalActionInventory({ root = PORTAL_SOURCE_ROOT } = {}) {
     else unique.set(item.id, { ...item, sourceOccurrences: [item.line] });
   }
   const excludedActions = [];
+  function unsuppliedGate(action) {
+    const input = actionInputs.get(action.id);
+    const callers = callerProps.get(action.symbol) ?? [];
+    if (!input || !callers.length || callers.some((caller) => caller.spread)) return null;
+    const declaration = input.module.values.get(input.owner);
+    const component = declaration?.type === 'VariableDeclarator' ? declaration.init : declaration;
+    const properties = component?.params?.[0]?.type === 'ObjectPattern' ? component.params[0].properties : [];
+    const falsyDefault = (value) => value?.type === 'Literal' && !value.value;
+    for (const gate of input.gates.filter((candidate) => candidate.type === 'Identifier')) {
+      const property = properties.find((candidate) => candidate.type === 'Property' && !candidate.computed && (candidate.value.left ?? candidate.value).name === gate.name);
+      const defaulted = property?.value.type === 'AssignmentPattern';
+      if (property && (!defaulted || falsyDefault(property.value.right)) && callers.every((caller) => !caller.props.has(gate.name))) return gate.name;
+    }
+    return null;
+  }
   const shippedActions = [...unique.values()].filter((action) => {
+    const unsupplied = unsuppliedGate(action);
+    if (unsupplied) {
+      excludedActions.push({ ...action, reason: `Never rendered: the control is gated on the optional prop ${unsupplied}, no mounted caller supplies it and its default is empty; retained as an explicit unreachable-source exclusion, not shipped coverage.` });
+      return false;
+    }
     if (!action.routes.length && action.symbol === `${UI_ROOT}/pages/router.tsx#RouteView` && routes.every((route) => routeRoots.get(route)?.size)) {
       excludedActions.push({ ...action, reason: 'Unreachable final fallback: every navigation/detail route has an earlier explicit router branch; unknown routes hit the earlier not-found branch.' });
       return false;

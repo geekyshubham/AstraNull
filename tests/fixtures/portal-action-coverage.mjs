@@ -45,6 +45,15 @@ export const STAFF_MUTATING_ACTION_FAMILIES = Object.freeze([
   { id: 'staff.entitlement.edit', method: 'POST', path: '/internal/admin/tenants/ten_demo/entitlements', permission: 'staff:entitlement:write', body: { entitlement_key: 'denied', enabled: true } },
 ]);
 
+export const DELEGATING_OWNERS = Object.freeze(new Set(['Button', 'AnchorButton', 'Select', 'EmptyState', 'EmptyStateAction', 'TabButton', 'Tabs', 'ShellIconButton', 'NavLink', 'FormModal', 'ConfirmModal', 'ConfirmModalProvider', 'Toast', 'DataTableBodyRow', 'VariantSwitch']));
+
+function delegatedCallbacks(action) {
+  const unresolved = action.traits?.unresolvedCallbacks ?? [];
+  const bindings = action.traits?.callerBindings ?? {};
+  const bound = unresolved.every((name) => bindings[name]?.callers > 0 && bindings[name].resolved === bindings[name].callers);
+  return DELEGATING_OWNERS.has(action.owner) && unresolved.length && bound ? unresolved : [];
+}
+
 /** AST-derived transaction states. Unknown callback behavior is a blocking classification gap, never an N/A. */
 export function actionStateApplicability(action) {
   const traits = action.traits ?? {};
@@ -66,7 +75,11 @@ export function actionStateApplicability(action) {
   if (action.kind === 'form-keyboard' && traits.validation) result.invalid = { applicable: true, reason: 'This submitting form has native or callback-owned validation; invalid keyboard submission must issue zero writes.' };
   if (traits.confirmation || traits.modalBoundary || action.handlers?.onCancel || /^(Cancel|Discard|Close|Change choices)(?:\s|$)/.test(action.label) || /(?:event\.key|key)\s*===\s*['"]Escape['"]/.test(action.handlers?.onKeyDown ?? '')) result.cancel = { applicable: true, reason: 'Source owns an explicit review/confirmation/cancel boundary; assert zero writes and applicable retained/cleared draft.' };
   if (mutation) result.reload = { applicable: true, reason: 'Resolved POST/PATCH/PUT/DELETE transaction owns persisted business state; reload must preserve the accepted result without replay.' };
-  if (traits.unresolvedCallbacks?.length && action.kind !== 'anchor') {
+  const delegated = delegatedCallbacks(action);
+  if (delegated.length && action.kind !== 'anchor') {
+    const callers = Math.max(...delegated.map((name) => traits.callerBindings[name].callers));
+    for (const state of ['busy', 'invalid', 'cancel', 'error-retry', 'denial', 'reload']) if (!result[state].applicable) result[state] = { applicable: false, reason: `Shared primitive forwarding ${delegated.join(', ')}: all ${callers} mounted callers bind a resolved callback and each caller is its own inventoried semantic action that owns the ${state} transition; this primitive owns native activation only.` };
+  } else if (traits.unresolvedCallbacks?.length && action.kind !== 'anchor') {
     for (const state of ['busy', 'invalid', 'cancel', 'error-retry', 'denial', 'reload']) if (!result[state].applicable) result[state] = { applicable: null, reason: `Unresolved injected callback ${traits.unresolvedCallbacks.join(', ')}: explicit semantic caller binding still required; this is not N/A.` };
   }
   return result;
