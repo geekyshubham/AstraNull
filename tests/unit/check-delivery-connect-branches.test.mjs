@@ -61,6 +61,9 @@ describe('connect fault lab fail-closed isolation contract (helper-only, no cove
 const obligations = CHECK_DELIVERY_INVENTORY.branch_obligations.filter((row) => CONNECT_FAULT_KINDS.includes(row.kind));
 const native = obligations;
 const nativeReceipts = [];
+const SYN_DROP_KERNEL = process.platform === 'linux';
+const LINUX_ONLY = 'requires the Linux accept-queue SYN drop; strict delivery capture runs on Linux';
+const expectedObligations = SYN_DROP_KERNEL ? obligations : obligations.filter((row) => row.branch !== 'timeout');
 
 describe('owned native TCP refused endpoints, unanswered SYN timeouts and post-handshake cancellation', () => {
   let fixtures;
@@ -72,7 +75,8 @@ describe('owned native TCP refused endpoints, unanswered SYN timeouts and post-h
     assert.equal(new Set(obligations.map((row) => row.branch_id)).size, 27);
   });
   for (const obligation of native) {
-    it(`${obligation.check_id} / branch ${obligation.branch}`, { timeout: 15_000 }, async (t) => {
+    const skip = obligation.branch === 'timeout' && !SYN_DROP_KERNEL ? LINUX_ONLY : false;
+    it(`${obligation.check_id} / branch ${obligation.branch}`, { timeout: 15_000, skip }, async (t) => {
       const check = getCheckById(obligation.check_id);
       const fixture = await createConnectFaultFixture(fixtures, check, obligation.branch);
       try {
@@ -136,11 +140,11 @@ describe('owned native TCP refused endpoints, unanswered SYN timeouts and post-h
   }
   it('accounts every native TCP branch with no remaining gaps', () => {
     const inventory = { ...CHECK_DELIVERY_INVENTORY,
-      rows: CHECK_DELIVERY_INVENTORY.rows.filter((row) => obligations.some((item) => item.check_id === row.check_id)),
-      branch_obligations: obligations };
+      rows: CHECK_DELIVERY_INVENTORY.rows.filter((row) => expectedObligations.some((item) => item.check_id === row.check_id)),
+      branch_obligations: expectedObligations };
     const result = accountDeliveryReceipts(nativeReceipts, inventory);
     assert.deepEqual(result.errors, []);
-    assert.equal(result.invoked_branches, 27);
+    assert.equal(result.invoked_branches, expectedObligations.length);
     assert.equal(result.invoked_definitions, 0, 'branch receipts do not substitute for default invocations');
     assert.deepEqual(result.branch_gaps, []);
     const omitted = accountDeliveryReceipts(nativeReceipts.slice(1), inventory);
@@ -161,6 +165,8 @@ describe('owned native TCP refused endpoints, unanswered SYN timeouts and post-h
       assert.ok(rejected.errors.length > 0, `must reject ${name}`);
     }
     const timeoutIndex = nativeReceipts.findIndex((row) => obligations.find((item) => item.branch_id === row.branch_id)?.branch === 'timeout');
+    assert.equal(timeoutIndex >= 0, SYN_DROP_KERNEL);
+    if (!SYN_DROP_KERNEL) return;
     for (const [name, mutate] of [
       ['missing saturation proof', (row) => { row.branch_peer_evidence = row.branch_peer_evidence.filter((item) => item.event !== 'listen_queue_saturated'); }],
       ['saturation not withheld', (row) => { row.branch_peer_evidence.find((item) => item.event === 'listen_queue_saturated').probe_result = 'connected'; }],
