@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import net from 'node:net';
 import { randomUUID } from 'node:crypto';
+import { fork } from 'node:child_process';
+import { once } from 'node:events';
 import { setTimeout as delay } from 'node:timers/promises';
 import { executeMemoryDelivery } from './check-delivery-fixtures.mjs';
 import { RISKY_ADMIN_PORTS } from '../../src/lib/capabilityProbes.mjs';
@@ -10,23 +12,41 @@ export const CONNECT_FAULT_KINDS = Object.freeze(['tcp_connect', 'port_scan_boun
 /** Observe real native sockets; never emit errors, delay events or modify signed jobs. */
 export async function createConnectFaultFixture(fixtures, check, branch) {
   assert.ok(CONNECT_FAULT_KINDS.includes(check.probe_profile.kind));
-  assert.ok(['peer_refused', 'cancel'].includes(branch), 'SYN timeout requires the separately preflighted kernel fault lab');
+  assert.ok(['peer_refused', 'cancel', 'timeout'].includes(branch));
   const fixture = fixtures.forCheck(check);
   const attempts = []; const evidence = []; const wire = []; const routes = [];
   const sockets = new Set(); const peers = new Set();
   const cancellation = new AbortController();
-  const server = net.createServer((socket) => {
-    peers.add(socket);
-    wire.push({ transport: 'tcp_connect', fixture_host: '127.0.0.1', fixture_port: serverPort,
-      remote_port: socket.remotePort, accepted_at: new Date().toISOString() });
-    socket.on('error', () => {});
-    socket.once('close', () => { peers.delete(socket); });
-  });
-  await new Promise((resolve, reject) => {
-    server.once('error', reject);
-    server.listen({ host: '127.0.0.1', port: 0, exclusive: true }, resolve);
-  });
-  const serverPort = server.address().port;
+  const fillers = new Set();
+  let silentPeer = null;
+  let server = null;
+  let serverPort;
+  if (branch === 'timeout') {
+    silentPeer = fork(new URL('./check-delivery-syn-peer.mjs', import.meta.url), { stdio: ['ignore', 'inherit', 'inherit', 'ipc'] });
+    [{ port: serverPort }] = await once(silentPeer, 'message');
+    silentPeer.kill('SIGSTOP');
+    try {
+      await saturateAcceptQueue(serverPort, fillers, evidence);
+    } catch (error) {
+      const exited = once(silentPeer, 'exit');
+      silentPeer.kill('SIGKILL');
+      await exited;
+      throw error;
+    }
+  } else {
+    server = net.createServer((socket) => {
+      peers.add(socket);
+      wire.push({ transport: 'tcp_connect', fixture_host: '127.0.0.1', fixture_port: serverPort,
+        remote_port: socket.remotePort, accepted_at: new Date().toISOString() });
+      socket.on('error', () => {});
+      socket.once('close', () => { peers.delete(socket); });
+    });
+    await new Promise((resolve, reject) => {
+      server.once('error', reject);
+      server.listen({ host: '127.0.0.1', port: 0, exclusive: true }, resolve);
+    });
+    serverPort = server.address().port;
+  }
   if (branch === 'peer_refused') await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
   fixture.target.port = serverPort;
   if (check.probe_profile.kind === 'connection_limit_probe') {
@@ -67,6 +87,9 @@ export async function createConnectFaultFixture(fixtures, check, branch) {
     socket.once('close', () => {
       sockets.delete(socket);
       attempt.closed_at = new Date().toISOString();
+      if (branch === 'timeout' && !attempt.accepted) evidence.push({ event: 'connect_aborted_without_synack', transport: 'tcp',
+        attempt_id: attempt.attempt_id, phase: 'connect', fixture_host: '127.0.0.1', fixture_port: serverPort,
+        error_code: attempt.error_code ?? null, at: attempt.closed_at });
       evidence.push({ event: 'owned_client_socket_closed', transport: 'tcp', attempt_id: attempt.attempt_id,
         phase: 'connect', fixture_host: '127.0.0.1', fixture_port: serverPort, at: attempt.closed_at });
     });
@@ -82,12 +105,19 @@ export async function createConnectFaultFixture(fixtures, check, branch) {
       assert.ok(Date.now() < deadline, 'producer must terminate all client and peer work before fixture teardown');
       await delay(5);
     }
+    if (branch === 'timeout') assert.equal(wire.length, 0, 'a saturated queue must never accept the worker connection');
     if (branch === 'cancel') assert.ok(wire.length > 0, 'actual accepted handshake required for this native cancellation phase');
   };
   fixture.close = async () => {
     for (const socket of sockets) socket.destroy();
     for (const socket of peers) socket.destroy();
-    if (server.listening) await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    for (const socket of fillers) socket.destroy();
+    if (silentPeer) {
+      const exited = once(silentPeer, 'exit');
+      silentPeer.kill('SIGKILL');
+      await exited;
+    }
+    if (server?.listening) await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
   };
   fixture.attempts = () => structuredClone(attempts);
   return fixture;
@@ -100,10 +130,34 @@ export async function executeConnectFaultDelivery(check, fixture) {
     job_id: result.job.id, invocation_id: result.receipt.invocation_id, target_id: result.job.target_id }));
   // Only refusal attempts substitute for absent accepted wire. Cancellation already
   // has a real accepted handshake and uses its separately bound causal events.
-  if (result.networkAttempts.every((attempt) => attempt.error_code === 'ECONNREFUSED')) {
+  const saturated = fixture.peerEvidence().some((row) => row.event === 'listen_queue_saturated');
+  if (result.networkAttempts.every((attempt) => attempt.error_code === 'ECONNREFUSED') || (saturated && result.networkAttempts.every((attempt) => !attempt.accepted))) {
     result.receipt.actual_network_attempts = structuredClone(result.networkAttempts);
   }
   result.receipt.branch_peer_evidence = fixture.peerEvidence();
   result.receipt.runtime_provenance = { platform: process.platform, node: process.version, scope: 'owned_loopback' };
   return result;
+}
+
+const SATURATION_PROBE_MS = 400;
+const MAX_FILLER_CONNECTIONS = 8;
+
+async function saturateAcceptQueue(port, fillers, evidence) {
+  for (let filled = 0; filled <= MAX_FILLER_CONNECTIONS; filled += 1) {
+    const socket = net.connect({ host: '127.0.0.1', port });
+    socket.on('error', () => {});
+    const state = await new Promise((resolve) => {
+      const timer = setTimeout(() => resolve('syn_ack_withheld'), SATURATION_PROBE_MS);
+      socket.once('connect', () => { clearTimeout(timer); resolve('connected'); });
+      socket.once('error', (error) => { clearTimeout(timer); resolve(error.code); });
+    });
+    if (state === 'connected') { fillers.add(socket); continue; }
+    socket.destroy();
+    if (state !== 'syn_ack_withheld') break;
+    evidence.push({ event: 'listen_queue_saturated', transport: 'tcp', fixture_host: '127.0.0.1', fixture_port: port,
+      filler_connections: fillers.size, probe_timeout_ms: SATURATION_PROBE_MS, probe_result: state, platform: process.platform, at: new Date().toISOString() });
+    return;
+  }
+  for (const socket of fillers) socket.destroy();
+  assert.fail(`kernel on ${process.platform} did not withhold SYN-ACK from a never-accepting backlog-1 listener (macOS completes or resets the handshake via SYN cookies). Run this fixture on Linux.`);
 }
