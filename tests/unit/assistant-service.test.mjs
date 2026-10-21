@@ -194,3 +194,13 @@ describe('structured AI purposes', () => {
     assert.equal(store.getJob(alice, second.job_id, cfg).error, 'test_purpose_unparseable');
   });
 });
+
+describe('assistant openai backend config', () => {
+  it('defaults the model and disables web search for the openai backend only', () => {
+    const openai = loadAssistantConfig({ ASTRANULL_ASSISTANT_RUNNER_BACKEND: 'openai' });
+    assert.deepEqual({ backend: openai.backend, model: openai.model, webSearch: openai.webSearch }, { backend: 'openai', model: 'deepseek-v4-flash', webSearch: false });
+    assert.equal(loadAssistantConfig({ ASTRANULL_ASSISTANT_MODEL: 'deepseek-v4-flash' }).model, 'deepseek-v4-flash');
+    const agy = loadAssistantConfig({});
+    assert.deepEqual({ backend: agy.backend, model: agy.model, webSearch: agy.webSearch }, { backend: 'agy', model: 'gemini-3.8-flash-high', webSearch: true });
+  });
+});

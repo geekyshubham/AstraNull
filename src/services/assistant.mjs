@@ -213,7 +213,8 @@ function sanitizeResult(body) {
     .map((entry) => ({ name: text(entry?.name), summary: redactSecrets(cleanText(entry?.summary, MAX_TOOL_SUMMARY_CHARS)).trim() }))
     .filter((entry) => isAssistantToolName(entry.name))
     .slice(0, MAX_TOOL_CALLS);
-  return { status, content: redactSecrets(cleanText(body?.content, MAX_CONTENT_CHARS)), searches, sources, error, toolCalls };
+  const model = /^[a-z0-9][a-z0-9._-]{1,80}$/i.test(text(body?.model)) ? text(body.model) : '';
+  return { status, content: redactSecrets(cleanText(body?.content, MAX_CONTENT_CHARS)), searches, sources, error, toolCalls, model };
 }
 
 /** Keeps only [[data:Qn]] markers for results registered on this job and known visual types. */
@@ -319,7 +320,7 @@ export function createAssistantStore({ now = () => Date.now() } = {}) {
       runner_online: online,
       model: enabled ? cfg.model ?? null : null,
       reason,
-      capabilities: { data_tools: true, visuals: true, page_context: true, web_search: true, insights: true },
+      capabilities: { data_tools: true, visuals: true, page_context: true, web_search: cfg.webSearch !== false, insights: true },
     };
   }
 
@@ -578,7 +579,7 @@ export function createAssistantStore({ now = () => Date.now() } = {}) {
       } catch {
         parsed = null;
       }
-      if (parsed) job.response = { [structured.responseKey]: parsed, sources: result.sources, model: job.model };
+      if (parsed) job.response = { [structured.responseKey]: parsed, sources: result.sources, model: result.model || job.model };
       else {
         job.status = 'failed';
         job.error = `${job.purpose}_unparseable`;
@@ -592,7 +593,7 @@ export function createAssistantStore({ now = () => Date.now() } = {}) {
         sources: result.sources,
         tool_calls: result.toolCalls,
         data_results: job.data_results.filter((entry) => used.has(entry.id)),
-        model: job.model,
+        model: result.model || job.model,
       };
     } else {
       job.error = result.error;
