@@ -59,23 +59,24 @@ describe('connect fault lab fail-closed isolation contract (helper-only, no cove
 });
 
 const obligations = CHECK_DELIVERY_INVENTORY.branch_obligations.filter((row) => CONNECT_FAULT_KINDS.includes(row.kind));
-// These remain real blocking gaps, not skipped tests or relabeled accepted handshakes.
-export const BLOCKED_CONNECT_TIMEOUT_BRANCHES = obligations.filter((row) => row.branch === 'timeout');
-const native = obligations.filter((row) => ['peer_refused', 'cancel'].includes(row.branch));
+const native = obligations;
 const nativeReceipts = [];
+const SYN_DROP_KERNEL = process.platform === 'linux';
+const LINUX_ONLY = 'requires the Linux accept-queue SYN drop; strict delivery capture runs on Linux';
+const expectedObligations = SYN_DROP_KERNEL ? obligations : obligations.filter((row) => row.branch !== 'timeout');
 
-describe('owned native TCP refused endpoints and post-handshake cancellation', () => {
+describe('owned native TCP refused endpoints, unanswered SYN timeouts and post-handshake cancellation', () => {
   let fixtures;
   before(async () => { fixtures = await createCheckDeliveryFixtures(); });
   after(async () => { await fixtures?.close(); });
-  it('partitions all nine fingerprint owners without counting absent kernel-drop proof', () => {
+  it('owns all nine fingerprint owners across refusal, timeout and cancellation', () => {
     assert.equal(obligations.length, 27);
-    assert.equal(native.length, 18);
-    assert.equal(BLOCKED_CONNECT_TIMEOUT_BRANCHES.length, 9);
-    assert.equal(new Set([...native, ...BLOCKED_CONNECT_TIMEOUT_BRANCHES].map((row) => row.branch_id)).size, 27);
+    assert.equal(obligations.filter((row) => row.branch === 'timeout').length, 9);
+    assert.equal(new Set(obligations.map((row) => row.branch_id)).size, 27);
   });
   for (const obligation of native) {
-    it(`${obligation.check_id} / branch ${obligation.branch}`, { timeout: 15_000 }, async (t) => {
+    const skip = obligation.branch === 'timeout' && !SYN_DROP_KERNEL ? LINUX_ONLY : false;
+    it(`${obligation.check_id} / branch ${obligation.branch}`, { timeout: 15_000, skip }, async (t) => {
       const check = getCheckById(obligation.check_id);
       const fixture = await createConnectFaultFixture(fixtures, check, obligation.branch);
       try {
@@ -104,6 +105,16 @@ describe('owned native TCP refused endpoints and post-handshake cancellation', (
               assert.equal(outcome.metadata.open_ports.length, 0);
               assert.ok(outcome.metadata.closed_ports.length > 0);
             }
+          } else if (obligation.branch === 'timeout') {
+            if (obligation.kind === 'port_scan_bounded') {
+              assert.equal(outcome.external_result, 'blocked', 'the scan reserves a deadline margin so silent ports finish as filtered, not as a job timeout');
+              assert.equal(outcome.metadata.open_ports.length, 0);
+              assert.ok(outcome.metadata.filtered_ports.length > 0);
+            } else assert.equal(outcome.external_result, 'timeout', JSON.stringify(outcome));
+            assert.deepEqual(receipt.actual_wire, [], 'a saturated listener never accepts the worker connection');
+            assert.ok(result.networkAttempts.every((row) => !row.accepted && !row.connected_at && row.closed_at));
+            assert.ok(receipt.branch_peer_evidence.some((row) => row.event === 'listen_queue_saturated' && row.probe_result === 'syn_ack_withheld'));
+            assert.ok(outcome.duration_ms >= 100, 'timeout must reflect real elapsed time');
           } else {
             assert.ok(['error', 'timeout', 'not_run'].includes(outcome.external_result), JSON.stringify(outcome));
             assert.ok(outcome.duration_ms < 1000, 'native cancellation must finish before signed deadline');
@@ -117,7 +128,8 @@ describe('owned native TCP refused endpoints and post-handshake cancellation', (
           receipt.branch_assertions = [
             'unchanged signed catalog job admitted leased reserved executed ingested and published with custody',
             obligation.branch === 'peer_refused' ? 'native ECONNREFUSED and close observed separately from accepted sessions'
-              : 'native established handshake cancellation prevents next operation and closes clients before teardown',
+              : obligation.branch === 'timeout' ? 'kernel withheld SYN-ACK from a proven saturated owned listener until the signed deadline and the client socket closed'
+                : 'native established handshake cancellation prevents next operation and closes clients before teardown',
             'negative observation earns no finding or readiness credit',
           ];
           nativeReceipts.push(receipt);
@@ -126,16 +138,15 @@ describe('owned native TCP refused endpoints and post-handshake cancellation', (
       } finally { await fixture.close(); }
     });
   }
-  it('accounts only native branches and retains all nine unproved SYN timeout gaps', () => {
+  it('accounts every native TCP branch with no remaining gaps', () => {
     const inventory = { ...CHECK_DELIVERY_INVENTORY,
-      rows: CHECK_DELIVERY_INVENTORY.rows.filter((row) => obligations.some((item) => item.check_id === row.check_id)),
-      branch_obligations: obligations };
+      rows: CHECK_DELIVERY_INVENTORY.rows.filter((row) => expectedObligations.some((item) => item.check_id === row.check_id)),
+      branch_obligations: expectedObligations };
     const result = accountDeliveryReceipts(nativeReceipts, inventory);
     assert.deepEqual(result.errors, []);
-    assert.equal(result.invoked_branches, 18);
+    assert.equal(result.invoked_branches, expectedObligations.length);
     assert.equal(result.invoked_definitions, 0, 'branch receipts do not substitute for default invocations');
-    assert.equal(result.complete, false, 'blocked kernel faults must remain blocking');
-    assert.deepEqual(result.branch_gaps.map((row) => row.branch_id).sort(), BLOCKED_CONNECT_TIMEOUT_BRANCHES.map((row) => row.branch_id).sort());
+    assert.deepEqual(result.branch_gaps, []);
     const omitted = accountDeliveryReceipts(nativeReceipts.slice(1), inventory);
     assert.ok(omitted.branch_gaps.some((row) => row.branch_id === nativeReceipts[0].branch_id));
     for (const [name, mutate] of [
@@ -152,6 +163,24 @@ describe('owned native TCP refused endpoints and post-handshake cancellation', (
       mutate(mutated[0]);
       const rejected = accountDeliveryReceipts(mutated, inventory);
       assert.ok(rejected.errors.length > 0, `must reject ${name}`);
+    }
+    const timeoutIndex = nativeReceipts.findIndex((row) => obligations.find((item) => item.branch_id === row.branch_id)?.branch === 'timeout');
+    assert.equal(timeoutIndex >= 0, SYN_DROP_KERNEL);
+    if (!SYN_DROP_KERNEL) return;
+    for (const [name, mutate] of [
+      ['missing saturation proof', (row) => { row.branch_peer_evidence = row.branch_peer_evidence.filter((item) => item.event !== 'listen_queue_saturated'); }],
+      ['saturation not withheld', (row) => { row.branch_peer_evidence.find((item) => item.event === 'listen_queue_saturated').probe_result = 'connected'; }],
+      ['saturation after attempt', (row) => { row.branch_peer_evidence.find((item) => item.event === 'listen_queue_saturated').at = new Date(Date.now() + 60_000).toISOString(); }],
+      ['saturation on another port', (row) => { row.branch_peer_evidence.find((item) => item.event === 'listen_queue_saturated').fixture_port += 1; }],
+      ['missing abort evidence', (row) => { row.branch_peer_evidence = row.branch_peer_evidence.filter((item) => item.event !== 'connect_aborted_without_synack'); }],
+      ['accepted attempt', (row) => { row.actual_network_attempts[0].accepted = true; }],
+      ['connected attempt', (row) => { row.actual_network_attempts[0].connected_at = row.actual_network_attempts[0].started_at; }],
+      ['missing closure', (row) => { delete row.actual_network_attempts[0].closed_at; }],
+      ['refusal passed off as timeout', (row) => { row.actual_network_attempts[0].error_code = 'ECONNREFUSED'; }],
+    ]) {
+      const mutated = structuredClone(nativeReceipts);
+      mutate(mutated[timeoutIndex]);
+      assert.ok(accountDeliveryReceipts(mutated, inventory).errors.length > 0, `must reject timeout mutation: ${name}`);
     }
   });
 });

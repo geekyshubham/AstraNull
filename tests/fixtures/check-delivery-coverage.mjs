@@ -192,7 +192,13 @@ export const DELIVERY_BRANCH_POLICIES = Object.freeze({
   rate_limit_canary_probe: ['peer_error', 'timeout', 'cancel'],
 });
 
-export function buildDeliveryBranchObligations(inventory) {
+export function unreachableBranchReason(row, branch) {
+  if (row.kind === 'dns_wire_query' && row.delivery_material?.profile?.dns_transport === 'tcp' && branch === 'wrong_peer') return 'connected_tcp_has_no_datagram_source';
+  if (row.kind === 'waf_enforcement_probe' && branch === 'permitted_unhealthy') return 'single_marker_request_has_no_permitted_control';
+  return null;
+}
+
+export function buildCandidateBranchObligations(inventory) {
   const seen = new Set();
   const obligations = [];
   for (const row of inventory.rows.filter((candidate) => candidate.execution === 'socket')) {
@@ -206,7 +212,25 @@ export function buildDeliveryBranchObligations(inventory) {
   }
   return obligations;
 }
+
+function unreachableReasonFor(inventory, obligation) {
+  const owner = inventory.rows.find((row) => row.delivery_fingerprint === obligation.delivery_fingerprint);
+  return unreachableBranchReason(owner, obligation.branch);
+}
+
+export function buildDeliveryBranchObligations(inventory) {
+  return buildCandidateBranchObligations(inventory).filter((row) => !unreachableReasonFor(inventory, row));
+}
+
+export function buildInapplicableBranchObligations(inventory) {
+  return buildCandidateBranchObligations(inventory).flatMap((row) => {
+    const reason = unreachableReasonFor(inventory, row);
+    return reason ? [{ ...row, reason }] : [];
+  });
+}
 export const CHECK_DELIVERY_INVENTORY = buildCheckDeliveryInventory();
+CHECK_DELIVERY_INVENTORY.candidate_branch_obligations = buildCandidateBranchObligations(CHECK_DELIVERY_INVENTORY);
+CHECK_DELIVERY_INVENTORY.inapplicable_branch_obligations = buildInapplicableBranchObligations(CHECK_DELIVERY_INVENTORY);
 CHECK_DELIVERY_INVENTORY.branch_obligations = buildDeliveryBranchObligations(CHECK_DELIVERY_INVENTORY);
 
 export const OWNED_INVALID_TLS_REPLY_HEX = Buffer.from('HTTP/1.1 400 Owned invalid TLS peer\r\n\r\n').toString('hex');
@@ -215,8 +239,19 @@ const hexBytes = (value) => typeof value === 'string' && /^(?:[a-f0-9]{2})+$/i.t
 const loopback = (value) => ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(value);
 const timestamp = (value) => typeof value === 'string' && Number.isFinite(Date.parse(value)) && new Date(value).toISOString() === value ? Date.parse(value) : NaN;
 
+const TCP_ATTEMPT_KINDS = ['tcp_connect', 'port_scan_bounded', 'connection_limit_probe'];
+
 /** Refusal is a client-observed attempt, never fabricated peer-received wire evidence. */
 export function validRefusedDeliveryAttempts(receipt) {
+  return validUnacceptedDeliveryAttempts(receipt, 'refused');
+}
+
+/** A timeout attempt is an actual client connect that never completed against a peer whose accept queue was proven saturated first. */
+export function validTimedOutDeliveryAttempts(receipt) {
+  return validUnacceptedDeliveryAttempts(receipt, 'timeout');
+}
+
+function validUnacceptedDeliveryAttempts(receipt, mode) {
   const attempts = receipt.actual_network_attempts;
   if (!Array.isArray(attempts) || !attempts.length || attempts.length !== receipt.outcome?.probe_requests_sent
     || !['tcp_connect', 'port_scan_bounded', 'connection_limit_probe'].includes(receipt.signed_profile?.kind)) return false;
@@ -234,15 +269,21 @@ export function validRefusedDeliveryAttempts(receipt) {
     const boundEvent = (event) => event.attempt_id === attempt.attempt_id && event.phase === 'connect' && event.transport === 'tcp'
       && event.fixture_host === attempt.fixture_host && event.fixture_port === attempt.fixture_port;
     const valid = !!attempt.attempt_id && !seen.has(attempt.attempt_id) && attempt.source === 'native_node_net_socket'
-      && attempt.transport === 'tcp_connect' && attempt.phase === 'connect' && attempt.accepted === false && attempt.error_code === 'ECONNREFUSED'
+      && attempt.transport === 'tcp_connect' && attempt.phase === 'connect' && attempt.accepted === false && !attempt.connected_at
+      && (mode === 'refused' ? attempt.error_code === 'ECONNREFUSED' : attempt.error_code !== 'ECONNREFUSED')
       && attempt.job_id === receipt.job_id && attempt.invocation_id === receipt.invocation_id && attempt.target_id === receipt.target_id
       && loopback(attempt.requested_host) && loopback(attempt.fixture_host) && ports?.includes(attempt.requested_port)
       && Number.isInteger(attempt.fixture_port) && attempt.fixture_port > 0 && attempt.fixture_port <= 65535
       && attempt.mapping === (attempt.requested_port === attempt.fixture_port ? 'unchanged' : 'owned_transport_pin_not_production_port_proof')
-      && !!route && start >= timestamp(receipt.signed_job?.leased_at) && start <= error && error <= close
-      && error <= timestamp(receipt.result_body?.safety_attestation?.completed_at)
+      && !!route && start >= timestamp(receipt.signed_job?.leased_at) && (mode === 'timeout' || (start <= error && error <= close))
+      && start <= close && (mode === 'timeout' || error <= timestamp(receipt.result_body?.safety_attestation?.completed_at))
       && close <= timestamp(receipt.result_body?.safety_attestation?.completed_at) + 1000
-      && evidence.some((event) => boundEvent(event) && event.event === 'connection_refused' && event.error_code === 'ECONNREFUSED' && event.at === attempt.error_at)
+      && (mode === 'refused'
+        ? evidence.some((event) => boundEvent(event) && event.event === 'connection_refused' && event.error_code === 'ECONNREFUSED' && event.at === attempt.error_at)
+        : evidence.some((event) => boundEvent(event) && event.event === 'connect_aborted_without_synack' && event.at === attempt.closed_at && event.error_code === (attempt.error_code ?? null))
+          && evidence.some((event) => event.event === 'listen_queue_saturated' && event.transport === 'tcp' && event.fixture_host === attempt.fixture_host
+            && event.fixture_port === attempt.fixture_port && event.probe_result === 'syn_ack_withheld' && event.filler_connections >= 1
+            && timestamp(event.at) <= start))
       && evidence.some((event) => boundEvent(event) && event.event === 'owned_client_socket_closed' && event.at === attempt.closed_at);
     seen.add(attempt.attempt_id);
     return valid;
@@ -309,7 +350,13 @@ export function validateDeliveryBranchEvidence(receipt, obligation) {
   const signedDenial = (item) => denial(item) && item.headers?.['x-waf-block'] === '1';
   const healthy = (item) => item.status >= 200 && item.status < 300;
   if (branch === 'timeout') {
-    if (terminal !== 'timeout' || !causal('response_withheld')) fail('timeout_branch_not_observed');
+    if (TCP_ATTEMPT_KINDS.includes(obligation.kind)) {
+      const silentScan = obligation.kind === 'port_scan_bounded' && terminal === 'blocked' && receipt.outcome?.probe_requests_sent > 0
+        && !metadata.open_ports?.length && !metadata.closed_ports?.length && !metadata.rejected_ports?.length
+        && metadata.filtered_ports?.length > 0 && metadata.ports_scanned?.every((port) => metadata.filtered_ports.includes(port));
+      if ((terminal !== 'timeout' && !silentScan) || !validTimedOutDeliveryAttempts(receipt)
+        || !(receipt.outcome?.duration_ms <= receipt.signed_caps?.timeout_ms + hardTimeoutSchedulerToleranceMs(receipt.signed_caps?.timeout_ms))) fail('tcp_syn_timeout_branch_not_observed');
+    } else if (terminal !== 'timeout' || !causal('response_withheld')) fail('timeout_branch_not_observed');
   } else if (branch === 'cancel') {
     if (!failed || !has('cancel_requested') || !(has('owned_peer_socket_closed', (item) => item.closure_cause !== 'resolver_timeout') || has('owned_client_socket_closed', (item) => item.closure_cause !== 'resolver_timeout'))
       || !(receipt.outcome?.duration_ms < Math.min(1000, receipt.signed_caps?.timeout_ms))) fail('cancel_branch_not_observed');
@@ -460,7 +507,8 @@ export function accountDeliveryReceipts(receipts, inventory = CHECK_DELIVERY_INV
       if (receipt.confidence !== 'external_only' || receipt.published_verdict?.confidence !== 'external_only') errors.push(`external_confidence_missing:${row.check_id}`);
       const dnsKind = ['dns_wire_query', 'dnssec_posture', 'dns_axfr_leak', 'dns_open_recursion', 'dns_failover_posture', 'dns_resolve'].includes(row.kind);
       const actualWire = Array.isArray(receipt.actual_wire) ? receipt.actual_wire : [];
-      const refused = receipt.branch_id && byBranch.get(receipt.branch_id)?.branch === 'peer_refused' && validRefusedDeliveryAttempts(receipt);
+      const refused = receipt.branch_id && ((byBranch.get(receipt.branch_id)?.branch === 'peer_refused' && validRefusedDeliveryAttempts(receipt))
+        || (byBranch.get(receipt.branch_id)?.branch === 'timeout' && validTimedOutDeliveryAttempts(receipt)));
       if (!actualWire.some((wire) => dnsKind ? ['dns_udp', 'dns_tcp'].includes(wire.transport) : !['dns_udp', 'dns_tcp'].includes(wire.transport)) && !refused) errors.push(`actual_probe_wire_missing:${row.check_id}`);
       if (receipt.actual_network_attempts?.length && !refused) errors.push(`unbound_network_attempt:${row.check_id}`);
     } else if (receipt.actual_wire?.length) errors.push(`unexpected_no_execution_wire:${row.check_id}`);

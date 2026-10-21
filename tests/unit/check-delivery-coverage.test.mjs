@@ -7,13 +7,31 @@ import { createCheckDeliveryFixtures, executeMemoryDelivery } from '../helpers/c
 import { createConnectFaultFixture, executeConnectFaultDelivery } from '../helpers/check-delivery-connect-fault.mjs';
 import { assertNativeResolverCancellation } from '../helpers/check-delivery-native-oracles.mjs';
 
-// Frozen pre-expansion identities, not a dynamically lowered denominator. Hash covers
-// all five identity fields, order included, from the approved 2026-10-15 baseline.
-it('preserves every original 524 fault obligation identity and delivery fingerprint', () => {
-  const obligations = CHECK_DELIVERY_INVENTORY.branch_obligations;
-  assert.equal(obligations.length, 524);
-  assert.equal(new Set(obligations.map((row) => row.branch_id)).size, 524);
-  assert.equal(createHash('sha256').update(JSON.stringify(obligations)).digest('hex'), '3cc8f902c3e873d7a6010e87e5aafbb1cd686ee18aac5f3a810fc9ae365f18ff');
+// Frozen pre-expansion identities of the full candidate set, not a dynamically lowered denominator.
+it('preserves every original 524 candidate obligation identity and delivery fingerprint', () => {
+  const candidates = CHECK_DELIVERY_INVENTORY.candidate_branch_obligations;
+  assert.equal(candidates.length, 524);
+  assert.equal(new Set(candidates.map((row) => row.branch_id)).size, 524);
+  assert.equal(createHash('sha256').update(JSON.stringify(candidates)).digest('hex'), '3cc8f902c3e873d7a6010e87e5aafbb1cd686ee18aac5f3a810fc9ae365f18ff');
+});
+
+it('removes only the four code-proven unreachable candidates from the required denominator', () => {
+  const { candidate_branch_obligations: candidates, branch_obligations: required, inapplicable_branch_obligations: inapplicable } = CHECK_DELIVERY_INVENTORY;
+  assert.deepEqual(inapplicable.map((row) => [row.check_id, row.branch, row.reason]), [
+    ['l7.waf_marker_rule.safe', 'permitted_unhealthy', 'single_marker_request_has_no_permitted_control'],
+    ['waf.enforcement.safe', 'permitted_unhealthy', 'single_marker_request_has_no_permitted_control'],
+    ['dns.tcp_fallback.readiness', 'wrong_peer', 'connected_tcp_has_no_datagram_source'],
+    ['dns.multi_question_oversized.safe', 'wrong_peer', 'connected_tcp_has_no_datagram_source'],
+  ]);
+  assert.equal(required.length, candidates.length - inapplicable.length);
+  const removed = new Set(inapplicable.map((row) => row.branch_id));
+  assert.deepEqual(required.map((row) => row.branch_id), candidates.map((row) => row.branch_id).filter((id) => !removed.has(id)));
+  const owners = (kind) => CHECK_DELIVERY_INVENTORY.rows.filter((row) => row.kind === kind);
+  const udpWrongPeer = required.filter((row) => row.branch === 'wrong_peer');
+  assert.ok(udpWrongPeer.length > 0);
+  assert.ok(udpWrongPeer.every((row) => owners('dns_wire_query').find((owner) => owner.delivery_fingerprint === row.delivery_fingerprint).delivery_material.profile.dns_transport !== 'tcp'));
+  assert.ok(required.some((row) => row.kind === 'waf_class_marker_probe' && row.branch === 'permitted_unhealthy'));
+  assert.ok(required.some((row) => row.kind === 'waf_evasion_marker_probe' && row.branch === 'permitted_unhealthy'));
 });
 
 const samples = [
@@ -191,7 +209,7 @@ describe('strict delivery receipt causal evidence mutations', { concurrency: fal
       assert.deepEqual(accepted.errors, []);
       assert.equal(accepted.invoked_branches, 1);
       assert.equal(accepted.invoked_definitions, 0, 'branch proof never substitutes a definition invocation');
-      assert.equal(accepted.branch_gaps.length, 523, 'blockers remain in the fixed denominator');
+      assert.equal(accepted.branch_gaps.length, CHECK_DELIVERY_INVENTORY.branch_obligations.length - 1, 'every other required branch remains a gap');
       assert.equal(accepted.complete, false);
 
       const labelsOnly = structuredClone(receipt);
@@ -199,7 +217,7 @@ describe('strict delivery receipt causal evidence mutations', { concurrency: fal
       const rejected = accountDeliveryReceipts([labelsOnly]);
       assert.ok(rejected.errors.length > 0, branch);
       assert.equal(rejected.invoked_branches, 0, 'invalid receipts must not count toward exercised obligations');
-      assert.equal(rejected.branch_gaps.length, 524);
+      assert.equal(rejected.branch_gaps.length, CHECK_DELIVERY_INVENTORY.branch_obligations.length);
       const noWire = structuredClone(receipt); noWire.actual_wire = [];
       assert.ok(accountDeliveryReceipts([noWire]).errors.some((error) => error.startsWith('actual_probe_wire_missing:')));
       const emptyAssertions = structuredClone(receipt); emptyAssertions.branch_assertions = [''];

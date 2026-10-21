@@ -4,25 +4,14 @@ import assert from 'node:assert/strict';
 // classifier under test. Actual request/response pairs establish the phase.
 const OBSERVATION_TRANSFORMS = new Set(['homoglyph', 'base64_wrap', 'numeric_repr']);
 
-// These remain original denominator obligations. A passing limitation assertion
-// is NOT a branch receipt and must never be captured as executed coverage.
-export const NATIVE_REPRESENTABILITY_BLOCKERS = Object.freeze([
-  { check_id: 'l7.waf_marker_rule.safe', branch: 'permitted_unhealthy', reason: 'single_marker_producer_has_no_permitted_baseline' },
-  { check_id: 'waf.enforcement.safe', branch: 'permitted_unhealthy', reason: 'single_marker_producer_has_no_permitted_baseline' },
-  { check_id: 'dns.tcp_fallback.readiness', branch: 'wrong_peer', reason: 'connected_tcp_has_no_datagram_source_branch' },
-  { check_id: 'dns.multi_question_oversized.safe', branch: 'wrong_peer', reason: 'connected_tcp_has_no_datagram_source_branch' },
-]);
-export function nativeRepresentabilityBlocker(obligation) {
-  return NATIVE_REPRESENTABILITY_BLOCKERS.find((row) => row.check_id === obligation.check_id && row.branch === obligation.branch);
-}
-export function assertNativeRepresentabilityBlocker(obligation, result, fixture) {
-  const blocker = nativeRepresentabilityBlocker(obligation);
-  assert.ok(blocker);
+export function assertUnreachableBranchProof(obligation, result, fixture) {
+  assert.ok(obligation.reason, 'only derived inapplicable obligations carry an unreachability proof');
   const evidence = fixture.peerEvidence();
   const wire = result.receipt.actual_wire;
   const m = result.outcome.metadata;
-  if (blocker.reason === 'single_marker_producer_has_no_permitted_baseline') {
+  if (obligation.reason === 'single_marker_request_has_no_permitted_control') {
     assert.equal(result.job.probe_profile.kind, 'waf_enforcement_probe');
+    assert.equal(result.job.probe_profile.max_requests, 1);
     const requests = wire.filter((row) => ['http', 'https'].includes(row.transport));
     assert.equal(requests.length, 1);
     assert.ok(requests[0].request_headers['x-astranull-marker']);
@@ -30,18 +19,22 @@ export function assertNativeRepresentabilityBlocker(obligation, result, fixture)
     assert.equal(result.outcome.external_result, 'not_run');
     assert.equal(m.not_run_reason, 'independent_permitted_baseline_not_available');
     assert.equal(m.comparison_complete, false);
-  } else if (blocker.reason === 'connected_tcp_has_no_datagram_source_branch') {
+    assert.equal(m.baseline_health, undefined);
+    assert.equal(m.permitted_baseline_health, undefined);
+  } else if (obligation.reason === 'connected_tcp_has_no_datagram_source') {
     assert.equal(result.job.probe_profile.kind, 'dns_wire_query');
     assert.equal(result.job.probe_profile.dns_transport, 'tcp');
     assert.ok(wire.some((row) => row.transport === 'dns_tcp'));
+    const probeQuery = wire.filter((row) => row.transport === 'dns_tcp');
+    assert.equal(probeQuery.length, 1);
+    assert.equal(probeQuery[0].qtype, { ANY: 255, NS: 2 }[result.job.probe_profile.dns_qtype]);
+    assert.ok(wire.filter((row) => row.transport === 'dns_udp').every((row) => row.transaction_id !== probeQuery[0].transaction_id));
     assert.equal(evidence.some((row) => row.event === 'wrong_peer_response_sent'), false);
     assert.equal(result.outcome.external_result, 'connected');
     assert.equal(m.protocol_identity_confirmed, true);
-  } else assert.fail(`unknown native representability blocker: ${blocker.reason}`);
+  } else assert.fail(`unknown unreachable branch reason: ${obligation.reason}`);
   assert.equal(result.readiness.coverage.passed_count, 0);
   assert.equal(result.findings.length, 0);
-  return { ...blocker, branch_id: obligation.branch_id, delivery_fingerprint: obligation.delivery_fingerprint,
-    coverage_receipt: false, observed_worker_result: result.outcome.external_result, worker_duration_ms: result.outcome.duration_ms };
 }
 export function assertNativeResolverCancellation(obligation, result, evidence) {
   assert.equal(obligation.branch, 'cancel');
