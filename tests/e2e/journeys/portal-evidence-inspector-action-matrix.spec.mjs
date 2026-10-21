@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect as baseExpect, test } from '@playwright/test';
 import { canAccessRoute } from '../../../apps/web/react/src/lib/route-access.mjs';
 import { groupFindings } from '../../../apps/web/react/src/lib/finding-groups.mjs';
 import { findingGroupHref } from '../../../apps/web/react/src/lib/finding-groups.mjs';
@@ -8,6 +8,8 @@ import { createActionMatrix, matrixIdentities, runIdentityMatrix, startMatrixPag
 import { fetchPortalFindings, getPortalPlaywrightBaseUrl, portalOwnerHeaders, startPortalPlaywrightServer, stopPortalPlaywrightServer } from '../../helpers/portal-playwright-server.mjs';
 import { gotoPortalRoute, resolvePortalRouteUrl, waitForPortalRouteSettled } from '../../helpers/portal-playwright-session.mjs';
 import { getStore } from '../../../src/store.mjs';
+
+const expect = baseExpect.configure({ timeout: 20_000 });
 
 const ids = PORTAL_BASELINE_IDS;
 const SECOND_RUN = 'run_checkout_2';

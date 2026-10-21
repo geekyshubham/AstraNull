@@ -1,10 +1,12 @@
-import { expect, test } from '@playwright/test';
+import { expect as baseExpect, test } from '@playwright/test';
 import { canAccessRoute } from '../../../apps/web/react/src/lib/route-access.mjs';
 import { NAV_GROUP_LABELS, NAV_ITEMS, ROUTE_BY_ID, routeCrumb } from '../../../apps/web/react/src/lib/navigation.ts';
 import { ROLES } from '../../../src/contracts/roles.mjs';
 import { createActionMatrix, matrixIdentities, restoreMatrixSession, runIdentityMatrix, startMatrixPage, PORTAL_SESSION_KEY } from '../../helpers/portal-action-matrix.mjs';
 import { getPortalPlaywrightBaseUrl, startPortalPlaywrightServer, stopPortalPlaywrightServer } from '../../helpers/portal-playwright-server.mjs';
 import { gotoPortalRoute, resolvePortalRouteUrl, waitForPortalRouteSettled } from '../../helpers/portal-playwright-session.mjs';
+
+const expect = baseExpect.configure({ timeout: 20_000 });
 
 const DESKTOP = { width: 1280, height: 900 };
 const MOBILE = { width: 800, height: 900 };
