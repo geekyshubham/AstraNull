@@ -6,7 +6,7 @@ const DEFAULT_MAX_TOKENS = 8192;
 const MIN_MAX_TOKENS = 1024;
 const MAX_MAX_TOKENS = 32768;
 const MAX_TIMEOUT_SECONDS = 240;
-const MAX_RESPONSE_CHARS = 2_000_000;
+const MAX_RESPONSE_BYTES = 2_000_000;
 const MODEL_PATTERN = /^[a-z0-9][a-z0-9._:/-]{1,80}$/i;
 const SEARCH_UNAVAILABLE_NOTE = '\n\nWeb search and page browsing are not available in this session. Answer from general knowledge, do not claim to have searched, and do not invent URLs; name the vendor documentation section to check instead.';
 
@@ -19,7 +19,7 @@ export function resolveRunnerBackend(env = process.env) {
 
 function isLoopbackHost(hostname) {
   const host = hostname.replace(/^\[|\]$/g, '').toLowerCase();
-  if (host === 'localhost' || host.endsWith('.localhost')) return true;
+  if (host === 'localhost') return true;
   if (isIP(host) === 4) return host.startsWith('127.');
   return isIP(host) === 6 && (host === '::1' || host === '::ffff:127.0.0.1');
 }
@@ -83,6 +83,28 @@ function stripInlineReasoning(content) {
   return content.replace(/^\s*<think>[\s\S]*?<\/think>/i, '').trim();
 }
 
+async function readBoundedBody(response) {
+  if (Number(response.headers.get('content-length')) > MAX_RESPONSE_BYTES) {
+    await response.body?.cancel().catch(() => {});
+    return null;
+  }
+  const reader = response.body?.getReader();
+  if (!reader) return '';
+  const chunks = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > MAX_RESPONSE_BYTES) {
+      await reader.cancel().catch(() => {});
+      return null;
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks).toString('utf8');
+}
+
 async function requestOnce(config, prompt, signal) {
   let response;
   try {
@@ -102,8 +124,8 @@ async function requestOnce(config, prompt, signal) {
   }
   let payload;
   try {
-    const raw = await response.text();
-    if (raw.length > MAX_RESPONSE_CHARS) return { error: 'llm_bad_response', detail: 'oversized' };
+    const raw = await readBoundedBody(response);
+    if (raw === null) return { error: 'llm_bad_response', detail: 'oversized' };
     payload = JSON.parse(raw);
   } catch {
     return { error: signal.aborted ? 'llm_timeout' : 'llm_bad_response', detail: 'unparseable' };

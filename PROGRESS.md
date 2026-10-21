@@ -1,6 +1,8 @@
 - [x] Clarify network coverage prerequisites: name blocked TCP/UDP ports, explain why intended rules are needed, and show “Set blocked ports” with the existing controls link. Preserve exposure-only conclusions and policy admission. Scan regression covers immediately completed children sharing a tick while preserving plan order and a single active run.
 # AstraNull Progress Tracker
 
+- [x] Assistant OpenAI-compatible runner backend ([ADR-0040](docs/adr/0040-assistant-openai-compatible-runner-backend.md)): `ASTRANULL_ASSISTANT_RUNNER_BACKEND=openai` runs the unchanged agent loop through one chat-completions call per step (default model `deepseek-v4-flash`), with no model-side tools, no web search, redirect refusal, loopback-only plain http, a 0600 key file and code-only failures. The control plane reports `web_search` from the backend and shows the runner-reported model. Assistant unit tests 131/131 and assistant API integration 6/6 pass; lint and portal lint pass.
+
 - [x] Assistant page-reading risk: host-owned PreToolUse hook denies every page read before execution; native agy loopback test recorded a denied read and zero HTTP requests. Search-only lease contract, prompt and stream checks agree. Verified by 47 focused runner/service/insight/API tests and the native pre-dispatch smoke; combined UI/runner release passes 125 unit/API tests and 41 browser checks. [ADR-0038](docs/adr/0038-assistant-pre-execution-tool-gate.md).
 
 ## AI advisory suite continuation (2026-10-19, [ADR-0039](docs/adr/0039-assistant-advisory-snapshots-and-personal-widgets.md))

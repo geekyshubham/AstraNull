@@ -153,6 +153,35 @@ describe('openai-compatible backend', () => {
     assert.ok(!child.spawnargs.join(' ').includes(KEY));
   });
 
+  it('stops reading an oversized response body at the cap', async () => {
+    const chunk = 'x'.repeat(256 * 1024);
+    let written = 0;
+    handler = (req, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      const pump = () => {
+        while (written < 64 * 1024 * 1024) {
+          written += chunk.length;
+          if (!res.write(chunk)) { res.once('drain', pump); return; }
+        }
+        res.end();
+      };
+      res.on('close', () => { written = Infinity; });
+      pump();
+    };
+    const out = await runAssistantJob(job, await step());
+    assert.deepEqual({ status: out.status, error: out.error }, { status: 'failed', error: 'llm_bad_response' });
+    assert.ok(written < 64 * 1024 * 1024 || written === Infinity, 'the stream is cancelled before the peer finishes writing');
+  });
+
+  it('rejects a declared oversized Content-Length without reading the body', async () => {
+    handler = (req, res) => {
+      res.writeHead(200, { 'content-type': 'application/json', 'content-length': String(5_000_000) });
+      res.write('{');
+    };
+    const out = await runAssistantJob(job, await step());
+    assert.deepEqual({ status: out.status, error: out.error }, { status: 'failed', error: 'llm_bad_response' });
+  });
+
   it('requires a private key file and a key', async () => {
     const open = path.join(dir, 'open-key');
     await writeFile(open, KEY, { mode: 0o644 });
@@ -162,7 +191,7 @@ describe('openai-compatible backend', () => {
   });
 
   it('validates the base URL and bounded options', async () => {
-    for (const bad of ['', 'not a url', 'ftp://127.0.0.1/v1', 'http://gateway.example.com/v1', 'http://10.0.0.5/v1', 'https://user:pw@gateway.example.com/v1', 'https://gateway.example.com/v1?key=1']) {
+    for (const bad of ['', 'not a url', 'ftp://127.0.0.1/v1', 'http://gateway.example.com/v1', 'http://10.0.0.5/v1', 'http://evil.localhost/v1', 'http://api.localhost:8080', 'https://user:pw@gateway.example.com/v1', 'https://gateway.example.com/v1?key=1']) {
       assert.throws(() => parseLlmBaseUrl(bad), /ASTRANULL_ASSISTANT_LLM_BASE_URL/, bad);
     }
     for (const good of ['http://127.0.0.1:8080/v1', 'http://localhost:8080', 'http://[::1]:8080/v1', 'https://gateway.example.com/v1/']) {
