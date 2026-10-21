@@ -392,7 +392,7 @@ export default function App() {
         />
       )}
     </AppShell>
-    {session ? (
+    {session && activeSession.principal !== 'staff' ? (
       <EvidenceInspectorHost config={config} session={activeSession} data={scopedData} locationKey={`${path}|${route}`} />
     ) : null}
     {session && activeSession.principal !== 'staff' ? <AssistantWidget config={config} session={activeSession} data={scopedData} /> : null}

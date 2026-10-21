@@ -83,6 +83,7 @@ export function buildPortalActionInventory({ root = PORTAL_SOURCE_ROOT } = {}) {
   const raw = (module, node) => node ? compact(module.source.slice(node.start, node.end)) : '';
   const attrValue = (module, attr) => !attr?.value ? '' : attr.value.type === 'Literal' ? String(attr.value.value) : attr.value.type === 'JSXExpressionContainer' ? raw(module, attr.value.expression) : raw(module, attr.value);
   const softGates = new WeakSet();
+  const storePublishers = new Map();
   const lexicalCache = new Map();
   const writtenReceivers = new Map();
   function lexicalBindings(module, owner, within = null) {
@@ -285,6 +286,63 @@ export function buildPortalActionInventory({ root = PORTAL_SOURCE_ROOT } = {}) {
     const scope = lexicalBindings(module, owner, node);
     if (scope.bindings.has(node.name)) return isNativeCallable(module, owner, scope.bindings.get(node.name), seen);
     return !scope.parameterOwners.has(node.name) && !module.importBindings.has(node.name) && ['encodeURIComponent', 'decodeURIComponent', 'encodeURI', 'decodeURI'].includes(node.name);
+  }
+  const literalStrings = (active, activeOwner, node) => {
+    let value = node;
+    if (value?.type === 'Identifier') { const binding = lexicalBindings(active, activeOwner, value).bindings.get(value.name); value = binding?.type === 'VariableDeclarator' ? binding.init : binding; }
+    if (value?.type === 'CallExpression' && raw(active, value.callee) === 'Object.freeze' && value.arguments.length === 1) value = value.arguments[0];
+    return value?.type === 'ArrayExpression' && value.elements.every((element) => element?.type === 'Literal' && typeof element.value === 'string') ? value.elements.map((element) => element.value) : null;
+  };
+  function permissionGuard(active, activeOwner, node, invert = false, seen = new Set(), principalHint = null) {
+    if (!node) return null;
+    if (node.type === 'Identifier') {
+      const marker = `${active.file}:${activeOwner}:${node.name}`;
+      if (seen.has(marker)) return null;
+      const scope = lexicalBindings(active, activeOwner, node);
+      const binding = scope.bindings.get(node.name);
+      if (binding) return permissionGuard(active, activeOwner, binding, invert, new Set([...seen, marker]), principalHint);
+      const callers = callerProps.get(keyFor(active.file, activeOwner)) ?? [];
+      if (!scope.parameterOwners.has(node.name) || !callers.length || callers.some((caller) => caller.spread || !caller.props.get(node.name))) return null;
+      const guards = callers.map((caller) => permissionGuard(caller.module, caller.owner, caller.props.get(node.name), invert, new Set([...seen, marker])));
+      return guards.every((guard) => guard && JSON.stringify(guard) === JSON.stringify(guards[0])) ? guards[0] : null;
+    }
+    if (node.type === 'VariableDeclarator') return permissionGuard(active, activeOwner, node.init, invert, seen, principalHint);
+    if (node.type === 'UnaryExpression' && node.operator === '!') return permissionGuard(active, activeOwner, node.argument, !invert, seen, principalHint);
+    if (node.type === 'LogicalExpression') {
+      const operator = invert ? (node.operator === '&&' ? '||' : '&&') : node.operator;
+      const left = permissionGuard(active, activeOwner, node.left, invert, seen, principalHint);
+      const right = permissionGuard(active, activeOwner, node.right, invert, seen, principalHint);
+      if (operator === '&&') return left && right ? { operator, left, right } : left ?? right;
+      return left && right ? { operator, left, right } : null;
+    }
+    if (node.type === 'BinaryExpression' && ['===', '!=='].includes(node.operator)) {
+      const roleNode = node.left.type === 'Literal' ? node.right : node.left;
+      const literal = node.left.type === 'Literal' ? node.left : node.right;
+      const roleSource = raw(active, roleNode);
+      if (literal.type === 'Literal' && ['staff', 'customer'].includes(literal.value) && /(?:^|\.)principal$/.test(roleSource)) return { principals: [literal.value], invert: invert !== (node.operator === '!==') };
+      const declaration = active.values.get(activeOwner);
+      const roleParameter = roleNode.type === 'Identifier' && declaration?.params?.some((param) => param.name === roleNode.name && /role/i.test(param.name));
+      if (literal.type === 'Literal' && typeof literal.value === 'string' && (roleParameter || /^session\.(?:role|staff_role)$/.test(roleSource))) return { roles: [literal.value], principal: principalHint ?? (roleSource.includes('staff_role') ? 'staff' : 'customer'), invert: invert !== (node.operator === '!==') };
+    }
+    if (node.type === 'CallExpression' && node.callee.type === 'Identifier' && node.arguments.some((arg) => /^session\.(?:role|staff_role)$/.test(raw(active, arg)))) {
+      const helper = resolveValue(active.file, node.callee.name);
+      const statements = helper?.node?.body?.body;
+      if (statements?.length === 1 && statements[0].type === 'ReturnStatement') {
+        const marker = `${helper.module.file}:${helper.name}:role-helper`;
+        const hint = node.arguments.some((arg) => /^session\.staff_role$/.test(raw(active, arg))) ? 'staff' : 'customer';
+        if (!seen.has(marker)) return permissionGuard(helper.module, helper.name, statements[0].argument, invert, new Set([...seen, marker]), hint);
+      }
+    }
+    if (node.type === 'CallExpression' && node.callee.type === 'MemberExpression' && node.callee.property?.name === 'includes' && node.arguments.length === 1) {
+      const list = literalStrings(active, activeOwner, node.callee.object);
+      const parameters = (active.values.get(activeOwner)?.params ?? []).filter((param) => param.type === 'Identifier' && /role/i.test(param.name));
+      if (list && parameters.some((param) => raw(active, node.arguments[0]).includes(param.name))) return { roles: list, principal: principalHint ?? 'customer', invert };
+    }
+    if (node.type === 'CallExpression' && /^(sessionHasPermission|staffSessionHasPermission|roleHasPermission)$/.test(raw(active, node.callee))) {
+      const permission = node.arguments.find((arg) => arg.type === 'Literal' && typeof arg.value === 'string' && /^[a-z_]+(?::[a-z_]+)+$/.test(arg.value))?.value;
+      return permission ? { permission, principal: raw(active, node.callee).startsWith('staff') ? 'staff' : 'customer', invert } : null;
+    }
+    return null;
   }
   function actionTraits(module, owner, container, attrs, gates) {
     const earlyGates = [];
@@ -506,63 +564,6 @@ export function buildPortalActionInventory({ root = PORTAL_SOURCE_ROOT } = {}) {
       }
       return children(node).some((child) => !['FunctionDeclaration', 'FunctionExpression', 'ArrowFunctionExpression'].includes(child.type) && hasAuthorizationReference(active, activeOwner, child, seen));
     }
-    const literalStrings = (active, activeOwner, node) => {
-      let value = node;
-      if (value?.type === 'Identifier') { const binding = lexicalBindings(active, activeOwner, value).bindings.get(value.name); value = binding?.type === 'VariableDeclarator' ? binding.init : binding; }
-      if (value?.type === 'CallExpression' && raw(active, value.callee) === 'Object.freeze' && value.arguments.length === 1) value = value.arguments[0];
-      return value?.type === 'ArrayExpression' && value.elements.every((element) => element?.type === 'Literal' && typeof element.value === 'string') ? value.elements.map((element) => element.value) : null;
-    };
-    function permissionGuard(active, activeOwner, node, invert = false, seen = new Set(), principalHint = null) {
-      if (!node) return null;
-      if (node.type === 'Identifier') {
-        const marker = `${active.file}:${activeOwner}:${node.name}`;
-        if (seen.has(marker)) return null;
-        const scope = lexicalBindings(active, activeOwner, node);
-        const binding = scope.bindings.get(node.name);
-        if (binding) return permissionGuard(active, activeOwner, binding, invert, new Set([...seen, marker]), principalHint);
-        const callers = callerProps.get(keyFor(active.file, activeOwner)) ?? [];
-        if (!scope.parameterOwners.has(node.name) || !callers.length || callers.some((caller) => caller.spread || !caller.props.get(node.name))) return null;
-        const guards = callers.map((caller) => permissionGuard(caller.module, caller.owner, caller.props.get(node.name), invert, new Set([...seen, marker])));
-        return guards.every((guard) => guard && JSON.stringify(guard) === JSON.stringify(guards[0])) ? guards[0] : null;
-      }
-      if (node.type === 'VariableDeclarator') return permissionGuard(active, activeOwner, node.init, invert, seen, principalHint);
-      if (node.type === 'UnaryExpression' && node.operator === '!') return permissionGuard(active, activeOwner, node.argument, !invert, seen, principalHint);
-      if (node.type === 'LogicalExpression') {
-        const operator = invert ? (node.operator === '&&' ? '||' : '&&') : node.operator;
-        const left = permissionGuard(active, activeOwner, node.left, invert, seen, principalHint);
-        const right = permissionGuard(active, activeOwner, node.right, invert, seen, principalHint);
-        if (operator === '&&') return left && right ? { operator, left, right } : left ?? right;
-        return left && right ? { operator, left, right } : null;
-      }
-      if (node.type === 'BinaryExpression' && ['===', '!=='].includes(node.operator)) {
-        const roleNode = node.left.type === 'Literal' ? node.right : node.left;
-        const literal = node.left.type === 'Literal' ? node.left : node.right;
-        const roleSource = raw(active, roleNode);
-        if (literal.type === 'Literal' && ['staff', 'customer'].includes(literal.value) && /(?:^|\.)principal$/.test(roleSource)) return { principals: [literal.value], invert: invert !== (node.operator === '!==') };
-        const declaration = active.values.get(activeOwner);
-        const roleParameter = roleNode.type === 'Identifier' && declaration?.params?.some((param) => param.name === roleNode.name && /role/i.test(param.name));
-        if (literal.type === 'Literal' && typeof literal.value === 'string' && (roleParameter || /^session\.(?:role|staff_role)$/.test(roleSource))) return { roles: [literal.value], principal: principalHint ?? (roleSource.includes('staff_role') ? 'staff' : 'customer'), invert: invert !== (node.operator === '!==') };
-      }
-      if (node.type === 'CallExpression' && node.callee.type === 'Identifier' && node.arguments.some((arg) => /^session\.(?:role|staff_role)$/.test(raw(active, arg)))) {
-        const helper = resolveValue(active.file, node.callee.name);
-        const statements = helper?.node?.body?.body;
-        if (statements?.length === 1 && statements[0].type === 'ReturnStatement') {
-          const marker = `${helper.module.file}:${helper.name}:role-helper`;
-          const hint = node.arguments.some((arg) => /^session\.staff_role$/.test(raw(active, arg))) ? 'staff' : 'customer';
-          if (!seen.has(marker)) return permissionGuard(helper.module, helper.name, statements[0].argument, invert, new Set([...seen, marker]), hint);
-        }
-      }
-      if (node.type === 'CallExpression' && node.callee.type === 'MemberExpression' && node.callee.property?.name === 'includes' && node.arguments.length === 1) {
-        const list = literalStrings(active, activeOwner, node.callee.object);
-        const parameters = (active.values.get(activeOwner)?.params ?? []).filter((param) => param.type === 'Identifier' && /role/i.test(param.name));
-        if (list && parameters.some((param) => raw(active, node.arguments[0]).includes(param.name))) return { roles: list, principal: principalHint ?? 'customer', invert };
-      }
-      if (node.type === 'CallExpression' && /^(sessionHasPermission|staffSessionHasPermission|roleHasPermission)$/.test(raw(active, node.callee))) {
-        const permission = node.arguments.find((arg) => arg.type === 'Literal' && typeof arg.value === 'string' && /^[a-z_]+(?::[a-z_]+)+$/.test(arg.value))?.value;
-        return permission ? { permission, principal: raw(active, node.callee).startsWith('staff') ? 'staff' : 'customer', invert } : null;
-      }
-      return null;
-    }
     function unresolvedGuard(active, activeOwner, node, invert = false, seen = new Set()) {
       if (!node) return false;
       const marker = `${active.file}:${activeOwner}:${node.start}:${node.end}:${invert}`;
@@ -673,6 +674,10 @@ export function buildPortalActionInventory({ root = PORTAL_SOURCE_ROOT } = {}) {
         walk(child.right, child, constraint, [...gates, child.left]);
         return;
       }
+      if (child.type === 'CallExpression' && child.callee.type === 'Identifier') {
+        const published = /^usePublish([A-Z]\w*)$/.exec(child.callee.name);
+        if (published) { if (!storePublishers.has(published[1])) storePublishers.set(published[1], new Set()); storePublishers.get(published[1]).add(key); }
+      }
       if (child.type === 'JSXOpeningElement') registerCaller(module, resolved.name, child);
       if (child.type === 'JSXOpeningElement') { const before = actions.length; recordAction(module, child, parent, resolved.name, gates); if (actions.length > before) actions[actions.length - 1].routeConstraint = constraint; }
       if (child.type === 'JSXIdentifier' && parent?.type === 'JSXOpeningElement' && parent.name === child) follow(module.file, child.name, key, constraint);
@@ -714,6 +719,24 @@ export function buildPortalActionInventory({ root = PORTAL_SOURCE_ROOT } = {}) {
     });
   });
   // App mounts authenticated sibling hosts outside RouteView. Derive them from its actual JSX, not a prototype manifest.
+  const hostMounts = new Map();
+  function mountGates(ast, target) {
+    let found = null;
+    const descend = (node, gates) => {
+      if (found || !node) return;
+      if (node === target) { found = gates; return; }
+      if (node.type === 'ConditionalExpression') {
+        descend(node.test, gates);
+        descend(node.consequent, [...gates, node.test]);
+        descend(node.alternate, [...gates, { type: 'UnaryExpression', operator: '!', argument: node.test, start: node.test.start, end: node.test.end }]);
+        return;
+      }
+      if (node.type === 'LogicalExpression' && node.operator === '&&') { descend(node.left, gates); descend(node.right, [...gates, node.left]); return; }
+      for (const child of children(node)) descend(child, gates);
+    };
+    descend(ast, []);
+    return found ?? [];
+  }
   const sharedRoots = [`${UI_ROOT}/components/layout/app-shell.tsx#AppShell`];
   const appFile = path.join(root, `${UI_ROOT}/App.tsx`);
   if (fs.existsSync(appFile)) {
@@ -724,7 +747,12 @@ export function buildPortalActionInventory({ root = PORTAL_SOURCE_ROOT } = {}) {
     each(app.ast, (node) => {
       if (node.type === 'JSXOpeningElement' && node.name.type === 'JSXIdentifier' && ['EvidenceInspectorHost', 'ConfirmModalProvider'].includes(node.name.name)) {
         const resolved = resolveValue(appFile, node.name.name);
-        if (resolved) { follow(appFile, node.name.name); sharedRoots.push(keyFor(resolved.module.file, resolved.name)); }
+        if (resolved) {
+          follow(appFile, node.name.name);
+          const hostKey = keyFor(resolved.module.file, resolved.name);
+          sharedRoots.push(hostKey);
+          hostMounts.set(hostKey, { module: app, owner: 'App', gates: mountGates(app.ast, node) });
+        }
       }
     });
   }
@@ -741,11 +769,33 @@ export function buildPortalActionInventory({ root = PORTAL_SOURCE_ROOT } = {}) {
   };
   const shellKeys = closure(sharedRoots);
   const routeClosures = new Map([...routeRoots].map(([route, roots]) => [route, closure(roots, route)]));
+  const rootClosures = new Map(sharedRoots.map((root) => [root, closure([root])]));
+  const consumedStores = (input) => {
+    const names = new Set();
+    const scan = (module, owner, node, depth) => {
+      if (!node || depth > 4) return;
+      each(node, (child) => {
+        if (child.type === 'CallExpression' && child.callee.type === 'Identifier') { const used = /^use([A-Z]\w*)$/.exec(child.callee.name); if (used) names.add(used[1]); }
+        if (child.type === 'Identifier') { const binding = lexicalBindings(module, owner, child).bindings.get(child.name); if (binding && binding !== node) scan(module, owner, binding, depth + 1); }
+      });
+    };
+    for (const gate of input.gates) scan(input.module, input.owner, gate, 0);
+    return [...names].filter((name) => storePublishers.has(name));
+  };
   const unique = new Map();
   for (const item of actions) {
+    const input = actionInputs.get(item.id);
+    const reaching = sharedRoots.filter((root) => rootClosures.get(root).has(item.symbol));
+    const mounted = reaching.length === 1 && !routes.some((route) => routeClosures.get(route).has(item.symbol)) ? hostMounts.get(reaching[0]) : null;
+    if (mounted) item.traits.authorizationGuards = [...item.traits.authorizationGuards, ...mounted.gates.map((gate) => permissionGuard(mounted.module, mounted.owner, gate)).filter(Boolean)];
     item.routes = shellKeys.has(item.symbol) ? [...routes] : routes.filter((route) => routeClosures.get(route).has(item.symbol));
     if (item.symbol === `${UI_ROOT}/pages/router.tsx#RouteView`) item.routes = [...new Set(branchRanges.filter((range) => item.position >= range.start && item.position <= range.end).flatMap((range) => range.routes))];
     if (item.routeConstraint) item.routes = item.routes.filter((route) => item.routeConstraint.includes(route));
+    for (const store of input ? consumedStores(input) : []) {
+      const publishing = routes.filter((route) => [...storePublishers.get(store)].some((publisher) => routeClosures.get(route).has(publisher)));
+      item.routes = item.routes.filter((route) => publishing.includes(route));
+      item.storeBinding = { store, publishingRoutes: publishing };
+    }
     item.reachability = shellKeys.has(item.symbol) ? 'shared-shell' : 'router-value-symbol';
     const existing = unique.get(item.id);
     if (existing) existing.sourceOccurrences.push(item.line);

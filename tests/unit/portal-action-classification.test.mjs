@@ -14,8 +14,8 @@ function fixture(file, text) {
   fs.mkdirSync(path.dirname(target), { recursive: true });
   fs.writeFileSync(target, text);
 }
-function mount({ shell = 'export function AppShell(){return null}', router, files = {} }) {
-  fixture('lib/navigation.ts', "export const NAV_ITEMS=[{id:'settings'}]; export const DETAIL_ROUTE_ITEMS=[];");
+function mount({ shell = 'export function AppShell(){return null}', router, files = {}, navigation = "export const NAV_ITEMS=[{id:'settings'}]; export const DETAIL_ROUTE_ITEMS=[];" }) {
+  fixture('lib/navigation.ts', navigation);
   fixture('components/layout/app-shell.tsx', shell);
   fixture('pages/router.tsx', router ?? "import {Page} from './page'; export function RouteView({route}){if(route==='settings') return <Page/>;}");
   for (const [file, text] of Object.entries(files)) fixture(file, text);
@@ -185,10 +185,50 @@ test('shipped shell and evidence inspector resolve every state from source, with
   const staffCells = coverage.cells.filter((cell) => cell.action === roleSwitch.id && cell.principal === 'staff' && cell.applicable === true);
   assert.ok(staffCells.length > 0 && staffCells.every((cell) => cell.state === 'denial'));
   const retest = inventory.actions.find((action) => action.label === 'Re-test' && action.file.endsWith('evidence-inspector.tsx'));
-  assert.deepEqual(retest.traits.authorizationGuards, [{ roles: ['owner', 'admin', 'engineer'], principal: 'customer', invert: false }]);
+  assert.deepEqual(retest.traits.authorizationGuards, [{ roles: ['owner', 'admin', 'engineer'], principal: 'customer', invert: false }, { principals: ['staff'], invert: true }]);
   const icon = inventory.actions.find((action) => action.owner === 'ShellIconButton');
   const iconStates = actionStateApplicability(icon);
   assert.equal(iconStates.success.applicable, true);
   assert.equal(iconStates.cancel.applicable, false);
   assert.match(iconStates.cancel.reason, /mounted callers/);
+});
+
+test('a host mounted behind a principal gate in App hands that guard to controls reachable only through it', () => {
+  fixture('App.tsx', "import {AppShell} from './components/layout/app-shell'; import {EvidenceInspectorHost} from './components/evidence/evidence-inspector'; export default function App({session}){return <><AppShell/>{session && session.principal !== 'staff' ? <EvidenceInspectorHost/> : null}</>}");
+  const inventory = mount({
+    shell: "export function AppShell(){return <button onClick={()=>{}}>Shell only</button>}",
+    files: {
+      'components/evidence/evidence-inspector.tsx': "export function EvidenceInspectorHost(){return <button onClick={()=>{}}>Inspect</button>}",
+      'pages/page.tsx': 'export function Page(){return <a href="#settings">Settings</a>}',
+    },
+  });
+  const inspect = byLabel(inventory, 'Inspect');
+  assert.deepEqual(inspect.traits.authorizationGuards, [{ principals: ['staff'], invert: true }]);
+  assert.equal(actionEligibilityDecision({ principal: 'staff', role: 'internal_admin', session: { principal: 'staff' } }, inspect.traits.authorizationGuards), false);
+  assert.equal(actionEligibilityDecision({ principal: 'customer', role: 'owner', session: { role: 'owner' } }, inspect.traits.authorizationGuards), true);
+  assert.deepEqual(byLabel(inventory, 'Shell only').traits.authorizationGuards, [], 'Controls the ungated shell also reaches stay unguarded');
+  fs.rmSync(path.join(fixtureRoot, 'apps/web/react/src/App.tsx'));
+});
+
+test('a control gated on a published store appears only on routes whose components publish to that store', () => {
+  fixture('App.tsx', "import {AppShell} from './components/layout/app-shell'; import {EvidenceInspectorHost} from './components/evidence/evidence-inspector'; export default function App(){return <><AppShell/><EvidenceInspectorHost/></>}");
+  const inventory = mount({
+    navigation: "export const NAV_ITEMS=[{id:'settings'},{id:'targets'}]; export const DETAIL_ROUTE_ITEMS=[];",
+    router: "import {Publisher, Plain} from './page'; export function RouteView({route}){if(route==='settings') return <Publisher/>; if(route==='targets') return <Plain/>;}",
+    files: {
+      'components/evidence/sequence.ts': "export function usePublishSequence(items){} export function useSequence(){return null}",
+      'components/evidence/evidence-inspector.tsx': `import {useSequence} from './sequence';
+        export function EvidenceInspectorHost(){
+          const sequence = useSequence();
+          const position = sequence ? { next: true } : null;
+          return <>{position ? <button onClick={()=>{}}>Next record</button> : null}<button onClick={()=>{}}>Always</button></>;
+        }`,
+      'pages/page.tsx': "import {usePublishSequence} from '../components/evidence/sequence'; export function Publisher(){usePublishSequence([1,2]); return <a href='#targets'>Publisher</a>} export function Plain(){return <a href='#settings'>Plain</a>}",
+    },
+  });
+  const next = byLabel(inventory, 'Next record');
+  assert.deepEqual(next.routes, ['settings']);
+  assert.deepEqual(next.storeBinding, { store: 'Sequence', publishingRoutes: ['settings'] });
+  assert.deepEqual(byLabel(inventory, 'Always').routes.sort(), ['settings', 'targets']);
+  fs.rmSync(path.join(fixtureRoot, 'apps/web/react/src/App.tsx'));
 });
