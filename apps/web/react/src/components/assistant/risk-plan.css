@@ -1,0 +1,20 @@
+.ai-risk-panel { display: grid; gap: 24px; margin-block: 24px; min-width: 0; }
+.ai-risk-card { border-top: 1px solid var(--border); padding-top: 24px; min-width: 0; overflow-wrap: anywhere; }
+.ai-risk-card > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.ai-risk-card h3, .ai-risk-card h4 { margin: 0 0 8px; }
+.ai-risk-card p { margin: 8px 0; }
+.ai-risk-result { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; margin-top: 16px; }
+.ai-risk-result .btn { min-inline-size: 0; max-inline-size: 100%; min-height: 44px; white-space: normal; line-height: 1.4; padding-block: 12px; }
+.ai-risk-status { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.ai-risk-result details { border-top: 1px solid var(--border-soft); padding-top: 12px; }
+.ai-risk-result summary { min-height: 44px; cursor: pointer; display: flex; align-items: center; gap: 8px; }
+.ai-risk-result summary::before { content: ''; width: 6px; height: 6px; border-right: 1px solid currentColor; border-bottom: 1px solid currentColor; transform: rotate(-45deg); flex: 0 0 auto; }
+.ai-risk-result details[open] > summary::before { transform: rotate(45deg); }
+.ai-risk-result summary::-webkit-details-marker { display: none; }
+.ai-risk-selection { min-inline-size: 0; margin: 0; padding: 12px; border: 1px solid var(--border); border-radius: 4px; max-height: 360px; overflow-y: auto; }
+.ai-risk-selection label, .ai-risk-review { display: flex; align-items: flex-start; gap: 12px; min-height: 44px; padding-block: 8px; }
+.ai-risk-selection input, .ai-risk-review input { flex: 0 0 auto; margin-top: 5px; }
+.ai-risk-selection small { display: block; }
+.ai-risk-stories, .ai-risk-facts { margin: 0; padding-left: 24px; }
+.ai-risk-facts li, .ai-risk-stories li { padding-block: 8px; }
+@media (max-width: 640px) { .ai-risk-card > header { flex-direction: column; } .ai-risk-card > header > button { min-height: 44px; } }

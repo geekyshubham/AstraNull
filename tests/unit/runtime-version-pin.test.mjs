@@ -332,6 +332,19 @@ describe('workflow action pinning', () => {
     }
   });
 
+  it('keeps GuardianBot config aligned with every pinned reusable workflow', () => {
+    const config = read('.guardianbot/config.yml');
+    const version = config.match(/^workflowVersion:\s*([0-9a-f]{40})\s*$/m)?.[1];
+    assert.ok(version, 'GuardianBot workflowVersion must be a full commit SHA');
+    const references = externalUses(read('.github/workflows/guardianbot.yml'))
+      .filter((reference) => /^Geekyshubham\/guardianbot\/\.github\/workflows\//i.test(reference));
+    assert.ok(references.length > 0, 'GuardianBot reusable workflows must be present');
+    for (const reference of references) {
+      assert.equal(reference.split('@')[1], version,
+        `GuardianBot config workflowVersion differs from the immutable workflow pin: ${reference}`);
+    }
+  });
+
   /**
    * Workflows written by a generator, identified by their own header marker.
    *

@@ -102,10 +102,16 @@ export { currentOriginProof, deriveBindingScope } from '../lib/originLockdownRes
 import { currentOriginProof, deriveBindingScope } from '../lib/originLockdownResolution.mjs';
 
 export function bindingRecordsFromStore(store, tenantId) {
+  const unavailableGroupIds = new Set();
+  for (const group of store.targetGroups ?? []) {
+    if (group.tenant_id !== tenantId || (!group.deleted_at && !group.archived_at)) continue;
+    const id = group.id;
+    // Preserve strict ID equality: unlike Set membership, NaN never matched itself.
+    if (!Number.isNaN(id)) unavailableGroupIds.add(id);
+  }
   return {
     targets: (store.targets ?? []).filter((target) => target.tenant_id === tenantId && !target.deleted_at && !target.archived_at
-      && !(store.targetGroups ?? []).some((group) => group.tenant_id === tenantId && group.id === target.target_group_id
-        && (group.deleted_at || group.archived_at))),
+      && !unavailableGroupIds.has(target.target_group_id)),
     targetVerifications: store.targetVerifications ?? [],
     wafConnectors: store.wafConnectors ?? [],
     wafConnectorSnapshots: store.wafConnectorSnapshots ?? [],

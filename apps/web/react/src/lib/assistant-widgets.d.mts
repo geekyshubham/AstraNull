@@ -1,0 +1,11 @@
+export type WidgetConfig = { name: string; question: string; template: 'summary' | 'finding_list'; target_id?: string; severity?: string };
+export type PersonalWidget = { id: string; config: WidgetConfig; version: number; created_at: string; updated_at: string };
+export type UnavailableWidget = { id: string; version: number; unavailable: true };
+export type WidgetDefinition = PersonalWidget | UnavailableWidget;
+export function sanitizeWidgetDefinition(value: unknown): WidgetDefinition | null;
+export type WidgetData = { title: string; count: number; rows: { id: string; title: string; severity: string; status: string; target_id?: string }[]; citations: string[]; observed_at: string; count_is_total: boolean; scope: { complete: boolean; findings_complete: boolean } };
+export type WidgetCommentary = { text: string; citations: string[] };
+export function sanitizeWidgetConfig(value: unknown): WidgetConfig | null;
+export function sanitizeWidget(value: unknown): PersonalWidget | null;
+export function sanitizeWidgetData(value: unknown): WidgetData | null;
+export function sanitizeWidgetCommentary(value: unknown, data: WidgetData | null): WidgetCommentary | null;

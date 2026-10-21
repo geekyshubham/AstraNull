@@ -38,6 +38,18 @@ export function getRouteParam(name: string, fallback = '') {
   return routeQueryParams().get(name) ?? fallback;
 }
 
+/** Read the exact findings predicate only; prompts are never accepted as route state. */
+export function getFindingsRouteFilters(): Record<string, string> {
+  const params = sanitizeRouteParams(routeQueryParams());
+  const out: Record<string, string> = {};
+  for (const key of ['status', 'severity', 'q', 'check_id', 'target_id', 'test_run_id']) {
+    const value = params.get(key);
+    if (value) out[key === 'target_id' ? 'target' : key] = value;
+  }
+  if (!out.target && params.get('target')) out.target = params.get('target') as string;
+  return out;
+}
+
 /**
  * Update hash query parameters on the current route without a history entry. Only the defined
  * route/filter/inspector parameters survive (see `sanitizeRouteParams`); unknown keys and

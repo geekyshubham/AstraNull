@@ -289,6 +289,75 @@ describe('postgres state service adapter', () => {
     assert.equal(payload.recent_runs.length, 5);
   });
 
+  for (const reader of ['absent', 'null']) {
+    it(`retains bounded evidence and event selection when the snapshot reader is ${reader}`, async () => {
+      const repositories = stubRepositories();
+      if (reader === 'null') repositories.validationEvidence.readReadinessInputs = async () => null;
+      const ctx = { tenantId: 'ten_demo', userId: 'usr_1', role: 'admin' };
+      let feedCalls = 0;
+      let batchCalls = 0;
+      repositories.validationEvidence.listEvidence = async (repoCtx, options) => {
+        assert.equal(repoCtx, ctx);
+        assert.deepEqual(options, { limit: 500 });
+        feedCalls += 1;
+        return [{ id: 'ev_1', tenant_id: ctx.tenantId, test_run_id: 'run_1', related_event_id: 'evt_1', created_at: RECENT_TS }];
+      };
+      repositories.validationEvidence.loadRunEvidenceBatch = async (repoCtx, selection) => {
+        assert.equal(repoCtx, ctx);
+        assert.equal(feedCalls, 1);
+        assert.deepEqual(selection, { runIds: ['run_1'], eventRunIds: ['run_1'], eventLimitPerRun: 1000 });
+        batchCalls += 1;
+        return { verdicts: [], events: [] };
+      };
+      const payload = await createPostgresStateServices(repositories, { now: () => FIXED_NOW }).getState(ctx);
+      assert.equal(feedCalls, 1);
+      assert.equal(batchCalls, 1);
+      assert.equal(payload.readiness.input_complete, false);
+      assert.equal(payload.readiness.score, null);
+      assert.equal(payload.recent_runs[0].id, 'run_1');
+    });
+  }
+
+  it('starts compatibility evidence without waiting for unrelated presentation reads', async () => {
+    const repositories = stubRepositories();
+    repositories.validationEvidence.readReadinessInputs = async () => null;
+    const presentation = Promise.withResolvers();
+    let evidenceStarted = false;
+    repositories.validationEvidence.listTestRuns = async () => presentation.promise;
+    repositories.validationEvidence.listEvidence = async () => { evidenceStarted = true; return []; };
+    const pending = createPostgresStateServices(repositories, { now: () => FIXED_NOW }).getState({ tenantId: 'ten_demo' });
+    try {
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(evidenceStarted, true, 'independent evidence read must start while the presentation feed is held');
+    } finally {
+      presentation.resolve([]);
+      await pending;
+    }
+  });
+
+  it('propagates a failed snapshot read without falling back to capped evidence', async () => {
+    const repositories = stubRepositories();
+    const failure = new Error('snapshot unavailable');
+    let feedCalls = 0;
+    repositories.validationEvidence.readReadinessInputs = async () => { throw failure; };
+    repositories.validationEvidence.listEvidence = async () => { feedCalls += 1; return []; };
+    await assert.rejects(
+      createPostgresStateServices(repositories, { now: () => FIXED_NOW }).getState({ tenantId: 'ten_demo' }),
+      (error) => error === failure,
+    );
+    assert.equal(feedCalls, 0);
+  });
+
+  it('propagates a failed compatibility evidence read', async () => {
+    const repositories = stubRepositories();
+    const failure = new Error('evidence unavailable');
+    repositories.validationEvidence.listEvidence = async () => { throw failure; };
+    await assert.rejects(
+      createPostgresStateServices(repositories, { now: () => FIXED_NOW }).getState({ tenantId: 'ten_demo' }),
+      (error) => error === failure,
+    );
+  });
+
   it('labels legacy score without inventing complete inputs from capped readers', async () => {
     const repositories = stubRepositories({
       groups: [],
@@ -710,6 +779,7 @@ describe('complete-reader Postgres/readiness parity', () => {
       return { runs: world.runs, verdicts: world.verdicts, events: world.events, evidenceItems: world.evidenceItems, findings: world.findings, policies: world.policies, input_complete: true };
     };
     repositories.validationEvidence.loadRunEvidenceBatch = () => { throw new Error('complete reader must not use bounded evidence for assessment'); };
+    repositories.validationEvidence.listEvidence = () => { throw new Error('snapshot reader must not fetch the discarded presentation evidence feed'); };
     return repositories;
   }
   async function assess(world) {
@@ -746,6 +816,15 @@ describe('complete-reader Postgres/readiness parity', () => {
     const result = await createPostgresStateServices(repos, { now: () => new Date(world.asOf), catalog: world.catalog }).getState({ tenantId: world.tenantId });
     assert.deepEqual(result.readiness, { ...projectReadiness(world), persistence: 'postgres' });
     assert.equal(result.target_groups, world.groups.length);
+  });
+  it('does not replace an empty complete snapshot with a capped evidence feed', async () => {
+    const world = assuranceWorld({ targetCount: 0 });
+    world.groups = [];
+    const repos = repositoriesFor(world);
+    repos.validationEvidence.readReadinessInputs = async () => ({ ...world, scope_complete: true });
+    const result = await createPostgresStateServices(repos, { now: () => new Date(world.asOf), catalog: world.catalog }).getState({ tenantId: world.tenantId });
+    assert.deepEqual(result.readiness, { ...projectReadiness(world), persistence: 'postgres' });
+    assert.equal(result.target_groups, 0);
   });
   it('still refuses a reader that explicitly declares incomplete inputs', async () => {
     const world = assuranceWorld(); addAssuredObservation(world); const repos = repositoriesFor(world);

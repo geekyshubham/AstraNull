@@ -1,0 +1,73 @@
+/* Shared motion and AI affordances for assistant features. Final states render immediately under reduced motion. */
+
+/* Console content is immediately visible; only deliberate result changes fade. */
+.ai-reveal { opacity: 1; }
+.ai-fade { animation: ai-fade var(--motion-base, 200ms) var(--ease-out) both; }
+@keyframes ai-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.ai-draw { stroke-dashoffset: 0; }
+
+.ai-shimmer {
+  border-radius: var(--radius-md);
+  background: linear-gradient(90deg, var(--surface-raised), var(--surface-hover), var(--surface-raised));
+  background-size: 200% 100%;
+  animation: ai-shimmer 1.6s var(--ease-in-out) infinite;
+}
+@keyframes ai-shimmer {
+  from { background-position: 100% 0; }
+  to { background-position: -100% 0; }
+}
+
+.ai-glow { position: relative; }
+.ai-glow::before { content: none; }
+
+.ai-pulse {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+  animation: ai-pulse 1.4s var(--ease-in-out) infinite;
+}
+@keyframes ai-pulse {
+  0%, 100% { opacity: 0.35; transform: scale(0.85); }
+  50% { opacity: 1; transform: scale(1); }
+}
+
+.ai-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  padding: var(--space-0-5) var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  color: var(--fg-2);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.ai-badge.is-ai { border-color: color-mix(in srgb, var(--accent) 50%, var(--border)); color: var(--fg); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.ai-badge.is-pending { color: var(--fg); }
+
+.ai-code {
+  margin: 0;
+  overflow: auto;
+  max-height: 360px;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  background: var(--surface-2, var(--surface));
+  color: var(--fg);
+  font: 500 var(--text-xs) / 1.6 var(--font-mono);
+  tab-size: 2;
+  white-space: pre;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ai-reveal, .ai-fade { animation: none; }
+  .ai-draw { animation: none; stroke-dashoffset: 0; }
+  .ai-shimmer, .ai-pulse, .ai-glow::before { animation: none; }
+}

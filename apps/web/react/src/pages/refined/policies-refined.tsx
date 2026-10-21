@@ -896,7 +896,7 @@ function CreateSchedulePanel({
               <span className="muted small" id={`${cadenceSectionId}-tz`}>
                 {timezoneValid ? 'Cadence and windows are evaluated in this timezone.' : 'Not a recognised IANA timezone.'}
                 {viewerZone && viewerZone !== form.timezone ? (
-                  <> <button type="button" className="rf-link-button" onClick={() => form.onTimezoneChange(viewerZone)}>Use {viewerZone}</button></>
+                  <> <button type="button" className="rf-link-button" disabled={busy !== ''} onClick={() => form.onTimezoneChange(viewerZone)}>Use {viewerZone}</button></>
                 ) : null}
               </span>
             </label>

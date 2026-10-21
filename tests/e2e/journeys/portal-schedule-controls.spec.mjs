@@ -5,6 +5,7 @@ import { expect, test } from '@playwright/test';
 import { createPortalSourceServer as createViteServer } from '../../helpers/portal-playwright-server.mjs';
 import { applyPortalBaselineReadinessBoost } from '../../fixtures/portal-baseline/readiness.mjs';
 import { PORTAL_BASELINE_IDS } from '../../fixtures/portal-baseline/seed.mjs';
+import { collectPortalBrowserFailures } from '../../helpers/portal-browser-failures.mjs';
 import {
   startPortalPlaywrightServer,
   stopPortalPlaywrightServer,
@@ -43,6 +44,7 @@ const OBSERVATION_CHECK_FIXTURE = {
 };
 let sourceBaseUrl = '';
 let vite;
+let diagnostics;
 
 function applyScheduleControlFixture(store) {
   applyPortalBaselineReadinessBoost(store);
@@ -117,6 +119,8 @@ async function chooseScheduleCheck(scope, checkId) {
 }
 
 test.describe('schedule form controls', () => {
+  test.use({ timezoneId: 'Asia/Kolkata' });
+
   test.beforeAll(async () => {
     const { baseUrl: apiBaseUrl } = await startPortalPlaywrightServer({ mutate: applyScheduleControlFixture });
     vite = await createViteServer({
@@ -145,6 +149,10 @@ test.describe('schedule form controls', () => {
   });
 
   test.beforeEach(async ({ page }) => {
+    diagnostics = await collectPortalBrowserFailures(page, sourceBaseUrl, {
+      allowResponse: (response) => new URL(response.url()).pathname === '/v1/test-policies'
+        && response.request().method() === 'POST' && response.status() === 400,
+    });
     await page.route('**/v1/checks', async (route) => {
       const response = await route.fetch();
       const payload = await response.json();
@@ -156,6 +164,75 @@ test.describe('schedule form controls', () => {
         }),
       });
     });
+  });
+
+  test.afterEach(() => diagnostics.assertClean());
+
+  test('pending sequential submission locks all timing controls and preserves its review', async ({ page }) => {
+    await injectPortalDevHeadersSession(page);
+    const posts = [];
+    let releaseFirst;
+    const firstResponse = new Promise((resolve) => { releaseFirst = resolve; });
+    await page.route('**/v1/test-policies', async (route) => {
+      if (route.request().method() !== 'POST') return route.fallback();
+      posts.push(route.request().postDataJSON());
+      if (posts.length === 1) await firstResponse;
+      await route.fulfill({ status: 201, json: { id: `pending_schedule_${posts.length}` } });
+    });
+    try {
+      await gotoPortalRoute(page, 'test-policies', sourceBaseUrl);
+      await page.locator('.rf-header-actions').getByRole('button', { name: 'Create schedule' }).click();
+      const panel = page.locator('section.rf-create');
+      await chooseCustomSelect(panel, 'Check', URL_ONLY_CHECK_FIXTURE.check_id);
+      await panel.getByRole('searchbox', { name: 'Find a check' }).fill(OBSERVATION_CHECK_FIXTURE.check_id);
+      await panel.getByRole('group', { name: 'Checks to schedule' }).getByRole('checkbox').check();
+      await panel.locator('.domain-picker-option').filter({ hasText: 'https://checkout.acme.com/health' }).getByRole('checkbox').check();
+      await panel.getByLabel('Schedule timezone (IANA)').fill('UTC');
+      const viewerZone = await page.evaluate(() => Intl.DateTimeFormat().resolvedOptions().timeZone);
+      expect(viewerZone).not.toBe('UTC');
+      const shortcut = panel.getByRole('button', { name: `Use ${viewerZone}`, exact: true });
+      await expect(shortcut).toBeEnabled();
+      const review = await panel.locator('.rf-review').innerText();
+      const firstRequest = page.waitForRequest((request) => new URL(request.url()).pathname === '/v1/test-policies' && request.method() === 'POST');
+      await panel.getByRole('button', { name: 'Create schedule', exact: true }).click();
+      await firstRequest;
+      await expect(shortcut).toBeDisabled();
+      for (const control of await panel.locator('input:not([type="hidden"]), button').all()) await expect(control).toBeDisabled();
+      expect(await panel.locator('.rf-review').innerText()).toBe(review);
+      expect(posts).toHaveLength(1);
+      releaseFirst();
+      await expect(panel).toBeHidden();
+      expect(posts).toHaveLength(2);
+      expect(posts.every((body) => body.timezone === 'UTC' && body.safe_windows.length === 0)).toBe(true);
+    } finally {
+      releaseFirst();
+    }
+  });
+
+  test('special-use targets never request external favicons in either inventory', async ({ page }) => {
+    await injectPortalDevHeadersSession(page);
+    const requests = [];
+    await page.route('https://icons.duckduckgo.com/**', (route) => {
+      requests.push(route.request().url());
+      return route.fulfill({ status: 200, contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg"/>' });
+    });
+    const values = ['router.home.arpa', 'service.onion', 'service.alt', 'printer.local', 'example.com', 'www.example.net', 'docs.example.org', '203.0.113.42'];
+    await page.route((url) => url.pathname === '/v1/targets', async (route) => {
+      if (route.request().method() !== 'GET') return route.fallback();
+      const response = await route.fetch();
+      const payload = await response.json();
+      const target = payload.items.find((item) => item.id === PORTAL_BASELINE_IDS.targetId);
+      expect(target).toBeTruthy();
+      await route.fulfill({ response, json: { ...payload, items: values.map((value, index) => ({ ...target, id: `tgt_private_icon_${index}`, value, kind: index === values.length - 1 ? 'ip' : 'fqdn' })) } });
+    });
+    for (const variant of ['classic', 'refined']) {
+      await gotoPortalRoute(page, `targets?variant=${variant}`, sourceBaseUrl);
+      const icons = page.locator(variant === 'classic' ? '.target-primary-icon' : '.rf-target-icon');
+      await expect(icons).toHaveCount(values.length);
+      await expect(icons.locator('svg')).toHaveCount(values.length);
+      await expect(icons.locator('img')).toHaveCount(0);
+    }
+    expect(requests).toEqual([]);
   });
 
   test('picker Escape stays inside the create panel and Select stays in the viewport at 360x740 with keyboard navigation', async ({ page }) => {
@@ -214,7 +291,7 @@ test.describe('schedule form controls', () => {
     await gotoPortalRoute(page, 'test-policies', sourceBaseUrl);
     await page.locator('.rf-header-actions').getByRole('button', { name: 'Create schedule' }).click();
     const panel = page.locator('section.rf-create');
-    await chooseScheduleCheck(panel, 'ui.url_only_schedule.safe');
+    await chooseCustomSelect(panel, 'Check', URL_ONLY_CHECK_FIXTURE.check_id);
     await panel.locator('.domain-picker-option').filter({ hasText: 'https://checkout.acme.com/health' }).getByRole('checkbox').check();
     await expect(panel.getByRole('button', { name: 'Create schedule', exact: true })).toBeEnabled();
     await chooseScheduleCheck(panel, 'l3.firewall_exposure_scan.safe');
@@ -298,8 +375,11 @@ test.describe('schedule form controls', () => {
       expect(box.x + box.width).toBeLessThanOrEqual(width);
       const audit = await new AxeBuilder({ page }).include('.rf-create').withTags(['wcag2a', 'wcag2aa']).analyze();
       expect(audit.violations).toEqual([]);
+      const undersizedControls = await panel.locator('.rf-check-selection-toolbar button, .rf-link-button').evaluateAll((controls) => controls.filter((control) => control.getBoundingClientRect().height < 44).map((control) => control.textContent));
+      expect(undersizedControls, 'Selection and timezone shortcuts keep 44px touch targets').toEqual([]);
       await mkdir('output/vibe-annotations', { recursive: true });
-      await panel.screenshot({ path: `output/vibe-annotations/schedule-${width}-${theme}.png` });
+      await page.evaluate(() => window.scrollTo(0, 0));
+      await page.screenshot({ path: `output/vibe-annotations/schedule-${width}-${theme}.png`, fullPage: true });
     });
   }
 
@@ -340,7 +420,7 @@ test.describe('schedule form controls', () => {
     await page.route('https://icons.duckduckgo.com/**', async (route) => {
       requests.push(route.request());
       if (route.request().url().includes('checkout.acme.com')) return route.fulfill({ contentType: 'image/png', body: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Zl1sAAAAASUVORK5CYII=', 'base64') });
-      return route.abort();
+      return route.fulfill({ status: 200, contentType: 'image/png', body: Buffer.from('Owned invalid image fixture') });
     });
     for (const variant of ['classic', 'refined']) {
       await page.goto(`${sourceBaseUrl}/app#targets?variant=${variant}`);

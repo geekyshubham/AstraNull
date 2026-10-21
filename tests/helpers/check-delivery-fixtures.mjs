@@ -390,14 +390,15 @@ export async function createCheckDeliveryFixtures() {
       if (options.servername != null) assert.equal(options.servername, deps.expectedOriginScope?.host ?? (logicalHost() === '127.0.0.1' ? undefined : logicalHost()));
       const mapped = Number(options.port || 443) === 443 ? httpsPort : Number(options.port);
       route('https', { ...options, port: Number(options.port || 443) }, mapped);
-      return https.request({ ...options, port: mapped, ca: cert.cert }, callback);
+      // Each scenario owns its sockets; keep-alive reuse would retain a prior epoch.
+      return https.request({ ...options, port: mapped, ca: cert.cert, agent: false }, callback);
     };
     deps.httpRequestFn = (options, callback) => {
       assert.equal(options.hostname, '127.0.0.1');
       assert.equal(Number(options.port || 80), endpointPort(false));
       const mapped = Number(options.port || 80) === 80 ? httpPort : Number(options.port);
       route('http', { ...options, port: Number(options.port || 80) }, mapped);
-      return http.request({ ...options, port: mapped }, callback);
+      return http.request({ ...options, port: mapped, agent: false }, callback);
     };
     if (!dnsKind) {
       deps.createSocket = (type) => {

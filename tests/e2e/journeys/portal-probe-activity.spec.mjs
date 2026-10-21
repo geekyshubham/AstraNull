@@ -18,6 +18,7 @@ const TARGET = 'tgt_checkout_2';
 const RUN = 'run_activity_ui';
 const CHECK = 'waf.fingerprint.safe';
 const AT = '2026-10-04T13:42:01.123Z';
+const fixtureDiagnostics = new WeakMap();
 const LOGS = [
   { id: 'log_start', at: AT, source: 'signed_worker', stage: 'request_started', operation: 'http_request', method: 'POST', url: 'https://owned.example/path?key=%5Bredacted%5D', body_bytes: 28, header_names: ['accept'], vector_family: 'waf', marker_class: 'sqli', phase: 'sqli_plain_marker', request_content_type: 'application/json', request_payload_preview: '{"marker":"astranull-inert"}', request_payload_encoding: 'utf8', request_payload_truncated: false },
   { id: 'log_response', at: AT, source: 'signed_worker', stage: 'response_received', operation: 'http_request', method: 'POST', url: 'https://owned.example/path?key=%5Bredacted%5D', status_code: 418, duration_ms: 17, response_content_type: 'text/html', vector_family: 'waf' },
@@ -45,7 +46,10 @@ async function fixture(page, role = 'owner', logs = LOGS) {
     return route.fulfill({ json: { id: RUN, status: 'cancelled' } });
   });
   await injectPortalDevHeadersSession(page, { ...PORTAL_SESSION, role });
-  await page.goto(`${getPortalPlaywrightBaseUrl()}/app#target-detail?id=${TARGET}&tab=validate&check=${CHECK}`, { waitUntil: 'domcontentloaded' });
+  await assertPortalInitialLoad(page, getPortalPlaywrightBaseUrl(), {
+    hash: `target-detail?id=${TARGET}&tab=validate&check=${CHECK}`,
+    onDiagnostics: (value) => fixtureDiagnostics.set(page, value),
+  });
   const activity = page.locator('.td-check[data-selected=true] .ual');
   await expect(activity).toContainText('HTTP 418');
   return { cancels, reads: () => reads, activity };
@@ -91,6 +95,7 @@ test.beforeAll(async ({ browser }) => {
   }
 });
 test.beforeEach(() => { seedPortalPlaywrightStore(seed); wireCalls = []; delayWire = false; });
+test.afterEach(({ page }) => { fixtureDiagnostics.get(page)?.assertClean(); });
 test.afterAll(async () => {
   await stopPortalPlaywrightServer();
   wireServer?.closeAllConnections?.();

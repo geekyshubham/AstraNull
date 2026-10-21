@@ -7,8 +7,10 @@ import {
   listNotifications,
 } from '../../src/services/notifications.mjs';
 import { getStore } from '../../src/store.mjs';
-import { demoHeaders, request } from '../helpers/http.mjs';
+import { closeServer, demoHeaders, request } from '../helpers/http.mjs';
 import { freshStore } from '../helpers/reset.mjs';
+
+const savedNoPersist = process.env.ASTRANULL_NO_PERSIST;
 
 const demoCtx = { tenantId: 'ten_demo', userId: 'usr_admin', role: 'admin' };
 const otherCtx = { tenantId: 'ten_other', userId: 'usr_other', role: 'admin' };
@@ -293,18 +295,35 @@ describe('POST /v1/notifications', () => {
   let baseUrl;
   let server;
 
-  before(() => {
+  before(async () => {
     freshStore();
     process.env.ASTRANULL_NO_PERSIST = '1';
     server = createServer();
-    server.listen(0);
+    await new Promise((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(0, '127.0.0.1', () => {
+        server.off('error', reject);
+        resolve();
+      });
+    });
     const { port } = server.address();
     baseUrl = `http://127.0.0.1:${port}`;
   });
 
-  after(() => {
-    server?.close();
-    delete process.env.ASTRANULL_NO_PERSIST;
+  after(async () => {
+    try {
+      await closeServer(server);
+    } finally {
+      if (savedNoPersist === undefined) delete process.env.ASTRANULL_NO_PERSIST;
+      else process.env.ASTRANULL_NO_PERSIST = savedNoPersist;
+    }
+  });
+
+  it('binds the HTTP fixture to the same IPv4 loopback host used by its client', () => {
+    const address = server.address();
+    assert.equal(address.address, new URL(baseUrl).hostname);
+    assert.equal(address.family, 'IPv4');
+    assert.ok(address.port > 0);
   });
 
   it('returns HTTP 400 for invalid notification rules', async () => {

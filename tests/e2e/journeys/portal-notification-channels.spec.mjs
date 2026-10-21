@@ -9,6 +9,7 @@
  */
 import { expect, test } from '@playwright/test';
 import { PORTAL_BASELINE_IDS } from '../../fixtures/portal-baseline/seed.mjs';
+import { collectPortalBrowserFailures } from '../../helpers/portal-browser-failures.mjs';
 import {
   getPortalPlaywrightBaseUrl,
   startPortalPlaywrightServer,
@@ -101,6 +102,7 @@ test.describe('notification channels panel', () => {
   });
 
   test('Notifications counts a channel connected on Integrations without a page reload', async ({ page }) => {
+    const diagnostics = await collectPortalBrowserFailures(page, getPortalPlaywrightBaseUrl());
     await injectPortalDevHeadersSession(page);
     await gotoPortalRoute(page, 'notifications', getPortalPlaywrightBaseUrl());
     const summary = () => page.getByRole('group', { name: 'Delivery summary for loaded events' });
@@ -110,13 +112,34 @@ test.describe('notification channels panel', () => {
     await page.evaluate(() => { window.location.hash = '#integrations'; });
     const panel = channelsPanel(page);
     await panel.scrollIntoViewIfNeeded();
-    await expect(panel).toBeVisible();
-    await connectSlackThroughDialog(page, panel);
-    await expect(panel.getByRole('status').filter({ hasText: 'Slack connected (' })).toBeVisible();
-
-    await page.evaluate(() => { window.location.hash = '#notifications'; });
-    await expect(summary()).toContainText('1 of 1');
-    expect(await page.evaluate(() => window.__astranullNoReload)).toBe('kept');
+    await expectNoChannelsConnected(panel);
+    let releaseRefresh;
+    let markRefreshHeld;
+    const refreshReleased = new Promise((resolve) => { releaseRefresh = resolve; });
+    const refreshHeld = new Promise((resolve) => { markRefreshHeld = resolve; });
+    let reads = 0;
+    await page.route(NOTIFICATIONS_PATH, async (route) => {
+      if (route.request().method() !== 'GET') return route.fallback();
+      reads += 1;
+      // The first read refreshes the panel; hold its parent route's shared refresh.
+      if (reads !== 2) return route.fallback();
+      const response = await route.fetch();
+      markRefreshHeld();
+      await refreshReleased;
+      await route.fulfill({ response });
+    });
+    try {
+      await connectSlackThroughDialog(page, panel);
+      await expect(panel.getByRole('status').filter({ hasText: 'Slack connected (' })).toBeVisible();
+      await refreshHeld;
+      await page.evaluate(() => { window.location.hash = '#notifications'; });
+      await expect(summary()).toContainText('1 of 1');
+      expect(reads).toBeGreaterThanOrEqual(3);
+      expect(await page.evaluate(() => window.__astranullNoReload)).toBe('kept');
+    } finally {
+      releaseRefresh();
+    }
+    diagnostics.assertClean();
   });
 
   for (const viewport of VIEWPORTS) {

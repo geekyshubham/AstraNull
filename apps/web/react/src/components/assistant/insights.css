@@ -107,8 +107,7 @@
   align-items: center;
   gap: var(--space-4);
   padding: var(--space-4) var(--space-5);
-  border: 1px solid color-mix(in srgb, var(--tone) 40%, var(--border));
-  border-inline-start: 4px solid var(--tone);
+  border: 1px solid color-mix(in srgb, var(--tone) 55%, var(--border));
   border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--tone) 8%, var(--surface));
 }
