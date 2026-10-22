@@ -6,9 +6,11 @@
  */
 
 import { spawn } from 'node:child_process';
+import { accessSync, constants, writeFileSync } from 'node:fs';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { createOpenAiStepRunner, resolveOpenAiConfig, resolveRunnerBackend } from './assistant-openai-backend.mjs';
 
@@ -17,6 +19,8 @@ const KILL_GRACE_SECONDS = 15;
 const FINAL_STEP_RESERVE_SECONDS = 75;
 const TOOL_FENCE = /```astranull-tool[^\n]*\n([\s\S]*?)```/;
 const TOOL_NAME = /^[a-z_]{1,40}$/;
+const IDLE_HEARTBEAT_MS = 30_000;
+const HEARTBEAT_MIN_INTERVAL_MS = 5_000;
 
 function text(value) {
   return value === undefined || value === null ? '' : String(value);
@@ -242,21 +246,66 @@ async function api(baseUrl, token, pathname, body) {
   return payload;
 }
 
-export async function runAssistantRunner({ env = process.env, log = console } = {}) {
+function executableOnPath(name, env) {
+  const candidates = name.includes('/') ? [name] : text(env.PATH).split(path.delimiter).filter(Boolean).map((dir) => path.join(dir, name));
+  return candidates.some((candidate) => {
+    try {
+      accessSync(candidate, constants.X_OK);
+      return true;
+    } catch {
+      return false;
+    }
+  });
+}
+
+async function resolveBackend(env, token, agyBin) {
+  if (token.length < 32) return { idle: 'ASTRANULL_ASSISTANT_RUNNER_TOKEN is not set or is shorter than 32 characters' };
+  try {
+    const backend = resolveRunnerBackend(env);
+    if (backend === 'openai') return { llm: await resolveOpenAiConfig(env) };
+    if (!executableOnPath(agyBin, env)) return { idle: `backend=agy but the ${path.basename(agyBin)} executable is not available` };
+    return { llm: null };
+  } catch (error) {
+    return { idle: error.message };
+  }
+}
+
+export async function runAssistantRunner({ env = process.env, log = console, signal = null, writeHeartbeat = writeFileSync } = {}) {
   const baseUrl = text(env.ASTRANULL_API_URL || 'http://127.0.0.1:3001');
   const token = text(env.ASTRANULL_ASSISTANT_RUNNER_TOKEN).trim();
   const agyBin = text(env.AGY_BIN || 'agy');
   const concurrency = Math.max(1, Math.min(8, Number(env.ASTRANULL_ASSISTANT_RUNNER_CONCURRENCY) || 2));
-  if (token.length < 32) throw new Error('ASTRANULL_ASSISTANT_RUNNER_TOKEN must be set (at least 32 characters).');
-  const backend = resolveRunnerBackend(env);
-  const llm = backend === 'openai' ? await resolveOpenAiConfig(env) : null;
+  const heartbeatFile = text(env.ASTRANULL_WORKER_HEARTBEAT_FILE).trim();
+  let lastBeat = 0;
+  const beat = (force = false) => {
+    if (!heartbeatFile || (!force && Date.now() - lastBeat < HEARTBEAT_MIN_INTERVAL_MS)) return;
+    lastBeat = Date.now();
+    try {
+      writeHeartbeat(heartbeatFile, `${new Date().toISOString()}\n`, { mode: 0o600 });
+    } catch {
+      log.warn?.('assistant runner: heartbeat file could not be written');
+    }
+  };
+  const sleep = (ms) => delay(ms, undefined, signal ? { signal } : undefined).catch(() => {});
+  const stopped = () => Boolean(signal?.aborted);
+
+  const { llm, idle } = await resolveBackend(env, token, agyBin);
+  if (idle) {
+    log.info?.(`assistant runner: idle, not polling (${idle}); set the assistant runner settings and recreate this container to enable it`);
+    while (!stopped()) {
+      beat(true);
+      await sleep(IDLE_HEARTBEAT_MS);
+    }
+    return { mode: 'idle', reason: idle };
+  }
   const openAiStep = llm ? createOpenAiStepRunner(llm) : null;
   log.info?.(`assistant runner: polling ${baseUrl} with ${concurrency} slot(s), ${llm ? `backend=openai model=${llm.model} endpoint=${llm.origin}` : `backend=agy agy=${agyBin}`}`);
   let active = 0;
   let backoffMs = 2000;
-  for (;;) {
+  while (!stopped()) {
+    beat();
     if (active >= concurrency) {
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      await sleep(500);
       continue;
     }
     let lease = null;
@@ -265,12 +314,12 @@ export async function runAssistantRunner({ env = process.env, log = console } = 
       backoffMs = 2000;
     } catch (error) {
       log.warn?.(`assistant runner: lease failed (${error.message}); retrying`);
-      await new Promise((resolve) => setTimeout(resolve, backoffMs));
+      await sleep(backoffMs);
       backoffMs = Math.min(backoffMs * 2, 60000);
       continue;
     }
     if (!lease) {
-      await new Promise((resolve) => setTimeout(resolve, 2000));
+      await sleep(2000);
       continue;
     }
     active += 1;
@@ -283,6 +332,7 @@ export async function runAssistantRunner({ env = process.env, log = console } = 
       .catch((error) => log.warn?.(`assistant runner: job ${lease.job_id} could not be reported (${error.message})`))
       .finally(() => { active -= 1; });
   }
+  return { mode: 'stopped' };
 }
 
 const entry = fileURLToPath(import.meta.url);

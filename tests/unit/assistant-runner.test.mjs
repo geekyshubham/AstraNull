@@ -2,8 +2,10 @@ import assert from 'node:assert/strict';
 import { chmod, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import http from 'node:http';
+import { stat, readFile } from 'node:fs/promises';
 import { after, before, describe, it } from 'node:test';
-import { agyArgs, parseAgyStream, parseToolCall, runAgyJob } from '../../workers/assistant-runner.mjs';
+import { agyArgs, parseAgyStream, parseToolCall, runAgyJob, runAssistantRunner } from '../../workers/assistant-runner.mjs';
 
 const ALLOWED = ['search_web'];
 const line = (value) => JSON.stringify(value);
@@ -156,6 +158,100 @@ describe('assistant runner page-read policy', () => {
     const step = (url) => JSON.stringify({ event: 'step_update', step_update: { step_type: 'tool', state: 'ACTIVE', tool_name: 'read_url_content', tool_info: { name: 'read_url_content', parameters: { url } } } });
     for (const url of ['https://developers.cloudflare.com/waf/rate-limiting-rules/', 'http://169.254.169.254/latest/meta-data/', 'https://evil.example.com/?d=secret', 'http://localhost:3006/v1/findings', 'https://10.0.0.5/', 'https://docs.aws.amazon.com.evil.net/x']) {
       assert.equal(parseAgyStream(step(url), ['search_web', 'read_url_content']).disallowedTool, 'read_url_content', url);
+    }
+  });
+});
+
+describe('assistant runner lifecycle', () => {
+  const TOKEN = 'runner-token-synthetic-0123456789abcdef';
+  const KEY = 'sk-test-synthetic-key-0123456789';
+  let dir;
+  before(async () => { dir = await mkdtemp(path.join(tmpdir(), 'runner-life-')); });
+  after(async () => { await rm(dir, { recursive: true, force: true }); });
+
+  const collector = () => {
+    const lines = [];
+    return { lines, info: (line) => lines.push(['info', line]), warn: (line) => lines.push(['warn', line]) };
+  };
+  const runFor = async (env, ms, extra = {}) => {
+    const log = collector();
+    const controller = new AbortController();
+    const done = runAssistantRunner({ env, log, signal: controller.signal, ...extra });
+    await new Promise((resolve) => setTimeout(resolve, ms));
+    controller.abort();
+    return { result: await done, log };
+  };
+
+  it('idles with one reason line and a heartbeat when the runner token is missing', async () => {
+    const heartbeat = path.join(dir, 'idle-token.heartbeat');
+    const { result, log } = await runFor({ ASTRANULL_WORKER_HEARTBEAT_FILE: heartbeat, ASTRANULL_ASSISTANT_LLM_API_KEY: KEY }, 100);
+    assert.equal(result.mode, 'idle');
+    assert.equal(log.lines.length, 1);
+    assert.match(log.lines[0][1], /idle.*ASTRANULL_ASSISTANT_RUNNER_TOKEN/);
+    assert.ok(!log.lines[0][1].includes(KEY));
+    assert.match(await readFile(heartbeat, 'utf8'), /^\d{4}-\d{2}-\d{2}T/);
+    assert.equal((await stat(heartbeat)).mode & 0o777, 0o600);
+  });
+
+  it('idles when the openai backend has no base URL or no API key without leaking the token', async () => {
+    for (const extra of [{ ASTRANULL_ASSISTANT_LLM_API_KEY: KEY }, { ASTRANULL_ASSISTANT_LLM_BASE_URL: 'https://llm.example.com/v1' }]) {
+      const heartbeat = path.join(dir, `idle-${Object.keys(extra)[0]}.heartbeat`);
+      const { result, log } = await runFor({ ASTRANULL_ASSISTANT_RUNNER_TOKEN: TOKEN, ASTRANULL_ASSISTANT_RUNNER_BACKEND: 'openai', ASTRANULL_WORKER_HEARTBEAT_FILE: heartbeat, ...extra }, 100);
+      assert.equal(result.mode, 'idle');
+      assert.equal(log.lines.length, 1);
+      assert.match(log.lines[0][1], /idle/);
+      assert.ok(!log.lines[0][1].includes(TOKEN) && !log.lines[0][1].includes(KEY));
+      assert.ok((await stat(heartbeat)).isFile());
+    }
+  });
+
+  it('idles on an invalid backend name or invalid static headers instead of crashing', async () => {
+    const base = { ASTRANULL_ASSISTANT_RUNNER_TOKEN: TOKEN };
+    const bad = await runFor({ ...base, ASTRANULL_ASSISTANT_RUNNER_BACKEND: 'other' }, 50);
+    assert.equal(bad.result.mode, 'idle');
+    const headers = await runFor({ ...base, ASTRANULL_ASSISTANT_RUNNER_BACKEND: 'openai', ASTRANULL_ASSISTANT_LLM_BASE_URL: 'https://llm.example.com/v1', ASTRANULL_ASSISTANT_LLM_API_KEY: KEY, ASTRANULL_ASSISTANT_LLM_HEADERS: '{"Authorization":"x"}' }, 50);
+    assert.equal(headers.result.mode, 'idle');
+    assert.match(headers.log.lines[0][1], /ASTRANULL_ASSISTANT_LLM_HEADERS/);
+  });
+
+  it('idles when the agy backend is selected but the executable is missing', async () => {
+    const { result, log } = await runFor({ ASTRANULL_ASSISTANT_RUNNER_TOKEN: TOKEN, PATH: dir, AGY_BIN: 'agy-not-installed' }, 50);
+    assert.equal(result.mode, 'idle');
+    assert.match(log.lines[0][1], /agy/);
+  });
+
+  it('survives an unwritable heartbeat path', async () => {
+    const { result, log } = await runFor({ ASTRANULL_WORKER_HEARTBEAT_FILE: path.join(dir, 'missing-dir', 'hb') }, 50);
+    assert.equal(result.mode, 'idle');
+    assert.ok(log.lines.some(([level]) => level === 'warn'));
+  });
+
+  it('refreshes the heartbeat while polling an empty queue', async () => {
+    const heartbeat = path.join(dir, 'poll.heartbeat');
+    let leases = 0;
+    const server = http.createServer((req, res) => {
+      leases += 1;
+      assert.equal(req.headers.authorization, `Bearer ${TOKEN}`);
+      res.writeHead(204).end();
+    });
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    try {
+      const { result, log } = await runFor({
+        ASTRANULL_API_URL: `http://127.0.0.1:${server.address().port}`,
+        ASTRANULL_ASSISTANT_RUNNER_TOKEN: TOKEN,
+        ASTRANULL_ASSISTANT_RUNNER_BACKEND: 'openai',
+        ASTRANULL_ASSISTANT_LLM_BASE_URL: 'https://llm.example.com/v1',
+        ASTRANULL_ASSISTANT_LLM_API_KEY: KEY,
+        ASTRANULL_WORKER_HEARTBEAT_FILE: heartbeat,
+      }, 300);
+      assert.equal(result.mode, 'stopped');
+      assert.ok(leases >= 1);
+      assert.ok((await stat(heartbeat)).isFile());
+      assert.match(log.lines[0][1], /polling.*backend=openai/);
+      assert.ok(!JSON.stringify(log.lines).includes(KEY) && !JSON.stringify(log.lines).includes(TOKEN));
+    } finally {
+      server.closeAllConnections?.();
+      await new Promise((resolve) => server.close(resolve));
     }
   });
 });

@@ -203,6 +203,31 @@ services:
       retries: 3
       start_period: 45s
 
+  assistant-runner:
+    image: "${ASTRANULL_CORE_WORKER_IMAGE_ID:?ASTRANULL_CORE_WORKER_IMAGE_ID is required}"
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      ASTRANULL_API_URL: http://control-plane:8080
+      ASTRANULL_ASSISTANT_RUNNER_TOKEN: ${ASTRANULL_ASSISTANT_RUNNER_TOKEN:-}
+      ASTRANULL_ASSISTANT_RUNNER_BACKEND: ${ASTRANULL_ASSISTANT_RUNNER_BACKEND:-}
+      ASTRANULL_ASSISTANT_LLM_BASE_URL: ${ASTRANULL_ASSISTANT_LLM_BASE_URL:-}
+      ASTRANULL_ASSISTANT_LLM_API_KEY: ${ASTRANULL_ASSISTANT_LLM_API_KEY:-}
+      ASTRANULL_ASSISTANT_LLM_MODEL: ${ASTRANULL_ASSISTANT_LLM_MODEL:-}
+      ASTRANULL_ASSISTANT_LLM_HEADERS: ${ASTRANULL_ASSISTANT_LLM_HEADERS:-}
+      ASTRANULL_ASSISTANT_RUNNER_CONCURRENCY: ${ASTRANULL_ASSISTANT_RUNNER_CONCURRENCY:-}
+      ASTRANULL_WORKER_HEARTBEAT_FILE: /tmp/assistant-runner.heartbeat
+    command: ["node", "workers/assistant-runner.mjs"]
+    depends_on:
+      control-plane:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "scripts/worker-heartbeat-health.mjs", "/tmp/assistant-runner.heartbeat", "120"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+      start_period: 45s
+
   password-recovery-worker:
     image: "${ASTRANULL_CORE_WORKER_IMAGE_ID:?ASTRANULL_CORE_WORKER_IMAGE_ID is required}"
     restart: unless-stopped

@@ -783,7 +783,7 @@ verify_running_control_plane_state() {
 
 verify_running_core_worker_state() {
   local service cid
-  for service in probe-worker password-recovery-worker test-policy-runner; do
+  for service in probe-worker assistant-runner password-recovery-worker test-policy-runner; do
     cid=$(compose_timeout 30 ps -q "$service") || return 1
     [[ -z "$cid" ]] || verify_service_image_tag "$service" "$core_worker_tag" "$core_worker_image_id" || return
   done
@@ -804,7 +804,7 @@ verify_running_connector_state() {
 verify_restored_image_identity() {
   local service
   verify_service_image_tag control-plane "$control_plane_tag" "$control_plane_image_id" || return
-  for service in probe-worker password-recovery-worker test-policy-runner; do
+  for service in probe-worker assistant-runner password-recovery-worker test-policy-runner; do
     verify_service_image_tag "$service" "$core_worker_tag" "$core_worker_image_id" || return
   done
   if ((connector_enabled)); then
@@ -835,8 +835,9 @@ check_service_health() {
 }
 
 check_core_workers() {
-  local service
-  for service in probe-worker password-recovery-worker test-policy-runner; do
+  local service services=("$@")
+  ((${#services[@]})) || services=(probe-worker assistant-runner password-recovery-worker test-policy-runner)
+  for service in "${services[@]}"; do
     check_service_health "$service" || return
   done
 }
@@ -1096,10 +1097,10 @@ delete_plaintext_checked() {
 }
 
 start_core_stack() {
-  stop_remove_services caddy control-plane probe-worker password-recovery-worker \
+  stop_remove_services caddy control-plane probe-worker assistant-runner password-recovery-worker \
     test-policy-runner connector-poll-scheduler connector-poll-runner || return
   compose_timeout 300 up -d --wait --wait-timeout 240 \
-    postgres control-plane probe-worker password-recovery-worker test-policy-runner caddy
+    postgres control-plane probe-worker assistant-runner password-recovery-worker test-policy-runner caddy
 }
 
 start_connector_workers() {
@@ -1155,7 +1156,7 @@ cleanup() {
     fi
   fi
   if (( ! succeeded && outage_started )); then
-    if stop_remove_services caddy probe-worker password-recovery-worker test-policy-runner \
+    if stop_remove_services caddy probe-worker assistant-runner password-recovery-worker test-policy-runner \
       connector-poll-scheduler connector-poll-runner control-plane; then
       echo 'restore: failed; runtime containers were stopped, removed, and verified absent for operator investigation' >&2
     else
@@ -1271,7 +1272,7 @@ main() {
   validate_plaintext_archive "$plain_host"
 
   outage_started=1
-  stop_remove_services caddy probe-worker password-recovery-worker test-policy-runner \
+  stop_remove_services caddy probe-worker assistant-runner password-recovery-worker test-policy-runner \
     connector-poll-scheduler connector-poll-runner control-plane
   validate_plaintext_archive "$plain_host"
 

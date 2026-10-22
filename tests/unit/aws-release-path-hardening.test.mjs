@@ -49,6 +49,7 @@ describe('AWS release path hardening', () => {
       backup: 'ASTRANULL_CORE_WORKER_IMAGE_ID',
       'control-plane': 'ASTRANULL_CONTROL_PLANE_IMAGE_ID',
       'probe-worker': 'ASTRANULL_CORE_WORKER_IMAGE_ID',
+      'assistant-runner': 'ASTRANULL_CORE_WORKER_IMAGE_ID',
       'password-recovery-worker': 'ASTRANULL_CORE_WORKER_IMAGE_ID',
       'test-policy-runner': 'ASTRANULL_CORE_WORKER_IMAGE_ID',
       'connector-poll-scheduler': 'ASTRANULL_CONNECTOR_WORKER_IMAGE_ID',
@@ -419,7 +420,7 @@ describe('AWS release path hardening', () => {
     assert.ok(deploy.includes('\\.dump\\.enc$'));
     assert.match(deploy, /expired_count=\$\(\(\$\{#sorted_records\[@\]\} - 10\)\)/);
     assert.match(deploy, /https:\/\/astranull\.site\/health/);
-    assert.match(deploy, /probe-worker password-recovery-worker test-policy-runner/);
+    assert.match(deploy, /probe-worker assistant-runner password-recovery-worker test-policy-runner/);
     assert.match(deploy, /check_control_plane/);
     assert.match(deploy, /postgres-restore-drill\.mjs[\s\S]*--validate-only/m);
     assert.match(deploy, /ASTRANULL_WORKER_IMAGE_TAG="\$previous_core_worker_tag"/);
@@ -603,18 +604,30 @@ describe('AWS release path hardening', () => {
   });
 
   it('keeps worker secrets scoped and exposes failure-visible health', () => {
-    const probe = compose.split('  probe-worker:')[1].split('\n  password-recovery-worker:')[0];
+    const probe = compose.split('  probe-worker:')[1].split('\n  assistant-runner:')[0];
+    const assistantRunner = compose.split('  assistant-runner:')[1].split('\n  password-recovery-worker:')[0];
     const recovery = compose.split('  password-recovery-worker:')[1].split('\n  test-policy-runner:')[0];
     const policyScheduler = compose.split('  test-policy-runner:')[1].split('\n  connector-poll-scheduler:')[0];
     const connectorScheduler = compose.split('  connector-poll-scheduler:')[1].split('\n  connector-poll-runner:')[0];
     const connectorWorker = compose.split('  connector-poll-runner:')[1].split('\n  caddy:')[0];
-    for (const worker of [probe, recovery, policyScheduler, connectorScheduler, connectorWorker]) {
+    for (const worker of [probe, assistantRunner, recovery, policyScheduler, connectorScheduler, connectorWorker]) {
       assert.doesNotMatch(worker, /env_file:/);
       assert.match(worker, /healthcheck:/);
     }
     assert.match(probe, /command: \["node", "workers\/probe-worker\.mjs"\]/);
     assert.match(probe, /ASTRANULL_API_URL: http:\/\/control-plane:8080/);
     assert.doesNotMatch(probe, /DATABASE_URL|OIDC|SMTP|SECRET_ENCRYPTION/);
+    assert.match(assistantRunner, /image: "\$\{ASTRANULL_CORE_WORKER_IMAGE_ID:\?/);
+    assert.match(assistantRunner, /restart: unless-stopped/);
+    assert.match(assistantRunner, /command: \["node", "workers\/assistant-runner\.mjs"\]/);
+    assert.match(assistantRunner, /ASTRANULL_API_URL: http:\/\/control-plane:8080/);
+    assert.match(assistantRunner, /depends_on:\n\s+control-plane:\n\s+condition: service_healthy/);
+    assert.match(assistantRunner, /ASTRANULL_WORKER_HEARTBEAT_FILE: \/tmp\/assistant-runner\.heartbeat/);
+    assert.match(assistantRunner, /worker-heartbeat-health\.mjs", "\/tmp\/assistant-runner\.heartbeat", "120"/);
+    for (const key of ['RUNNER_TOKEN', 'RUNNER_BACKEND', 'LLM_BASE_URL', 'LLM_API_KEY', 'LLM_MODEL', 'LLM_HEADERS', 'RUNNER_CONCURRENCY']) {
+      assert.match(assistantRunner, new RegExp(`ASTRANULL_ASSISTANT_${key}: \\$\\{ASTRANULL_ASSISTANT_${key}:-\\}`));
+    }
+    assert.doesNotMatch(assistantRunner, /DATABASE_URL|OIDC|SMTP|SECRET_ENCRYPTION|PROBE_WORKER_SECRET|privileged|user: root/);
     assert.doesNotMatch(recovery, /OIDC|PROBE_WORKER_SECRET/);
     assert.doesNotMatch(policyScheduler, /OIDC|SMTP|SECRET_ENCRYPTION/);
     assert.match(connectorScheduler, /depends_on:\n\s+control-plane:\n\s+condition: service_healthy/);
@@ -714,9 +727,9 @@ describe('AWS release path hardening', () => {
       assert.doesNotMatch(source, /--remove-orphans/);
     }
     assert.match(deploy, /stop_connector_workers\(\) \{\n\s+stop_remove_services connector-poll-scheduler connector-poll-runner/);
-    assert.match(deploy, /start_core_stack\(\) \{\n\s+stop_remove_services caddy control-plane probe-worker password-recovery-worker \\[\s\S]*test-policy-runner connector-poll-scheduler connector-poll-runner \|\| return/);
+    assert.match(deploy, /start_core_stack\(\) \{\n\s+stop_remove_services caddy control-plane probe-worker assistant-runner password-recovery-worker \\[\s\S]*test-policy-runner connector-poll-scheduler connector-poll-runner \|\| return/);
     assert.match(deploy, /fail_closed_runtime\(\) \{\n\s+stop_remove_services caddy/);
-    assert.match(restoreScript, /start_core_stack\(\) \{\n\s+stop_remove_services caddy control-plane probe-worker password-recovery-worker \\[\s\S]*test-policy-runner connector-poll-scheduler connector-poll-runner \|\| return/);
+    assert.match(restoreScript, /start_core_stack\(\) \{\n\s+stop_remove_services caddy control-plane probe-worker assistant-runner password-recovery-worker \\[\s\S]*test-policy-runner connector-poll-scheduler connector-poll-runner \|\| return/);
     assert.match(restoreScript, /outage_started=1\n\s+stop_remove_services caddy/);
     assert.match(restoreScript, /! succeeded && outage_started[\s\S]*stop_remove_services caddy/m);
   });
@@ -973,6 +986,7 @@ describe('AWS release path hardening', () => {
           ASTRANULL_CONNECTORS_ENABLED: '1',
         } },
         'probe-worker': { environment: {} },
+        'assistant-runner': { environment: {} },
         'password-recovery-worker': { environment: {
           ASTRANULL_SECRET_ENCRYPTION_KEY: envelopeEncryption,
         } },
@@ -995,7 +1009,7 @@ describe('AWS release path hardening', () => {
     const connectorServiceImage = `sha256:${'3e'.repeat(32)}`;
     model.services['control-plane'].image = controlServiceImage;
     for (const name of [
-      'migrate', 'backup-role-bootstrap', 'backup', 'probe-worker',
+      'migrate', 'backup-role-bootstrap', 'backup', 'probe-worker', 'assistant-runner',
       'password-recovery-worker', 'test-policy-runner',
     ]) model.services[name].image = coreServiceImage;
     for (const name of ['connector-poll-scheduler', 'connector-poll-runner']) {
@@ -1010,6 +1024,15 @@ describe('AWS release path hardening', () => {
     const splitCoreImageModel = structuredClone(model);
     splitCoreImageModel.services.backup.image = `sha256:${'4f'.repeat(32)}`;
     assert.throws(() => validateAwsComposeSecretModel(splitCoreImageModel), /core image group/);
+    const assistantProjectionModel = structuredClone(model);
+    assistantProjectionModel.services['assistant-runner'].environment.ASTRANULL_DATABASE_URL = `postgresql://astranull_app:${app}@postgres/astranull`;
+    assert.throws(() => validateAwsComposeSecretModel(assistantProjectionModel), /assistant runner has an unexpected environment field/);
+    const assistantImageModel = structuredClone(model);
+    assistantImageModel.services['assistant-runner'].image = `sha256:${'5a'.repeat(32)}`;
+    assert.throws(() => validateAwsComposeSecretModel(assistantImageModel), /core image group/);
+    const missingAssistantModel = structuredClone(model);
+    delete missingAssistantModel.services['assistant-runner'];
+    assert.throws(() => validateAwsComposeSecretModel(missingAssistantModel), /missing assistant-runner/);
     const wrongRestoreOwnerModel = structuredClone(model);
     wrongRestoreOwnerModel.services['restore-db'].environment.ASTRANULL_RESTORE_DATABASE_URL =
       `postgresql://astranull:${app}@postgres:5432/astranull`;

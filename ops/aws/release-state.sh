@@ -519,6 +519,32 @@ release_runtime_service_matches_legacy_identity() {
     && "$image_id" == "$expected_id" ]]
 }
 
+release_runtime_service_absent() {
+  local all
+  all=$(compose_timeout 30 ps --all -q "$1") || return 2
+  [[ -z "${all//[[:space:]]/}" ]]
+}
+
+release_runtime_optional_service_matches_id() {
+  release_runtime_service_absent "$1" && return 0
+  (($? == 1)) || return 2
+  release_runtime_service_matches_id "$1" "$2"
+}
+
+release_runtime_optional_service_matches_legacy_identity() {
+  release_runtime_service_absent "$1" && return 0
+  (($? == 1)) || return 2
+  release_runtime_service_matches_legacy_identity "$1" "$2" "$3"
+}
+
+release_check_core_workers_for_bundle() {
+  local rc services=(probe-worker password-recovery-worker test-policy-runner)
+  release_runtime_service_absent assistant-runner && rc=0 || rc=$?
+  ((rc == 0 || rc == 1)) || return "$rc"
+  ((rc == 0)) || services+=(assistant-runner)
+  check_core_workers "${services[@]}"
+}
+
 release_runtime_matches_loaded_bundle_for_legacy_migration() {
   local service
   release_runtime_service_present postgres || return $?
@@ -529,6 +555,8 @@ release_runtime_matches_loaded_bundle_for_legacy_migration() {
     release_runtime_service_matches_legacy_identity "$service" \
       "$release_bundle_core_tag" "$release_bundle_core_image_id" || return $?
   done
+  release_runtime_optional_service_matches_legacy_identity assistant-runner \
+    "$release_bundle_core_tag" "$release_bundle_core_image_id" || return $?
   if [[ "$release_bundle_connector_enabled" == 1 ]]; then
     for service in connector-poll-scheduler connector-poll-runner; do
       release_runtime_service_matches_legacy_identity "$service" \
@@ -560,6 +588,7 @@ release_runtime_matches_loaded_bundle() {
   for service in probe-worker password-recovery-worker test-policy-runner; do
     release_runtime_service_matches_id "$service" "$release_bundle_core_image_id" || return $?
   done
+  release_runtime_optional_service_matches_id assistant-runner "$release_bundle_core_image_id" || return $?
   if [[ "$release_bundle_connector_enabled" == 1 ]]; then
     for service in connector-poll-scheduler connector-poll-runner; do
       release_runtime_service_matches_id "$service" "$release_bundle_connector_image_id" || return $?
@@ -580,7 +609,7 @@ release_runtime_health_for_bundle_file() {
   connector_enabled=$release_bundle_connector_enabled
   check_postgres || return
   check_control_plane || return
-  check_core_workers || return
+  release_check_core_workers_for_bundle || return
   if [[ "$connector_enabled" == 1 ]]; then
     check_connector_workers
   else
@@ -639,7 +668,7 @@ reconcile_pending_release_bundle() {
           return 1
         }
       else
-        if release_runtime_services_absent caddy control-plane probe-worker \
+        if release_runtime_services_absent caddy control-plane probe-worker assistant-runner \
           password-recovery-worker test-policy-runner connector-poll-scheduler connector-poll-runner; then :; else
           rc=$?
           ((rc == 1)) || return "$rc"
@@ -722,7 +751,7 @@ reconcile_pending_release_bundle() {
       'stale pre-activation pending release-image bundle' || return
     release_state_error 'discarded stale pre-activation pending state because complete runtime immutable IDs still match canonical current state'
   elif ! canonical_release_bundle_exists; then
-    if release_runtime_services_absent caddy control-plane probe-worker password-recovery-worker \
+    if release_runtime_services_absent caddy control-plane probe-worker assistant-runner password-recovery-worker \
       test-policy-runner connector-poll-scheduler connector-poll-runner; then
       release_state_preactivation_pending=1
       release_state_error 'retained resumable first-boot pending state with no application runtime'

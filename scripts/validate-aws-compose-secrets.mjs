@@ -79,6 +79,7 @@ const APP_IMAGE_GROUPS = {
     'backup-role-bootstrap',
     'backup',
     'probe-worker',
+    'assistant-runner',
     'password-recovery-worker',
     'test-policy-runner',
   ],
@@ -154,7 +155,7 @@ export function validateAwsComposeSecretModel(model) {
   const environment = (name) => services[name]?.environment ?? {};
   for (const required of [
     'postgres', 'migrate', 'backup-role-bootstrap', 'backup-dump', 'restore-db', 'backup',
-    'control-plane', 'probe-worker', 'password-recovery-worker', 'test-policy-runner',
+    'control-plane', 'probe-worker', 'assistant-runner', 'password-recovery-worker', 'test-policy-runner',
     'connector-poll-scheduler', 'connector-poll-runner',
   ]) {
     if (!services[required]) throw new Error(`aws-compose-secrets: missing ${required} service.`);
@@ -373,13 +374,28 @@ export function validateAwsComposeSecretModel(model) {
     'ASTRANULL_BACKUP_ENCRYPTION_KEY',
   ]);
   for (const name of [
-    'control-plane', 'probe-worker', 'password-recovery-worker', 'test-policy-runner',
+    'control-plane', 'probe-worker', 'assistant-runner', 'password-recovery-worker', 'test-policy-runner',
     'connector-poll-scheduler', 'connector-poll-runner',
   ]) {
     const env = environment(name);
     if (Object.keys(env).some((key) => operatorOnlyKeys.has(key))) {
       throw new Error(`aws-compose-secrets: ${name} receives an operator-only credential.`);
     }
+  }
+  const assistantRunnerKeys = new Set([
+    'NODE_ENV',
+    'ASTRANULL_API_URL',
+    'ASTRANULL_ASSISTANT_RUNNER_TOKEN',
+    'ASTRANULL_ASSISTANT_RUNNER_BACKEND',
+    'ASTRANULL_ASSISTANT_LLM_BASE_URL',
+    'ASTRANULL_ASSISTANT_LLM_API_KEY',
+    'ASTRANULL_ASSISTANT_LLM_MODEL',
+    'ASTRANULL_ASSISTANT_LLM_HEADERS',
+    'ASTRANULL_ASSISTANT_RUNNER_CONCURRENCY',
+    'ASTRANULL_WORKER_HEARTBEAT_FILE',
+  ]);
+  if (Object.keys(environment('assistant-runner')).some((key) => !assistantRunnerKeys.has(key))) {
+    throw new Error('aws-compose-secrets: assistant runner has an unexpected environment field.');
   }
   if ('ASTRANULL_BACKUP_ENCRYPTION_KEY' in migrate || 'ASTRANULL_SECRET_ENCRYPTION_KEY' in migrate) {
     throw new Error('aws-compose-secrets: migration service receives an encryption credential.');

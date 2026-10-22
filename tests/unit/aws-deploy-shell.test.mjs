@@ -1209,7 +1209,7 @@ exit 93
   });
 
   it('replaces every old runtime service before core Compose up in both scripts', () => {
-    const expectedServices = 'caddy control-plane probe-worker password-recovery-worker test-policy-runner connector-poll-scheduler connector-poll-runner';
+    const expectedServices = 'caddy control-plane probe-worker assistant-runner password-recovery-worker test-policy-runner connector-poll-scheduler connector-poll-runner';
     for (const [name, script] of [['deploy', DEPLOY], ['restore', RESTORE]]) {
       const temp = mkdtempSync(path.join(tmpdir(), `astranull-${name}-replace-runtime-`));
       const calls = path.join(temp, 'calls.log');
@@ -1223,7 +1223,7 @@ exit 93
         assert.equal(result.status, 0, result.stderr);
         assert.deepEqual(readFileSync(calls, 'utf8').trim().split('\n'), [
           `replace|${expectedServices}`,
-          'compose|300 up -d --wait --wait-timeout 240 postgres control-plane probe-worker password-recovery-worker test-policy-runner caddy',
+          'compose|300 up -d --wait --wait-timeout 240 postgres control-plane probe-worker assistant-runner password-recovery-worker test-policy-runner caddy',
         ]);
       } finally {
         rmSync(temp, { recursive: true, force: true });
@@ -2462,7 +2462,7 @@ PY
                     && printf '%s-cid' "$service"
                   return 0
                   ;;
-                control-plane|probe-worker|password-recovery-worker|test-policy-runner)
+                control-plane|probe-worker|assistant-runner|password-recovery-worker|test-policy-runner)
                   [[ ! ( "$VARIANT" == missing && "$service" == test-policy-runner ) ]] \
                     && printf '%s-cid' "$service"
                   return 0
@@ -2674,6 +2674,35 @@ PY
     }
   });
 
+  it('tolerates an absent assistant-runner during reconcile but never a mismatched or unhealthy one', () => {
+    const coreId = `sha256:${'2'.repeat(64)}`;
+    const staleId = `sha256:${'4'.repeat(64)}`;
+    const probe = (scenario) => runBash(`
+      source "$1"
+      release_bundle_core_image_id="$CORE_ID"
+      compose_timeout() {
+        service="\${!#}"
+        if [[ "$service" == assistant-runner && "$SCENARIO" == absent ]]; then return 0; fi
+        printf '%s-cid' "$service"
+      }
+      timeout() {
+        if [[ "$SCENARIO" == stale ]]; then printf '%s' "$STALE_ID"; else printf '%s' "$CORE_ID"; fi
+      }
+      check_service_health() { printf 'health|%s\\n' "$1"; [[ "$SCENARIO" != unhealthy || "$1" != assistant-runner ]]; }
+      release_runtime_optional_service_matches_id assistant-runner "$CORE_ID" || exit 10
+      check_core_workers() { for s in "$@"; do check_service_health "$s" || return; done; }
+      release_check_core_workers_for_bundle
+    `, { CORE_ID: coreId, STALE_ID: staleId, SCENARIO: scenario });
+    const absent = probe('absent');
+    assert.equal(absent.status, 0, absent.stderr);
+    assert.doesNotMatch(absent.stdout, /health\|assistant-runner/);
+    const present = probe('present');
+    assert.equal(present.status, 0, present.stderr);
+    assert.match(present.stdout, /health\|assistant-runner/);
+    assert.equal(probe('stale').status, 10);
+    assert.notEqual(probe('unhealthy').status, 0);
+  });
+
   it('inspects the complete raw-ID runtime before reconciling a bundle', () => {
     const controlId = `sha256:${'1'.repeat(64)}`;
     const coreId = `sha256:${'2'.repeat(64)}`;
@@ -2696,7 +2725,7 @@ PY
         service="\${cid%-cid}"
         case "$service" in
           control-plane) expected="$CONTROL_ID" ;;
-          probe-worker|password-recovery-worker|test-policy-runner) expected="$CORE_ID" ;;
+          probe-worker|assistant-runner|password-recovery-worker|test-policy-runner) expected="$CORE_ID" ;;
           connector-poll-scheduler|connector-poll-runner) expected="$CONNECTOR_ID" ;;
           *) return 91 ;;
         esac
@@ -3314,6 +3343,7 @@ fi
           case "$*" in
             '30 ps -q control-plane') printf control-cid ;;
             '30 ps -q probe-worker') printf probe-cid ;;
+            '30 ps -q assistant-runner') printf assistant-cid ;;
             '30 ps -q password-recovery-worker') printf recovery-cid ;;
             '30 ps -q test-policy-runner') printf policy-cid ;;
             *) return 89 ;;
@@ -3373,6 +3403,7 @@ fi
       assert.match(log, /rebind-control[\s\S]*rebind-core[\s\S]*rebind-connector/);
       assert.match(log, /compat-connector/);
       assert.match(log, new RegExp(`verify\\|probe-worker\\|${coreTag}\\|${coreImageId}`));
+      assert.match(log, new RegExp(`verify\\|assistant-runner\\|${coreTag}\\|${coreImageId}`));
       assert.match(log, new RegExp(`verify\\|connector-poll-scheduler\\|${connectorTag}\\|${connectorImageId}`));
       assert.match(log, new RegExp(`verify\\|connector-poll-runner\\|${connectorTag}\\|${connectorImageId}`));
     } finally {
@@ -3401,7 +3432,7 @@ fi
               if ((present)); then printf stale-cid; fi
               return 0
               ;;
-            '300 up -d --wait --wait-timeout 240 postgres control-plane probe-worker password-recovery-worker test-policy-runner caddy') return 0 ;;
+            '300 up -d --wait --wait-timeout 240 postgres control-plane probe-worker assistant-runner password-recovery-worker test-policy-runner caddy') return 0 ;;
             *) return 92 ;;
           esac
         }

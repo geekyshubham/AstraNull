@@ -1000,7 +1000,7 @@ inspect_running_control_core_fleet() {
 
 verify_previous_runtime_containers() {
   local service cid image_ref actual_image_id expected_tag expected_image_id
-  for service in control-plane probe-worker password-recovery-worker test-policy-runner; do
+  for service in control-plane probe-worker assistant-runner password-recovery-worker test-policy-runner; do
     cid=$(compose_timeout 30 ps --all -q "$service") || return 1
     [[ -z "$cid" ]] && continue
     [[ "$cid" != *$'\n'* ]] || {
@@ -1049,13 +1049,13 @@ assert_resumable_first_boot_pending() {
       return 1
     }
   fi
-  verify_services_absent caddy control-plane probe-worker password-recovery-worker \
+  verify_services_absent caddy control-plane probe-worker assistant-runner password-recovery-worker \
     test-policy-runner connector-poll-scheduler connector-poll-runner
 }
 
 assert_genuinely_fresh_host() {
   local validator_image_id=$1 postgres_cid volume_name volume_status
-  verify_services_absent caddy control-plane probe-worker password-recovery-worker \
+  verify_services_absent caddy control-plane probe-worker assistant-runner password-recovery-worker \
     test-policy-runner connector-poll-scheduler connector-poll-runner || {
     echo 'deploy: host has runtime container state but no complete exact release state' >&2
     return 1
@@ -1403,7 +1403,7 @@ verify_control_plane_image_tag() {
 
 verify_workers_image_tag() {
   local expected=$1 expected_image_id=$2 service
-  for service in probe-worker password-recovery-worker test-policy-runner; do
+  for service in probe-worker assistant-runner password-recovery-worker test-policy-runner; do
     verify_service_image_tag "$service" "$expected" "$expected_image_id" || return
   done
 }
@@ -1431,8 +1431,9 @@ check_service_health() {
 }
 
 check_core_workers() {
-  local service
-  for service in probe-worker password-recovery-worker test-policy-runner; do
+  local service services=("$@")
+  ((${#services[@]})) || services=(probe-worker assistant-runner password-recovery-worker test-policy-runner)
+  for service in "${services[@]}"; do
     check_service_health "$service" || return
   done
 }
@@ -1476,10 +1477,10 @@ stop_connector_workers() {
 }
 
 start_core_stack() {
-  stop_remove_services caddy control-plane probe-worker password-recovery-worker \
+  stop_remove_services caddy control-plane probe-worker assistant-runner password-recovery-worker \
     test-policy-runner connector-poll-scheduler connector-poll-runner || return
   compose_timeout 300 up -d --wait --wait-timeout 240 \
-    postgres control-plane probe-worker password-recovery-worker test-policy-runner caddy
+    postgres control-plane probe-worker assistant-runner password-recovery-worker test-policy-runner caddy
 }
 
 start_connector_workers() {
@@ -1488,7 +1489,7 @@ start_connector_workers() {
 }
 
 fail_closed_runtime() {
-  stop_remove_services caddy probe-worker password-recovery-worker test-policy-runner \
+  stop_remove_services caddy probe-worker assistant-runner password-recovery-worker test-policy-runner \
     connector-poll-scheduler connector-poll-runner control-plane
 }
 

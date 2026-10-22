@@ -8,6 +8,10 @@ const MAX_MAX_TOKENS = 32768;
 const MAX_TIMEOUT_SECONDS = 240;
 const MAX_RESPONSE_BYTES = 2_000_000;
 const MODEL_PATTERN = /^[a-z0-9][a-z0-9._:/-]{1,80}$/i;
+const HEADER_NAME_PATTERN = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
+const HEADER_VALUE_PATTERN = /^[\x20-\x7e]{1,256}$/;
+const MAX_STATIC_HEADERS = 8;
+const RESERVED_HEADERS = new Set(['authorization', 'host', 'content-type', 'content-length', 'cookie', 'transfer-encoding', 'connection']);
 const SEARCH_UNAVAILABLE_NOTE = '\n\nWeb search and page browsing are not available in this session. Answer from general knowledge, do not claim to have searched, and do not invent URLs; name the vendor documentation section to check instead.';
 
 export function resolveRunnerBackend(env = process.env) {
@@ -58,6 +62,30 @@ async function readApiKey(env) {
   return key;
 }
 
+export function parseStaticHeaders(raw) {
+  const source = String(raw ?? '').trim();
+  if (!source) return Object.freeze({});
+  let parsed;
+  try {
+    parsed = JSON.parse(source);
+  } catch {
+    throw new Error('ASTRANULL_ASSISTANT_LLM_HEADERS must be a JSON object of string values.');
+  }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('ASTRANULL_ASSISTANT_LLM_HEADERS must be a JSON object of string values.');
+  const entries = Object.entries(parsed);
+  if (entries.length > MAX_STATIC_HEADERS) throw new Error(`ASTRANULL_ASSISTANT_LLM_HEADERS allows at most ${MAX_STATIC_HEADERS} headers.`);
+  const headers = new Map();
+  for (const [name, value] of entries) {
+    const key = name.toLowerCase();
+    if (!HEADER_NAME_PATTERN.test(name)) throw new Error('ASTRANULL_ASSISTANT_LLM_HEADERS contains an invalid header name.');
+    if (RESERVED_HEADERS.has(key)) throw new Error('ASTRANULL_ASSISTANT_LLM_HEADERS contains a reserved header name.');
+    if (headers.has(key)) throw new Error('ASTRANULL_ASSISTANT_LLM_HEADERS contains a duplicate header name.');
+    if (typeof value !== 'string' || !HEADER_VALUE_PATTERN.test(value)) throw new Error('ASTRANULL_ASSISTANT_LLM_HEADERS values must be printable ASCII strings of 1 to 256 characters.');
+    headers.set(key, value);
+  }
+  return Object.freeze(Object.fromEntries(headers));
+}
+
 export async function resolveOpenAiConfig(env = process.env) {
   const baseUrl = parseLlmBaseUrl(env.ASTRANULL_ASSISTANT_LLM_BASE_URL);
   const model = String(env.ASTRANULL_ASSISTANT_LLM_MODEL ?? '').trim() || DEFAULT_OPENAI_MODEL;
@@ -67,6 +95,7 @@ export async function resolveOpenAiConfig(env = process.env) {
     origin: baseUrl.origin,
     model,
     apiKey: await readApiKey(env),
+    headers: parseStaticHeaders(env.ASTRANULL_ASSISTANT_LLM_HEADERS),
     maxTokens: boundedInteger(env.ASTRANULL_ASSISTANT_LLM_MAX_TOKENS, DEFAULT_MAX_TOKENS, MIN_MAX_TOKENS, MAX_MAX_TOKENS, 'ASTRANULL_ASSISTANT_LLM_MAX_TOKENS'),
     timeoutCapSeconds: boundedInteger(env.ASTRANULL_ASSISTANT_LLM_TIMEOUT_SECONDS, MAX_TIMEOUT_SECONDS, 5, MAX_TIMEOUT_SECONDS, 'ASTRANULL_ASSISTANT_LLM_TIMEOUT_SECONDS'),
   });
@@ -110,7 +139,7 @@ async function requestOnce(config, prompt, signal) {
   try {
     response = await fetch(config.endpoint, {
       method: 'POST',
-      headers: { authorization: `Bearer ${config.apiKey}`, 'content-type': 'application/json', accept: 'application/json' },
+      headers: { ...config.headers, authorization: `Bearer ${config.apiKey}`, 'content-type': 'application/json', accept: 'application/json' },
       body: JSON.stringify({ model: config.model, messages: [{ role: 'user', content: prompt }], max_tokens: config.maxTokens, stream: false }),
       redirect: 'error',
       signal,
