@@ -133,9 +133,9 @@ describe('one customer presentation', () => {
     assert.match(refined, /showVariantSwitch=\{false\}/);
   });
 
-  it('mounts the inspector host only inside the authenticated shell', () => {
+  it('mounts the inspector host only inside an authenticated customer shell', () => {
     const app = read('apps/web/react/src/App.tsx');
-    assert.match(app, /\{session \? \(\s*<EvidenceInspectorHost/);
+    assert.match(app, /\{session && activeSession\.principal !== 'staff' \? \(\s*<EvidenceInspectorHost/);
     assert.ok(app.indexOf('<EvidenceInspectorHost') > app.indexOf('<AppShell'), 'host renders after the shell, never on public pages');
   });
 

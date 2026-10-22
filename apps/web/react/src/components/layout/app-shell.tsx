@@ -1,5 +1,5 @@
 import { Globe, LogOut, Menu, Moon, PanelLeftClose, PanelLeftOpen, ShieldUser, Sun, UserRound, X } from 'lucide-react';
-import type { ReactNode, Ref } from 'react';
+import type { MouseEvent, ReactNode, Ref } from 'react';
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { clearSession } from '../../lib/api';
 import { NAV_GROUP_LABELS, NAV_ITEMS, ROUTE_BY_ID, routeCrumb, type RouteCrumb } from '../../lib/navigation';
@@ -363,6 +363,11 @@ export function AppShell({
     setTheme(next);
   }
 
+  function skipToMain(event: MouseEvent<HTMLAnchorElement>) {
+    event.preventDefault();
+    mainRef.current?.focus();
+  }
+
   function toggleSidebarCollapsed() {
     setSidebarCollapsed((currentValue) => {
       const next = !currentValue;
@@ -391,7 +396,7 @@ export function AppShell({
 
   return (
     <div className={cn('app-shell', sidebarCollapsed && 'sidebar-collapsed')}>
-      <a className="skip-link" href="#portal-main">Skip to main content</a>
+      <a className="skip-link" href="#portal-main" onClick={skipToMain}>Skip to main content</a>
       <aside
         id="portal-navigation"
         ref={sidebarRef}

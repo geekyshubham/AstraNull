@@ -301,6 +301,14 @@ export function FindingDetailView({
   const openInspector = useOpenInspector();
   const inspected = useInspectorRef();
 
+  useEffect(() => {
+    const syncRetestReview = () => {
+      if (getRouteParam('retest') === 'review') setRetestReview(true);
+    };
+    window.addEventListener('hashchange', syncRetestReview);
+    return () => window.removeEventListener('hashchange', syncRetestReview);
+  }, []);
+
   const remediation = readFindingRemediationFields(entity, data.wafActionItems);
   const canWriteFinding = sessionHasPermission(session, 'finding:write');
   const canAcceptRisk = sessionHasPermission(session, 'finding:accept_risk');
