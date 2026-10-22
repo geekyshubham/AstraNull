@@ -2,7 +2,7 @@ import '../helpers/dev-data-dir.mjs';
 import assert from 'node:assert/strict';
 import { test, beforeEach } from 'node:test';
 import { freshStore } from '../helpers/reset.mjs';
-import { statSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 import { getStore, persistStore, resolveDataFile } from '../../src/store.mjs';
 import { createTargetDirect, importTargets } from '../../src/services/targetGroups.mjs';
 import { devInitialEdgeDetections } from '../../src/services/initialEdgeDetections.mjs';
@@ -54,14 +54,19 @@ test('idle dispatch ticks leave the dev store file untouched while real claims p
   try {
     const target = createTargetDirect(ctx, { kind: 'fqdn', value: 'idle.test' });
     persistStore();
-    const before = statSync(resolveDataFile()).ino;
+    const stored = () => JSON.parse(readFileSync(resolveDataFile(), 'utf8')).initialEdgeDetections.find((row) => row.target_id === target.id);
+    const identity = () => {
+      const { ino, ctimeNs, mtimeNs } = statSync(resolveDataFile(), { bigint: true });
+      return `${ino}:${ctimeNs}:${mtimeNs}`;
+    };
+    const attemptsBefore = stored().attempts;
     const later = new Date(Date.now() + 31_000);
     const claimed = await devInitialEdgeDetections.dispatchPending(ctx, { runtimeConfig, now: later });
     assert.deepEqual(claimed.map((row) => row.target_id), [target.id]);
-    const afterClaim = statSync(resolveDataFile()).ino;
-    assert.notEqual(afterClaim, before, 'a claimed lease is durably persisted');
+    assert.equal(stored().attempts, attemptsBefore + 1, 'a claimed lease is durably persisted');
+    const afterClaim = identity();
     assert.deepEqual(await devInitialEdgeDetections.dispatchPending(ctx, { runtimeConfig, now: later }), []);
-    assert.equal(statSync(resolveDataFile()).ino, afterClaim, 'an idle tick performs no store write');
+    assert.equal(identity(), afterClaim, 'an idle tick performs no store write');
   } finally {
     if (oldNoPersist === undefined) delete process.env.ASTRANULL_NO_PERSIST; else process.env.ASTRANULL_NO_PERSIST = oldNoPersist;
     if (oldMode === undefined) delete process.env.ASTRANULL_PERSISTENCE_MODE; else process.env.ASTRANULL_PERSISTENCE_MODE = oldMode;
