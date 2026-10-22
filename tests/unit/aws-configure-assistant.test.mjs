@@ -72,7 +72,7 @@ describe('configure-assistant.sh', () => {
     git('commit', '-q', '-m', 'init');
     sha = git('rev-parse', 'HEAD').stdout.trim();
     mkdirSync(path.join(work, 'bin'));
-    writeFileSync(path.join(work, 'bin/stat'), FAKE_STAT, { mode: 0o755 });
+    if (process.platform === 'darwin') writeFileSync(path.join(work, 'bin/stat'), FAKE_STAT, { mode: 0o755 });
   });
   after(() => {
     for (const file of created) rmSync(file, { force: true });

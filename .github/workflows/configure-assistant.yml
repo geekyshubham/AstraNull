@@ -90,11 +90,11 @@ jobs:
           [[ "$LLM_HEADERS" =~ $headers_pattern && ${#LLM_HEADERS} -le 900 ]]
           if [[ -n "$LLM_HEADERS" ]]; then
             LLM_HEADERS_JSON="$LLM_HEADERS" python3 -I -c 'import json,os,re,sys
-h=json.loads(os.environ["LLM_HEADERS_JSON"])
-bad={"authorization","host","content-type","content-length","cookie","transfer-encoding","connection"}
-n=[k.lower() for k in h] if isinstance(h,dict) else sys.exit(1)
-ok=len(h)<=8 and len(set(n))==len(n) and all(k not in bad and re.fullmatch(r"[!#$%&\x27*+.^_`|~0-9A-Za-z-]+",k) for k in n) and all(isinstance(v,str) and re.fullmatch(r"[\x20-\x7e]{1,256}",v) for v in h.values())
-sys.exit(0 if ok else 1)'
+          h=json.loads(os.environ["LLM_HEADERS_JSON"])
+          bad={"authorization","host","content-type","content-length","cookie","transfer-encoding","connection"}
+          n=[k.lower() for k in h] if isinstance(h,dict) else sys.exit(1)
+          ok=len(h)<=8 and len(set(n))==len(n) and all(k not in bad and re.fullmatch(r"[!#$%&\x27*+.^_`|~0-9A-Za-z-]+",k) for k in n) and all(isinstance(v,str) and re.fullmatch(r"[\x20-\x7e]{1,256}",v) for v in h.values())
+          sys.exit(0 if ok else 1)'
           fi
           if [[ "$ASSISTANT_ENABLED" == 1 ]]; then [[ "$RUNNER_TOKEN" =~ ^[A-Za-z0-9_-]{32,256}$ ]]; fi
           if [[ "$ASSISTANT_ENABLED" == 1 && "$ASSISTANT_BACKEND" == openai ]]; then
