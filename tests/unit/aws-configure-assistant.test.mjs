@@ -156,6 +156,13 @@ describe('configure-assistant.sh', () => {
   it('rejects invalid nonsecret inputs before the deploy library is sourced', () => {
     const cases = [
       { baseUrl: 'http://opencode.ai/zen/go/v1' },
+      { baseUrl: 'https://evil.example.com/zen/go/v1' },
+      { baseUrl: 'https://opencode.ai.evil.example.com/zen/go/v1' },
+      { baseUrl: 'https://203.0.113.9/zen/go/v1' },
+      { baseUrl: 'https://opencode.ai:8443/zen/go/v1' },
+      { baseUrl: 'https://opencode.ai/zen/go/v1/' },
+      { baseUrl: 'https://opencode.ai/other' },
+      { baseUrl: 'HTTPS://OPENCODE.AI/zen/go/v1' },
       { baseUrl: 'https://user:pw@opencode.ai/v1' },
       { baseUrl: 'https://opencode.ai/v1?key=1' },
       { baseUrl: 'https://opencode.ai/v1#frag' },
@@ -230,14 +237,16 @@ describe('configure-assistant.sh', () => {
 
 describe('configure-assistant workflow', () => {
   it('passes the new settings only through env and sends both secrets on stdin', () => {
-    assert.match(WORKFLOW, /llm_base_url:[\s\S]*default: https:\/\/opencode\.ai\/zen\/go\/v1/);
+    assert.doesNotMatch(WORKFLOW, /llm_base_url/);
+    assert.match(WORKFLOW, /llm_provider:[\s\S]*options: \['opencode-go'\]/);
+    assert.match(WORKFLOW, /LLM_BASE_URL=https:\/\/opencode\.ai\/zen\/go\/v1/);
+    assert.match(WORKFLOW, /"transfer-encoding"/);
     assert.match(WORKFLOW, /llm_headers:[\s\S]*default: '\{"User-Agent":"astranull-assistant-runner\/1\.0","x-opencode-session":"astranull-production"\}'/);
     assert.match(WORKFLOW, /LLM_API_KEY: \$\{\{ secrets\.ASTRANULL_ASSISTANT_LLM_API_KEY \}\}/);
     const runBlock = WORKFLOW.slice(WORKFLOW.indexOf('run: |'));
     assert.doesNotMatch(runBlock, /\$\{\{/);
     assert.match(runBlock, /printf '%s\\n%s\\n' "\$\{RUNNER_TOKEN:-\}" "\$\{LLM_API_KEY:-\}" \| timeout/);
     assert.doesNotMatch(runBlock, /bash '\$remote_deploy'/);
-    assert.match(runBlock, /LLM_BASE_URL.*=~/);
     assert.match(runBlock, /headers_pattern=/);
   });
 });

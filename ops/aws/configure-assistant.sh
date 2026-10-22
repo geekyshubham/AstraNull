@@ -28,7 +28,7 @@ LLM_HEADERS=${10}
 [[ "$ASSISTANT_TENANTS" =~ ^(\*|[a-z0-9_]{1,64}(,[a-z0-9_]{1,64}){0,49})?$ ]] || { echo 'assistant: tenants must be *, empty or a comma list of tenant ids' >&2; exit 1; }
 [[ -z "$ASSISTANT_MODEL" || "$ASSISTANT_MODEL" =~ ^[a-z0-9][a-z0-9._-]{1,80}$ ]] || { echo 'assistant: invalid model name' >&2; exit 1; }
 [[ "$ASSISTANT_BACKEND" =~ ^(agy|openai)?$ ]] || { echo 'assistant: runner backend must be agy, openai or empty' >&2; exit 1; }
-[[ "$LLM_BASE_URL" =~ ^(https://[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?(:[0-9]{1,5})?(/[A-Za-z0-9._~/-]{0,200})?)?$ ]] || { echo 'assistant: LLM base URL must be empty or an https URL without credentials, query or fragment' >&2; exit 1; }
+[[ -z "$LLM_BASE_URL" || "$LLM_BASE_URL" == 'https://opencode.ai/zen/go/v1' ]] || { echo 'assistant: LLM base URL must be empty or exactly https://opencode.ai/zen/go/v1' >&2; exit 1; }
 [[ -z "$LLM_MODEL" || "$LLM_MODEL" =~ ^[A-Za-z0-9][A-Za-z0-9._:/-]{1,80}$ ]] || { echo 'assistant: invalid LLM model name' >&2; exit 1; }
 headers_pattern='^(\{[A-Za-z0-9 ":,._/;=+@()-]+\})?$'
 [[ "$LLM_HEADERS" =~ $headers_pattern && ${#LLM_HEADERS} -le 900 ]] || { echo 'assistant: LLM headers must be empty or a JSON object of plain printable text' >&2; exit 1; }

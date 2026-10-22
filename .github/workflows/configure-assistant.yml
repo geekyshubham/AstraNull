@@ -26,11 +26,11 @@ on:
         required: true
         type: choice
         options: ['openai', 'agy']
-      llm_base_url:
-        description: OpenAI-compatible base URL the runner container calls (https only)
-        required: false
-        type: string
-        default: https://opencode.ai/zen/go/v1
+      llm_provider:
+        description: OpenAI-compatible provider the runner calls (fixed base URL per provider)
+        required: true
+        type: choice
+        options: ['opencode-go']
       llm_model:
         description: Model name sent to the OpenAI-compatible API
         required: false
@@ -72,7 +72,7 @@ jobs:
           ASSISTANT_TENANTS: ${{ inputs.tenants }}
           ASSISTANT_MODEL: ${{ inputs.model }}
           ASSISTANT_BACKEND: ${{ inputs.backend }}
-          LLM_BASE_URL: ${{ inputs.llm_base_url }}
+          LLM_PROVIDER: ${{ inputs.llm_provider }}
           LLM_MODEL: ${{ inputs.llm_model }}
           LLM_HEADERS: ${{ inputs.llm_headers }}
         run: |
@@ -83,10 +83,19 @@ jobs:
           [[ "$ASSISTANT_TENANTS" =~ ^(\*|[a-z0-9_]{1,64}(,[a-z0-9_]{1,64}){0,49})?$ ]]
           [[ -z "$ASSISTANT_MODEL" || "$ASSISTANT_MODEL" =~ ^[a-z0-9][a-z0-9._-]{1,80}$ ]]
           [[ "$ASSISTANT_BACKEND" =~ ^(agy|openai)$ ]]
-          [[ "$LLM_BASE_URL" =~ ^(https://[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?(:[0-9]{1,5})?(/[A-Za-z0-9._~/-]{0,200})?)?$ ]]
+          [[ "$LLM_PROVIDER" == opencode-go ]]
+          LLM_BASE_URL=https://opencode.ai/zen/go/v1
           [[ -z "$LLM_MODEL" || "$LLM_MODEL" =~ ^[A-Za-z0-9][A-Za-z0-9._:/-]{1,80}$ ]]
           headers_pattern='^(\{[A-Za-z0-9 ":,._/;=+@()-]{1,900}\})?$'
-          [[ "$LLM_HEADERS" =~ $headers_pattern ]]
+          [[ "$LLM_HEADERS" =~ $headers_pattern && ${#LLM_HEADERS} -le 900 ]]
+          if [[ -n "$LLM_HEADERS" ]]; then
+            LLM_HEADERS_JSON="$LLM_HEADERS" python3 -I -c 'import json,os,re,sys
+h=json.loads(os.environ["LLM_HEADERS_JSON"])
+bad={"authorization","host","content-type","content-length","cookie","transfer-encoding","connection"}
+n=[k.lower() for k in h] if isinstance(h,dict) else sys.exit(1)
+ok=len(h)<=8 and len(set(n))==len(n) and all(k not in bad and re.fullmatch(r"[!#$%&\x27*+.^_`|~0-9A-Za-z-]+",k) for k in n) and all(isinstance(v,str) and re.fullmatch(r"[\x20-\x7e]{1,256}",v) for v in h.values())
+sys.exit(0 if ok else 1)'
+          fi
           if [[ "$ASSISTANT_ENABLED" == 1 ]]; then [[ "$RUNNER_TOKEN" =~ ^[A-Za-z0-9_-]{32,256}$ ]]; fi
           if [[ "$ASSISTANT_ENABLED" == 1 && "$ASSISTANT_BACKEND" == openai ]]; then
             [[ -n "$LLM_BASE_URL" && "$LLM_API_KEY" =~ ^[A-Za-z0-9._~+/=-]{16,512}$ ]]
