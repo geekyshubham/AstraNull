@@ -5,7 +5,7 @@ import http from 'node:http';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { after, afterEach, before, describe, it } from 'node:test';
-import { createOpenAiStepRunner, parseLlmBaseUrl, resolveOpenAiConfig, resolveRunnerBackend } from '../../workers/assistant-openai-backend.mjs';
+import { createOpenAiStepRunner, parseLlmBaseUrl, parseStaticHeaders, resolveOpenAiConfig, resolveRunnerBackend } from '../../workers/assistant-openai-backend.mjs';
 import { runAssistantJob } from '../../workers/assistant-runner.mjs';
 
 const KEY = 'sk-test-synthetic-key-0123456789';
@@ -28,7 +28,7 @@ describe('openai-compatible backend', () => {
       req.on('data', (chunk) => { body += chunk; });
       req.on('end', () => {
         const parsed = body ? JSON.parse(body) : {};
-        requests.push({ url: req.url, auth: req.headers.authorization, body: parsed });
+        requests.push({ url: req.url, auth: req.headers.authorization, headers: req.headers, body: parsed });
         handler(req, res, parsed);
       });
     });
@@ -201,6 +201,49 @@ describe('openai-compatible backend', () => {
     await assert.rejects(config({ ASTRANULL_ASSISTANT_LLM_MAX_TOKENS: '10' }), /MAX_TOKENS/);
     await assert.rejects(config({ ASTRANULL_ASSISTANT_LLM_TIMEOUT_SECONDS: '9999' }), /TIMEOUT_SECONDS/);
     await assert.rejects(config({ ASTRANULL_ASSISTANT_LLM_MODEL: 'bad model;rm' }), /MODEL/);
+  });
+
+  it('sends validated static headers while keeping bearer auth and content type authoritative', async () => {
+    requests = [];
+    handler = reply(200, completion('ok'));
+    const headers = JSON.stringify({ 'User-Agent': 'astranull-assistant-runner/1.0', 'x-opencode-session': 'astranull-production' });
+    const out = await runAssistantJob(job, await step({ ASTRANULL_ASSISTANT_LLM_HEADERS: headers }));
+    assert.equal(out.status, 'done');
+    assert.equal(requests[0].headers['user-agent'], 'astranull-assistant-runner/1.0');
+    assert.equal(requests[0].headers['x-opencode-session'], 'astranull-production');
+    assert.equal(requests[0].auth, `Bearer ${KEY}`);
+    assert.equal(requests[0].headers['content-type'], 'application/json');
+  });
+
+  it('sends no extra headers when none are configured', async () => {
+    assert.deepEqual((await config()).headers, {});
+    assert.deepEqual(parseStaticHeaders('  '), {});
+  });
+
+  it('rejects unsafe static headers without echoing their values', () => {
+    const secretValue = 'value-that-must-not-leak';
+    const bad = [
+      '{',
+      '[]',
+      'null',
+      '"x"',
+      JSON.stringify({ 'bad name': 'v' }),
+      JSON.stringify({ '': 'v' }),
+      JSON.stringify({ 'x-a': 1 }),
+      JSON.stringify({ 'x-a': '' }),
+      JSON.stringify({ 'x-a': 'line\nbreak' }),
+      JSON.stringify({ 'x-a': 'caf\u00e9' }),
+      JSON.stringify({ 'x-a': 'a'.repeat(257) }),
+      JSON.stringify({ 'x-a': 'v', 'X-A': 'w' }),
+      JSON.stringify(Object.fromEntries(Array.from({ length: 9 }, (_, index) => [`x-h${index}`, 'v']))),
+      ...['Authorization', 'HOST', 'Content-Type', 'content-length', 'Cookie', 'Transfer-Encoding', 'CONNECTION'].map((name) => JSON.stringify({ [name]: secretValue })),
+    ];
+    for (const raw of bad) {
+      assert.throws(() => parseStaticHeaders(raw), (error) => /ASTRANULL_ASSISTANT_LLM_HEADERS/.test(error.message) && !error.message.includes(secretValue), raw.slice(0, 40));
+    }
+    const eight = Object.fromEntries(Array.from({ length: 8 }, (_, index) => [`x-h${index}`, 'v']));
+    assert.equal(Object.keys(parseStaticHeaders(JSON.stringify(eight))).length, 8);
+    assert.equal(parseStaticHeaders(JSON.stringify({ 'X-Mixed-Case': 'a b' }))['x-mixed-case'], 'a b');
   });
 
   it('keeps agy as the default backend', () => {
