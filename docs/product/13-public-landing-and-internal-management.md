@@ -15,8 +15,8 @@ Customers must not see, navigate to, or depend on the internal management plane.
 | Area | In scope | Out of scope |
 |---|---|---|
 | Public landing | Brand, product positioning, no-access-first promise, sign-up and login redirects | Exposing authenticated product data or internal management links |
-| Customer portal | Tenant-scoped onboarding, target groups, agents, safe runs, findings, reports, settings, high-scale request submission | Customer approval/execution of high-scale tests or internal subscription controls |
-| Internal management | Staff tenant administration, subscription and entitlement management, user support, request queues, SOC approval/rejection, audit review | Customer-facing self-service execution of SOC-gated workflows |
+| Customer portal | Tenant-scoped onboarding, target groups, agents, safe runs, findings, reports, settings, high-scale request submission and start | Internal subscription controls |
+| Internal management | Staff tenant administration, subscription and entitlement management, user support, request queues, SOC approval/rejection records, audit review | — (customers self-serve every check) |
 | SOC operations | High-scale approval, rejection, scheduling, monitoring, stop, closure | Unmanaged traffic generation or bypassing authorization packs |
 
 ## Surface Split
@@ -41,7 +41,7 @@ The landing page is the unauthenticated entry point. It should be lightweight, c
 | First viewport | Show the AstraNull name and no-access-first DDoS readiness promise. |
 | Primary action | `Sign up` routes to sign-up intake or external registration. |
 | Secondary action | `Log in` routes to the configured identity provider. |
-| Trust framing | Explain customer-declared scope, outbound-only agents, evidence-backed verdicts, and SOC-gated high-scale validation. |
+| Trust framing | Explain customer-declared scope, outbound-only agents, evidence-backed verdicts, and governed high-scale validation. |
 | Safety framing | State that AstraNull does not require default cloud access, does not auto-discover IP inventory, and does not provide self-service high-scale attack tooling. |
 | Customer separation | Do not mention or link to internal management pages. |
 | Telemetry | Track only privacy-safe page and conversion events; no sensitive target or infrastructure data. |
@@ -117,7 +117,7 @@ The internal management plane owns queues for customer-submitted requests that r
 | Optional connector enablement | Internal admin / security reviewer | Approve or reject based on plan, security posture, and customer authorization. |
 | Data export/legal hold | Security admin / compliance | Approve, reject, apply retention/legal hold. |
 
-High-scale validation remains governed by the existing SOC workflow. Internal management may show the queue and customer/account context, but execution controls stay SOC-role gated.
+High-scale validation keeps the existing SOC workflow as provenance. Internal management may show the queue and customer/account context; execution controls are open to every authenticated role.
 
 ## Internal Roles
 
@@ -212,7 +212,7 @@ All records must be tenant-scoped when they reference a customer tenant. Staff r
 - Customer portal has no internal management links and customer auth cannot access `/internal/admin` or `/internal/soc`.
 - Internal management uses staff-only roles distinct from customer tenant roles.
 - Tenant lifecycle and subscription changes are audited and enforced by backend services.
-- SOC high-scale approvals remain SOC-role gated and cannot be executed by customer or generic admin roles.
+- SOC high-scale approvals are open to every authenticated role; the approval still records the named approver.
 - Tests cover public route access, internal route denial for customers, staff RBAC, approval state transitions, subscription entitlement enforcement, audit logging, and safe error states.
 
 ## Implementation Checklist

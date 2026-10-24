@@ -324,9 +324,14 @@ describe('typed target declarations', () => {
     assert.equal(detail.waf_posture.fingerprint.score, null);
     assert.equal(detail.waf_posture.fingerprint.score_status, 'not_recorded');
     assert.equal(detail.waf_posture.posture, 'unknown');
-    assert.equal(detail.waf_posture.connector, null);
-    assert.equal(detail.waf_posture.raw_context_yaml, null);
-    assert.equal(detail.waf_posture.configuration_access, 'redacted');
+    // Feature flags no longer gate connector configuration; only the role permission does.
+    assert.equal(detail.waf_posture.connector.id, 'conn_scope');
+    assert.equal(detail.waf_posture.connector.state, 'degraded');
+    assert.equal(typeof detail.waf_posture.raw_context_yaml, 'string');
+    assert.equal(detail.waf_posture.raw_context_yaml.includes('stored-secret'), false);
+    assert.equal(detail.waf_posture.raw_context_yaml.includes('[redacted]'), true);
+    assert.equal(detail.waf_posture.configuration_access, 'allowed');
+    assert.equal(detail.waf_posture.configuration_disabled_reason, null);
     assert.equal(detail.waf_posture.profiles.core_fingerprint, 'independent');
     assert.equal(JSON.stringify(detail.waf_posture).includes('stored-secret'), false);
     assert.equal(JSON.stringify(detail.waf_posture).includes('sec_1'), false);
@@ -565,10 +570,12 @@ describe('protection profile derivation', () => {
       ],
     });
     const pairs = mixed.coverage.pairs;
-    assert.equal(pairs.some((pair) => pair.check_id === 'soc.hidden'), false);
+    // SOC request markers are applicable now; they simply have no observation yet.
+    assert.equal(pairs.find((pair) => pair.check_id === 'soc.hidden').state, 'not_run');
     assert.equal(pairs.some((pair) => pair.check_id === 'ip.only'), false);
-    assert.equal(pairs.find((pair) => pair.check_id === 'setup.excluded').state, 'excluded');
-    assert.equal(pairs.find((pair) => pair.check_id === 'setup.excluded').exclusion_reason, 'setup_required');
+    // Required customer setup is advisory now, so this check is applicable but unobserved.
+    assert.equal(pairs.find((pair) => pair.check_id === 'setup.excluded').state, 'not_run');
+    assert.equal(pairs.find((pair) => pair.check_id === 'setup.excluded').exclusion_reason, null);
     assert.equal(pairs.find((pair) => pair.check_id === 'app.ok').state, 'conclusive');
     assert.equal(pairs.find((pair) => pair.check_id === 'app.ok').live_external, true);
     assert.equal(pairs.find((pair) => pair.check_id === 'app.ok').policy_binding, 'bound');
@@ -576,14 +583,14 @@ describe('protection profile derivation', () => {
     assert.equal(pairs.find((pair) => pair.check_id === 'app.stale').prior_state, 'conclusive');
     assert.equal(pairs.find((pair) => pair.check_id === 'net.inconclusive').state, 'inconclusive');
     assert.equal(pairs.find((pair) => pair.check_id === 'dns.not_run').state, 'not_run');
-    assert.equal(mixed.coverage.applicable_count, 4);
+    assert.equal(mixed.coverage.applicable_count, 6);
     assert.equal(mixed.coverage.evaluated_count, 3);
     assert.equal(mixed.coverage.conclusive_count, 1);
     assert.equal(mixed.coverage.inconclusive_count, 1);
-    assert.equal(mixed.coverage.not_run_count, 1);
+    assert.equal(mixed.coverage.not_run_count, 3);
     assert.equal(mixed.coverage.stale_count, 1);
-    assert.equal(mixed.coverage.excluded_count, 1);
-    assert.equal(mixed.coverage.percentage, 25);
+    assert.equal(mixed.coverage.excluded_count, 0);
+    assert.equal(mixed.coverage.percentage, 17);
     const application = mixed.protection_profile.dimensions.find((item) => item.id === 'application');
     assert.equal(application.conclusive_count + application.stale_count, 2);
     assert.equal(application.status, 'partial');

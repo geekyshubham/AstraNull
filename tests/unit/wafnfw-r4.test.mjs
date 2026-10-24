@@ -3,7 +3,7 @@ import '../helpers/dev-data-dir.mjs';
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { getCheckById, checkRequiresAdditionalInput, targetInputRefusal } from '../../src/contracts/checks.mjs';
+import { getCheckById, checkRequiresAdditionalInput, targetInputRefusal, rawTargetInputRefusal } from '../../src/contracts/checks.mjs';
 import { normalizeControlDeclarations } from '../../src/contracts/controlDeclarations.mjs';
 import { catalogRuleCoverage } from '../../src/contracts/ruleCoverage.mjs';
 import { sanitizeProbeMetadata } from '../../workers/probe-worker.mjs';
@@ -279,19 +279,19 @@ describe('R4 Verifier round-3 regression tests', () => {
   });
 
   describe('Item 7: F07 class forbidden port checks', () => {
-    it('l3.forbidden_tcp_port.safe requires port_or_declared_tcp_deny', () => {
+    it('l3.forbidden_tcp_port.safe declares port_or_declared_tcp_deny but never blocks', () => {
       const check = getCheckById('l3.forbidden_tcp_port.safe');
       assert.deepEqual(check.runnable_requires, ['port_or_declared_tcp_deny']);
-      assert.equal(checkRequiresAdditionalInput(check, { kind: 'fqdn', value: 'example.com' }), true);
-      assert.equal(targetInputRefusal(check, { kind: 'fqdn', value: 'example.com' })?.error, 'port_or_declared_deny_required');
+      assert.equal(checkRequiresAdditionalInput(check, { kind: 'fqdn', value: 'example.com' }), false);
+      assert.equal(targetInputRefusal(check, { kind: 'fqdn', value: 'example.com' }), null);
       assert.equal(checkRequiresAdditionalInput(check, { kind: 'tcp', value: 'example.com:22', port: 22 }), false);
     });
 
-    it('l3.forbidden_udp_port.safe requires port_or_declared_udp_deny', () => {
+    it('l3.forbidden_udp_port.safe declares port_or_declared_udp_deny but never blocks', () => {
       const check = getCheckById('l3.forbidden_udp_port.safe');
       assert.deepEqual(check.runnable_requires, ['port_or_declared_udp_deny']);
-      assert.equal(checkRequiresAdditionalInput(check, { kind: 'fqdn', value: 'example.com' }), true);
-      assert.equal(targetInputRefusal(check, { kind: 'fqdn', value: 'example.com' })?.error, 'port_or_declared_deny_required');
+      assert.equal(checkRequiresAdditionalInput(check, { kind: 'fqdn', value: 'example.com' }), false);
+      assert.equal(targetInputRefusal(check, { kind: 'fqdn', value: 'example.com' }), null);
       assert.equal(checkRequiresAdditionalInput(check, { kind: 'udp', value: 'example.com:53', port: 53 }), false);
     });
   });
@@ -363,25 +363,25 @@ describe('R4 Verifier round-3 regression tests', () => {
     });
   });
 
-  describe('Item 11: Pure catalog contract targetInputRefusal origin binding validation', () => {
+  describe('Item 11: raw catalog contract origin binding validation', () => {
     const check = getCheckById('nfw.origin_lockdown.safe');
     const target = { id: 'tgt_fqdn', kind: 'fqdn', value: 'app.example.com' };
     const declarations = { origin: { lockdown_expected: true } };
 
-    it('refuses with origin_binding_required when originBindings is omitted or empty', () => {
-      const omitted = targetInputRefusal(check, target, declarations);
+    it('rawTargetInputRefusal refuses with origin_binding_required when originBindings is omitted or empty', () => {
+      const omitted = rawTargetInputRefusal(check, target, declarations);
       assert.equal(omitted?.error, 'origin_binding_required');
       assert.equal(omitted?.status, 409);
-      assert.equal(checkRequiresAdditionalInput(check, { target, declarations }), true);
+      assert.equal(targetInputRefusal(check, target, declarations), null);
 
-      const empty = targetInputRefusal(check, target, declarations, { originBindings: [] });
+      const empty = rawTargetInputRefusal(check, target, declarations, { originBindings: [] });
       assert.equal(empty?.error, 'origin_binding_required');
       assert.equal(empty?.status, 409);
-      assert.equal(checkRequiresAdditionalInput(check, { target, declarations, originBindings: [] }), true);
+      assert.equal(targetInputRefusal(check, target, declarations, { originBindings: [] }), null);
     });
 
-    it('refuses when binding is unverified or inactive', () => {
-      const inactive = targetInputRefusal(check, target, declarations, {
+    it('rawTargetInputRefusal refuses when binding is unverified or inactive', () => {
+      const inactive = rawTargetInputRefusal(check, target, declarations, {
         originBindings: [{
           id: 'b1', tenant_id: 'ten_1', protected_target_id: 'tgt_fqdn', origin_target_id: 'tgt_ip',
           status: 'pending', verification_state: 'verified',
@@ -390,7 +390,7 @@ describe('R4 Verifier round-3 regression tests', () => {
       assert.equal(inactive?.error, 'origin_binding_required');
       assert.equal(inactive?.status, 409);
 
-      const unverified = targetInputRefusal(check, target, declarations, {
+      const unverified = rawTargetInputRefusal(check, target, declarations, {
         originBindings: [{
           id: 'b1', tenant_id: 'ten_1', protected_target_id: 'tgt_fqdn', origin_target_id: 'tgt_ip',
           status: 'active', verification_state: 'unverified',
@@ -401,7 +401,7 @@ describe('R4 Verifier round-3 regression tests', () => {
     });
 
     it('allows when exactly one active verified binding is supplied', () => {
-      const allowed = targetInputRefusal(check, target, declarations, {
+      const allowed = rawTargetInputRefusal(check, target, declarations, {
         originBindings: [{
           id: 'b1', tenant_id: 'ten_1', protected_target_id: 'tgt_fqdn', origin_target_id: 'tgt_ip',
           status: 'active', verification_state: 'verified',

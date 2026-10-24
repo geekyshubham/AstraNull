@@ -1,8 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { scanIncludesTarget, scanTargetIds } from '../lib/targetExecutionScope.mjs';
 import { audit } from '../audit.mjs';
-import { isExplicitDemoTenant } from '../lib/demoAutoVerify.mjs';
-import { customerSelectableChecks, getCheckById, isCustomerRunnable, targetInputRefusal } from '../contracts/checks.mjs';
+import { customerSelectableChecks, getCheckById, targetInputRefusal } from '../contracts/checks.mjs';
 import {
   ACTIVE_SCAN_STATUSES,
   ACTIVE_STEP_STATUSES,
@@ -32,7 +31,7 @@ import { newId } from '../lib/ids.mjs';
 import { getStore, persistStore } from '../store.mjs';
 import { isKillSwitchActiveForTenant } from './killSwitchState.mjs';
 import { registerRunTerminalHook } from './runTerminalHooks.mjs';
-import { isWithinSafeTestWindow, normalizeSafetyPolicy } from './safeTestPolicy.mjs';
+import { normalizeSafetyPolicy } from './safeTestPolicy.mjs';
 import { getTenantAccount } from './subscriptions.mjs';
 import { activeTargetGroupsForTenant, isArchivedTarget } from './targetGroups.mjs';
 import { cancelTestRun, getTestRun, startTestRun } from './testRuns.mjs';
@@ -142,9 +141,6 @@ function resolveChecks(checkIds, ctx) {
   for (const checkId of checkIds) {
     const check = getCheckById(checkId);
     if (!check) return { error: 'unknown_check', status: 400, check_id: checkId };
-    if (!isCustomerRunnable(check, ctx)) {
-      return { error: 'soc_gated_check', status: 403, check_id: checkId, message: 'This check requires SOC governance.' };
-    }
     if (!selectable.has(checkId)) {
       return { error: 'check_requires_additional_input', status: 400, check_id: checkId };
     }
@@ -352,7 +348,7 @@ function nextStartableStep(scan, now) {
 }
 
 function deferStep(ctx, scan, step, result, now) {
-  const code = result?.error ?? 'safe_min_interval_active';
+  const code = result?.error ?? 'entitlement_limit_exceeded';
   const policyId = scan.plan_snapshot?.target_policy_bindings?.[step.target_id] ?? scan.target_group_id;
   const policy = normalizeSafetyPolicy(activeGroup(execCtxFor(scan), policyId)?.safety_policy);
   const eligibleAt = deferredStepEligibleAt({
@@ -665,7 +661,6 @@ function dispatchScheduledScan(ctx, scan, options = {}) {
   for (const policyId of policyIds) {
     const policy = activeGroup(execCtx, policyId);
     if (!policy) return scheduleDenied(ctx, scan, 'target_execution_policy_unavailable', now);
-    if (!isExplicitDemoTenant(scan.tenant_id) && (policy.safe_test_windows ?? []).length && !isWithinSafeTestWindow(policy, now.getTime(), { tenantId: scan.tenant_id })) return scheduleDenied(ctx, scan, 'safe_window_closed', now);
     for (const targetId of scanTargetIds(scan)) {
       if (activeRunForGroup(scan.tenant_id, policy.id, targetId) || activeScanForGroup(scan.tenant_id, policy.id, scan.id, targetId)) return scheduleDenied(ctx, scan, 'concurrent_run_blocked', now);
     }
@@ -804,7 +799,7 @@ export function createValidationScan(ctx, body = {}, runtimeConfig = undefined, 
   }
   const plan = buildPlan(ctx, input);
   if (plan.error) {
-    if (plan.error === 'soc_gated_check' || plan.error === 'unknown_check') {
+    if (plan.error === 'unknown_check') {
       audit({
         tenant_id: ctx.tenantId,
         actor_user_id: ctx.userId,

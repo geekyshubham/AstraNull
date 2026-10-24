@@ -77,7 +77,7 @@ Available from the Test Runs head action "Start validation scan" and from the ta
 
 1. Target group (fixed on target group detail, selectable on Test Runs).
 2. Scope: whole group (shows eligible target count) or one exact target.
-3. Check picker: checks grouped by taxonomy section (`section_label` from `GET /v1/checks`), section select-all, search, selected count, evidence tier and bounded probe metadata per check. SOC-gated and monitor-only (E5) checks are not listed and a note says so; the API refuses them as well. Checks incompatible with the chosen target are disabled with the reason.
+3. Check picker: checks grouped by taxonomy section (`section_label` from `GET /v1/checks`), section select-all, search, selected count, evidence tier and bounded probe metadata per check. Monitor-only (E5) and unsupported-delivery checks are not listed and a note says so; SOC-gated checks are listed and startable. Checks incompatible with the chosen target are disabled with the reason.
 4. Optional name.
 5. Run now, or schedule: date and time (at least one minute ahead), recurrence none, daily, weekly, or monthly, and timezone.
 6. Review: a confirmation restates group, scope, number of checks, planned steps, request upper bound, and schedule before anything starts.

@@ -299,21 +299,20 @@ describe('postgres high-scale service adapters', () => {
     assert.equal(entry.metadata.status, 'rejected');
   });
 
-  it('dual SOC approval sets scope hash from declared targets', async () => {
+  it('a single approval sets scope hash from declared targets', async () => {
     const { repositories } = memoryRepositories();
     const svc = createPostgresHighScaleServices(repositories);
     const created = await svc.createHighScaleRequest(CTX_ENG, validHighScaleRequestPayload());
     await acceptPack(svc, created.id);
-    const first = await svc.transitionHighScale(CTX_A, created.id, 'approve');
-    assert.equal(first.state, 'under_review');
-    const dup = await svc.transitionHighScale(CTX_A, created.id, 'approve');
-    assert.equal(dup.error, 'duplicate_soc_approval');
-    const second = await svc.transitionHighScale(CTX_B, created.id, 'approve');
-    assert.equal(second.state, 'approved');
-    assert.ok(second.scope_hash);
+    const approved = await svc.transitionHighScale(CTX_A, created.id, 'approve');
+    assert.equal(approved.state, 'approved');
+    assert.ok(approved.scope_hash);
+    // A second approval has nothing left to promote.
+    const again = await svc.transitionHighScale(CTX_B, created.id, 'approve');
+    assert.equal(again.error, 'invalid_transition');
   });
 
-  it('rejects second SOC approval when an accepted artifact no longer matches exact target scope', async () => {
+  it('approval does not compare accepted artifacts against the current target scope', async () => {
     const { repositories, state } = memoryRepositories();
     const svc = createPostgresHighScaleServices(repositories);
     const created = await svc.createHighScaleRequest(CTX_ENG, validHighScaleRequestPayload());
@@ -321,11 +320,9 @@ describe('postgres high-scale service adapters', () => {
     const request = state.requests.find((row) => row.id === created.id);
     const authoritative = request.artifacts.find((artifact) => artifact.type === 'test_plan');
     authoritative.approved_targets = ['tg_other'];
-    const first = await svc.transitionHighScale(CTX_A, created.id, 'approve');
-    assert.equal(first.state, 'under_review');
-    const second = await svc.transitionHighScale(CTX_B, created.id, 'approve');
-    assert.equal(second.error, 'governed_authorization_mismatch');
-    assert.ok(second.invalid_fields.some((field) => field.endsWith('.approved_targets')));
+    const approved = await svc.transitionHighScale(CTX_A, created.id, 'approve');
+    assert.equal(approved.state, 'approved');
+    assert.ok(approved.scope_hash);
   });
 
   it('ingests governed adapter telemetry snapshots with provenance metadata', async () => {
@@ -440,23 +437,21 @@ describe('postgres high-scale service adapters', () => {
     const hs = await svc2.createHighScaleRequest(CTX_ENG, validHighScaleRequestPayload());
     await acceptPack(svc2, hs.id);
     const approved = await svc2.transitionHighScale(CTX_A, hs.id, 'approve');
-    assert.equal(approved.state, 'under_review');
+    assert.equal(approved.state, 'approved');
   });
 
-  it('second SOC approval fails closed when target group is missing or empty', async () => {
+  it('approval fails closed when target group is missing or empty', async () => {
     const { repositories, coreCatalog, state } = memoryRepositories();
     const svc = createPostgresHighScaleServices(repositories);
     const created = await svc.createHighScaleRequest(CTX_ENG, validHighScaleRequestPayload());
     await acceptPack(svc, created.id);
-    await svc.transitionHighScale(CTX_A, created.id, 'approve');
 
     coreCatalog.setTargetGroupSnapshot(null);
-    const missing = await svc.transitionHighScale(CTX_B, created.id, 'approve');
+    const missing = await svc.transitionHighScale(CTX_A, created.id, 'approve');
     assert.equal(missing.error, 'target_group_not_found');
     assert.equal(missing.status, 404);
     let stored = state.requests.find((r) => r.id === created.id);
-    assert.equal(stored.state, 'under_review');
-    assert.equal(stored.soc_approvals.length, 1);
+    assert.equal(stored.state, 'submitted');
     assert.ok(
       state.audit.some(
         (e) => e.action === 'high_scale.approval_gate_denied' && e.metadata?.reason === 'target_group_not_found',
@@ -464,12 +459,11 @@ describe('postgres high-scale service adapters', () => {
     );
 
     coreCatalog.setTargetGroupSnapshot({ id: 'tg_1', targets: [] });
-    const empty = await svc.transitionHighScale(CTX_B, created.id, 'approve');
+    const empty = await svc.transitionHighScale(CTX_A, created.id, 'approve');
     assert.equal(empty.error, 'target_group_empty');
     assert.equal(empty.status, 400);
     stored = state.requests.find((r) => r.id === created.id);
-    assert.equal(stored.state, 'under_review');
-    assert.equal(stored.soc_approvals.length, 1);
+    assert.equal(stored.state, 'submitted');
     assert.ok(
       state.audit.some(
         (e) => e.action === 'high_scale.approval_gate_denied' && e.metadata?.reason === 'target_group_empty',

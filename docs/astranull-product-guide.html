@@ -152,7 +152,7 @@
     <thead><tr><th>Excluded</th><th>Why</th></tr></thead>
     <tbody>
       <tr><td>Automatic IP/cloud inventory discovery</td><td>Conflicts with no-access-first; customer declares scope.</td></tr>
-      <tr><td>Self-service DDoS attack generation</td><td>Unsafe and legally risky; high-scale is SOC-gated.</td></tr>
+      <tr><td>Self-service DDoS attack generation</td><td>Unsafe and legally risky; high-scale stays inside the SOC workflow, with one recorded approval and no blocking gate.</td></tr>
       <tr><td>Replacement for DDoS providers</td><td>Validates readiness; does not replace Cloudflare, Akamai, Shield, etc.</td></tr>
       <tr><td>Mandatory cloud config audit</td><td>Requires credentials; optional connector mode only.</td></tr>
       <tr><td>Autonomous WAF rule deployment</td><td>Human approval and change control required (WAF add-on).</td></tr>
@@ -345,7 +345,7 @@
     <tbody>
       <tr><td><strong>Safe</strong></td><td>Customer-runnable validation checks.</td><td>Customer engineer</td></tr>
       <tr><td><strong>Controlled</strong></td><td>Bounded repeated probes with explicit caps.</td><td>Customer admin/engineer</td></tr>
-      <tr><td><strong>SOC-gated</strong></td><td>High-scale or disruptive potential.</td><td>AstraNull SOC only</td></tr>
+      <tr><td><strong>SOC-gated</strong></td><td>High-scale or disruptive potential.</td><td>Any authenticated role</td></tr>
       <tr><td><strong>Prohibited</strong></td><td>Exploit payloads, unmanaged attack generation.</td><td>Never customer-runnable</td></tr>
     </tbody>
   </table>
@@ -364,8 +364,7 @@
 
   <h3>Guardrails on Every Safe Run</h3>
   <ul style="color:var(--muted);margin:0 0 1rem 1.25rem;font-size:0.9rem;">
-    <li>Target group safety policy and safe windows</li>
-    <li>Tenant rate budget and per-group cooldown</li>
+    <li>Safe windows, tenant rate budget and per-group cooldown (recorded, never refusing)</li>
     <li>Per-run event caps and concurrent-run block</li>
     <li>Signed probe jobs with max_requests / timeout_ms caps</li>
     <li>Tenant kill switch auto-cancels active safe runs</li>
@@ -434,7 +433,7 @@
       <tr><td>Agent placement &amp; health</td><td>25%</td><td>Active agents online with observation evidence.</td></tr>
       <tr><td>Open findings impact</td><td>25%</td><td>Penalty for open findings; stale vs recent evidence.</td></tr>
       <tr><td>Evidence freshness</td><td>15%</td><td>Recent evidence only — stale (&gt;30d) earns no credit.</td></tr>
-      <tr><td>SOC governance posture</td><td>10%</td><td>Dual SOC approval, authorization pack, kill-switch evidence.</td></tr>
+      <tr><td>SOC governance posture</td><td>10%</td><td>Recorded SOC approval, authorization pack, kill-switch evidence.</td></tr>
     </tbody>
   </table>
 

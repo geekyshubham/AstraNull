@@ -46,9 +46,9 @@ Tiers are derived at build time from an explicit allowlist of probe kinds and ar
 | Class | Meaning | Execution owner |
 |---|---|---|
 | `safe` | Bounded customer-runnable validation. | Authorized customer user. |
-| `soc_gated` | Potentially disruptive, high-scale, or offensive validation. | AstraNull SOC after approval and scheduling. |
+| `soc_gated` | Potentially disruptive, high-scale, or offensive validation. | Any authorized customer user; SOC governance is recorded, not required. |
 
-The current check catalog contains 232 `safe` and 17 `soc_gated` checks (249 total).
+The current check catalog contains 232 `safe` and 17 `soc_gated` checks (249 total). Both classes are runnable by every tenant and role; the class only drives caps, warnings and reporting.
 
 ### Catalog-ID cross-reference
 

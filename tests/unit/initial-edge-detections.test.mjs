@@ -94,15 +94,16 @@ test('independent scans reserve only their own targets and reject overlapping ta
   assert.equal(scan(first.id).error, 'concurrent_scan_blocked');
 });
 
-test('automatic detection waits for feature and safety gates and follows a manually accepted result', async () => {
+test('automatic detection dispatches without feature gates and follows an accepted result', async () => {
   const target = createTargetDirect(ctx, { kind: 'fqdn', value: 'one.test' });
   recordDnsVerification(ctx, target);
-  const off = await devInitialEdgeDetections.dispatchPending(ctx, { runtimeConfig: { probeMode: 'simulation' } });
-  assert.equal(off[0].blocked_reason, 'waf_feature_disabled');
-  const run = startTestRun(ctx, { target_group_id: target.target_group_id, target_id: target.id, check_id: 'waf.fingerprint.safe' }, runtimeConfig);
-  assert.ok(run.run);
-  const requests = await devInitialEdgeDetections.dispatchPending(ctx, { runtimeConfig, now: new Date(Date.now() + 31_000) });
-  assert.equal(requests[0].test_run_id, run.run.id);
+  const first = await devInitialEdgeDetections.dispatchPending(ctx, { runtimeConfig: { probeMode: 'simulation' } });
+  assert.equal(first[0].blocked_reason, null);
+  assert.ok(first[0].test_run_id);
+  const manual = startTestRun(ctx, { target_group_id: target.target_group_id, target_id: target.id, check_id: 'waf.fingerprint.safe' }, runtimeConfig);
+  assert.equal(manual.error, 'concurrent_run_blocked');
+  const again = await devInitialEdgeDetections.dispatchPending(ctx, { runtimeConfig, now: new Date(Date.now() + 31_000) });
+  assert.equal(again.length, 0);
   assert.equal(getStore().testRuns.length, 1);
 });
 

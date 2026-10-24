@@ -332,44 +332,52 @@ describe('entry-path comparison safety controls', () => {
     assert.equal(cancelEntryPathComparison(VIEWER, comparison.id).status, 403);
   });
 
-  it('defers items blocked by rate budgets and minimum intervals instead of bypassing them', () => {
+  // Safe windows, the hourly cap and cooldowns are advisory, so the only deferral left is the
+  // tenant subscription allowance (`entitlement_limit_exceeded`).
+  function withSubscriptionLimit(limit = 1) {
+    getStore().tenantSubscriptions = [{
+      tenant_id: TENANT, plan_id: 'starter', status: 'active', limits: { safe_runs_per_hour: limit },
+    }];
+  }
+
+  function withoutSubscriptionLimit() {
+    getStore().tenantSubscriptions = [];
+  }
+
+  it('defers items blocked by the subscription allowance instead of bypassing it', () => {
     const store = getStore();
-    store.targetGroups.find((row) => row.id === 'tg_2').safety_policy = { max_runs_per_hour: 1 };
-    store.targetGroups.find((row) => row.id === 'tg_3').safety_policy = { min_seconds_between_runs: 3600 };
-    store.testRuns.push({ id: 'run_prior', tenant_id: TENANT, target_group_id: 'tg_3', target_id: 'tgt_login', check_id: SCENARIO, status: 'verdicted', created_at: new Date(Date.now() - 60_000).toISOString(), correlation: {} });
+    withSubscriptionLimit();
     const { comparison } = start();
     const alt = itemState(comparison, 'ep_alt');
     const login = itemState(comparison, 'ep_login');
     assert.equal(alt.state, 'deferred');
-    assert.equal(alt.last_start_error, 'safe_rate_cap_exceeded');
+    assert.equal(alt.last_start_error, 'entitlement_limit_exceeded');
     assert.ok(Date.parse(alt.deferred_until) > Date.now());
     assert.equal(login.state, 'deferred');
-    assert.equal(login.last_start_error, 'safe_min_interval_active');
+    assert.equal(login.last_start_error, 'entitlement_limit_exceeded');
     assert.equal(alt.test_run_id, null);
     assert.equal(store.testRuns.filter((run) => run.target_id === 'tgt_alt').length, 0);
     advanceDueEntryPathComparisons({ runtimeConfig: SIGNED });
     assert.equal(alt.state, 'deferred');
-    store.targetGroups.find((row) => row.id === 'tg_2').safety_policy = {};
+    withoutSubscriptionLimit();
     advanceDueEntryPathComparisons({ runtimeConfig: SIGNED, now: alt.deferred_until });
     assert.equal(alt.state, 'started');
     assert.ok(verifyProbeJobSignature(jobForRun(alt.test_run_id), SECRET));
   });
 
-  it('skips queued paths without starting runs once the tenant gate is turned off', () => {
+  it('starts queued paths even when the feature flag is off', () => {
     const store = getStore();
-    store.targetGroups.find((row) => row.id === 'tg_2').safety_policy = { max_runs_per_hour: 1 };
+    withSubscriptionLimit();
     const { comparison } = start();
     const alt = itemState(comparison, 'ep_alt');
     assert.equal(alt.state, 'deferred');
-    store.targetGroups.find((row) => row.id === 'tg_2').safety_policy = {};
-    const runsBefore = store.testRuns.length;
+    withoutSubscriptionLimit();
     advanceDueEntryPathComparisons({ runtimeConfig: SIGNED_GATE_OFF, now: alt.deferred_until });
-    assert.equal(alt.state, 'skipped');
-    assert.equal(alt.skip_reason, 'protection_validation_disabled');
-    assert.equal(alt.test_run_id, null);
-    assert.equal(store.testRuns.length, runsBefore);
-    assert.equal(comparison.cancel_reason, 'protection_validation_disabled');
-    assert.equal(auditCount('entry_path_comparison.item_skipped') >= 1, true);
+    // The flag no longer pauses or skips: the queued item actually starts.
+    assert.equal(alt.state, 'started');
+    assert.ok(alt.test_run_id);
+    assert.ok(store.testRuns.some((run) => run.id === alt.test_run_id && run.target_id === 'tgt_alt'));
+    assert.equal(comparison.cancel_reason, null);
   });
 
   it('rejects a tampered approved scope and cancels outstanding work', () => {

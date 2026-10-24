@@ -46,11 +46,10 @@ export function canAccessRoute(role, routeId, context = {}) {
   if (SOC_CONSOLE_ROUTES.has(routeId)) {
     // Staff SOC roles reach the cross-tenant staff console.
     if (principal === 'staff') return STAFF_SOC_ROLES.has(staffRole);
-    // Customer `soc` reaches the tenant-scoped console iff it holds the SOC
-    // high-scale permission. Engineers/viewers lack `soc:high_scale` and stay
-    // denied. Server RBAC is unchanged; the tenant console uses tenant-scoped
-    // /internal/soc/* APIs only (no cross-tenant reads).
-    return roleHasPermission(normalizedRole, 'soc:high_scale');
+    // Every customer role reaches the tenant-scoped console. This does not weaken
+    // server RBAC or expose cross-tenant reads — the tenant console uses tenant-scoped
+    // /internal/soc/* APIs only.
+    return true;
   }
 
   // Customer datasets intentionally do not hydrate for a non-impersonating staff

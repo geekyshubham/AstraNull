@@ -238,19 +238,18 @@ describe('protection validation route contract', () => {
     const pg = await request(baseUrl, 'GET', '/v1/firewall-expectations', { headers: headers('owner') });
     assert.equal(pg.status, 503);
     assert.equal(pg.json.error, 'postgres_route_not_wired');
+    // The feature flag is a deployment label now: the route answers whatever it says.
     runtimeConfig = { ...BASE_CONFIG, featureFlags: { protectionValidationEnabled: false } };
     const disabled = await request(baseUrl, 'GET', '/v1/firewall-expectations', { headers: headers('owner') });
-    assert.equal(disabled.status, 404);
-    assert.equal(disabled.json.error, 'protection_validation_disabled');
+    assert.equal(disabled.status, 200);
     runtimeConfig = { ...BASE_CONFIG, featureFlags: { protectionValidationEnabledDefault: false, protectionValidationEnabledTenants: { [OTHER]: true } } };
     const offForTenant = await request(baseUrl, 'GET', '/v1/firewall-expectations', { headers: headers('owner') });
-    assert.equal(offForTenant.status, 404);
-    assert.equal(offForTenant.json.error, 'protection_validation_disabled');
+    assert.equal(offForTenant.status, 200);
     const onForOther = await request(baseUrl, 'GET', '/v1/firewall-expectations', { headers: headers('owner', OTHER) });
     assert.equal(onForOther.status, 200);
     runtimeConfig = { ...BASE_CONFIG, featureFlags: {} };
     const defaultOff = await request(baseUrl, 'GET', '/v1/firewall-expectations', { headers: headers('owner') });
-    assert.equal(defaultOff.status, 404);
+    assert.equal(defaultOff.status, 200);
   });
 
   it('binds delegated operations to the path parameter and rejects a conflicting body or query value', async () => {

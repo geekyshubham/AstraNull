@@ -335,7 +335,7 @@ The renderer validates the four-resource kustomization and all five worker image
 3. Admin creates bootstrap token; customer installs **signed** agent package outbound-only to AstraNull API.
 4. Safe checks run via signed probe jobs; agent observations correlate to verdicts and findings.
 5. Reports exported with redaction; audit log retained per retention policy.
-6. High-scale tests: customer submits request and authorization artifacts; **SOC only** approves, schedules, starts governed adapter, monitors, stops, closes.
+6. High-scale tests: customer submits request and authorization artifacts; SOC records approval, schedules, starts the governed adapter, monitors, stops and closes — nothing waits on those steps, any role can drive them.
 
 ### Production SOC high-scale
 

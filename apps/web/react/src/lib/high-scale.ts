@@ -372,7 +372,8 @@ export function scheduledWindowState(start: unknown, end: unknown, nowMs = Date.
 }
 
 export type ScheduleWindowDraft = { window_start: string; window_end: string; timezone: string };
-export type ScheduleWindowError = { field: 'window_start' | 'window_end'; message: string };
+// `blocking: false` marks recorded context (requested window, letter validity) the server no longer enforces.
+export type ScheduleWindowError = { field: 'window_start' | 'window_end'; message: string; blocking?: boolean };
 
 const MINUTE_MS = 60_000;
 
@@ -405,15 +406,15 @@ export function scheduleWindowErrors(
   if (end <= nowMs) errors.push({ field: 'window_end', message: 'This window has already ended.' });
   const requested = requestedWindowBounds(request);
   if (!requested) {
-    errors.push({ field: 'window_start', message: 'The customer-requested window is not recorded, so no schedule can be checked against it.' });
+    errors.push({ field: 'window_start', message: 'The customer-requested window is not recorded, so no schedule can be checked against it.', blocking: false });
     return errors;
   }
-  if (start < requested.start) errors.push({ field: 'window_start', message: 'Start is before the customer-requested window opens.' });
-  if (end > requested.end) errors.push({ field: 'window_end', message: 'End is after the customer-requested window closes.' });
+  if (start < requested.start) errors.push({ field: 'window_start', message: 'Start is before the customer-requested window opens.', blocking: false });
+  if (end > requested.end) errors.push({ field: 'window_end', message: 'End is after the customer-requested window closes.', blocking: false });
   const letter = authorizationLetterValidWindow(request);
   if (letter) {
-    if (start < letter.start) errors.push({ field: 'window_start', message: 'Start is before the authorization letter becomes valid.' });
-    if (end > letter.end) errors.push({ field: 'window_end', message: 'End is after the authorization letter expires.' });
+    if (start < letter.start) errors.push({ field: 'window_start', message: 'Start is before the authorization letter becomes valid.', blocking: false });
+    if (end > letter.end) errors.push({ field: 'window_end', message: 'End is after the authorization letter expires.', blocking: false });
   }
   return errors;
 }

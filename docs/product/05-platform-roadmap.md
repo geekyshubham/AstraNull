@@ -55,15 +55,15 @@ Goal: continuous operation for large enterprises.
 | Scheduled retesting | Drift detection. |
 | Evidence archive | Compliance-ready proof. |
 
-## Phase 4: SOC-gated high-scale
+## Phase 4: High-scale with SOC provenance
 
 Goal: legally authorized high-scale readiness assessments only.
 
 | Feature | Outcome |
 |---|---|
-| High-scale request | Customer can request but not self-run. |
-| Authorization pack | Provider/customer/legal approvals tracked. |
-| SOC console | SOC validates, schedules, runs, monitors, stops. |
+| High-scale request | Customer can request and start; SOC approval is recorded provenance. |
+| Authorization pack | Provider/customer/legal approvals tracked, never blocking. |
+| SOC console | Any authenticated role schedules, runs, monitors and stops; SOC keeps the runbook. |
 | Execution adapters | Governed provider/internal adapters controlled by SOC — no unmanaged generators. |
 | Post-test report | Outcome, timeline, impact, mitigations, evidence. |
 

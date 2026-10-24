@@ -8,7 +8,8 @@ import { demoHeaders, request } from '../helpers/http.mjs';
 import { freshStore } from '../helpers/reset.mjs';
 
 // ADR-0008: agents and agent-observation ingestion are removed. Guardrails now protect the
-// inline external-only validation loop (safe windows, rate limits, cancellation).
+// inline external-only validation loop. Safe windows, hourly caps and spacing are advisory:
+// they are recorded but never block a run.
 
 const ctx = { tenantId: 'ten_demo', userId: 'u1', role: 'engineer' };
 
@@ -20,7 +21,7 @@ function completeRunsForGroup() {
 }
 
 describe('safe-test guardrails', () => {
-  it('rejects runs outside configured safe_test_windows', () => {
+  it('does not block runs outside configured safe_test_windows', () => {
     freshStore();
     const group = getStore().targetGroups.find((g) => g.id === 'tg_1');
     group.safe_test_windows = [
@@ -35,9 +36,7 @@ describe('safe-test guardrails', () => {
       target_group_id: 'tg_1',
       target_id: 'tgt_1',
     });
-    assert.equal(result.error, 'safe_window_closed');
-    assert.equal(result.status, 429);
-    assert.ok(getStore().auditLog.some((a) => a.action === 'test_run.safe_window_denied'));
+    assert.ok(result.run);
   });
 
   it('permits runs inside a current safe_test_window', () => {
@@ -56,10 +55,10 @@ describe('safe-test guardrails', () => {
     });
     assert.ok(result.run);
     assert.ok(result.run.safety_constraints);
-    assert.equal(result.run.safety_constraints.max_runs_per_hour, 60);
+    assert.equal(result.run.safety_constraints.max_runs_per_hour, Infinity);
   });
 
-  it('enforces max_runs_per_hour for the tenant', () => {
+  it('does not enforce max_runs_per_hour for the tenant', () => {
     freshStore();
     const group = getStore().targetGroups.find((g) => g.id === 'tg_1');
     group.safety_policy = { max_runs_per_hour: 1, min_seconds_between_runs: 0 };
@@ -75,12 +74,10 @@ describe('safe-test guardrails', () => {
       target_group_id: 'tg_1',
       target_id: 'tgt_1',
     });
-    assert.equal(second.error, 'safe_rate_cap_exceeded');
-    assert.equal(second.status, 429);
-    assert.ok(getStore().auditLog.some((a) => a.action === 'test_run.safe_rate_denied'));
+    assert.ok(second.run);
   });
 
-  it('enforces min_seconds_between_runs on the target group', () => {
+  it('does not enforce min_seconds_between_runs on the target group', () => {
     freshStore();
     const group = getStore().targetGroups.find((g) => g.id === 'tg_1');
     group.safety_policy = { max_runs_per_hour: 60, min_seconds_between_runs: 300 };
@@ -97,9 +94,7 @@ describe('safe-test guardrails', () => {
       target_group_id: 'tg_1',
       target_id: 'tgt_1',
     });
-    assert.equal(retry.error, 'safe_min_interval_active');
-    assert.equal(retry.status, 429);
-    assert.ok(getStore().auditLog.some((a) => a.action === 'test_run.safe_interval_denied'));
+    assert.ok(retry.run);
   });
 
   it('stores safety policy fields on createTargetGroup', () => {
@@ -113,8 +108,8 @@ describe('safe-test guardrails', () => {
     });
     assert.equal(group.timezone, 'America/New_York');
     assert.equal(group.safe_test_windows.length, 1);
-    assert.equal(group.safety_policy.max_runs_per_hour, 12);
-    assert.equal(group.safety_policy.min_seconds_between_runs, 30);
+    assert.equal(group.safety_policy.max_runs_per_hour, Infinity);
+    assert.equal(group.safety_policy.min_seconds_between_runs, 0);
   });
 
   it('returns not_cancellable for verdicted runs via service and HTTP', async () => {

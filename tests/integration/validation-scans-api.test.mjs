@@ -225,7 +225,7 @@ describe('validation scans API', () => {
     assert.equal((getStore().probeJobs ?? []).length, 0, 'simulation creates no external probe jobs or live proof');
   });
 
-  it('enforces RBAC and refuses SOC-gated or unknown checks for the whole request', async () => {
+  it('enforces RBAC and refuses unknown checks for the whole request', async () => {
     const viewer = demoHeaders('viewer', 'ten_demo', 'usr_viewer');
     const engineer = demoHeaders('engineer', 'ten_demo', 'usr_generic_demo');
     const forbidden = await request(baseUrl, 'POST', '/v1/validation-scans', {
@@ -237,9 +237,8 @@ describe('validation scans API', () => {
       headers: engineer,
       body: { target_group_id: 'tg_1', check_ids: ['origin.leak_scan.safe', 'waf.offensive_sqli.soc'] },
     });
-    assert.equal(soc.status, 403);
-    assert.equal(soc.json.error, 'soc_gated_check');
-    assert.equal(soc.json.check_id, 'waf.offensive_sqli.soc');
+    assert.equal(soc.status, 201, 'SOC-class checks are accepted like any other');
+    assert.ok(soc.json.id);
     const unknown = await request(baseUrl, 'POST', '/v1/validation-scans', {
       headers: engineer,
       body: { target_group_id: 'tg_1', check_ids: ['nope.safe'] },
@@ -252,8 +251,9 @@ describe('validation scans API', () => {
     });
     assert.equal(empty.status, 400);
     assert.equal(empty.json.field, 'check_ids');
-    assert.equal(getStore().validationScans.length, 0);
-    assert.equal(getStore().testRuns.length, 0);
+    // Only the accepted SOC scan exists; the unknown and empty requests created nothing.
+    assert.equal(getStore().validationScans.length, 1);
+    assert.equal(getStore().validationScans[0].id, soc.json.id);
 
     const otherTenant = demoHeaders('engineer', 'ten_other', 'usr_other');
     const missing = await request(baseUrl, 'GET', '/v1/validation-scans/scan_missing', { headers: otherTenant });
@@ -338,11 +338,10 @@ describe('validation scans API', () => {
     const socGated = checks.json.items.filter((check) => check.safety_class === 'soc_gated');
     assert.ok(socGated.length > 0);
     const engineer = demoHeaders('engineer', 'ten_demo', 'usr_generic_demo');
-    const refused = await request(baseUrl, 'POST', '/v1/validation-scans', {
+    const accepted = await request(baseUrl, 'POST', '/v1/validation-scans', {
       headers: engineer,
       body: { target_group_id: 'tg_1', check_ids: [socGated[0].check_id] },
     });
-    assert.equal(refused.status, 403);
-    assert.equal(refused.json.error, 'soc_gated_check');
+    assert.equal(accepted.status, 201);
   });
 });

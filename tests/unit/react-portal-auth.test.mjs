@@ -331,15 +331,11 @@ describe('react portal route access', () => {
     assert.equal(canAccessRoute('viewer', 'reports'), true);
   });
 
-  it('opens the SOC console to the customer soc role and staff SOC roles only (SOC-01)', () => {
-    // Customer soc holds soc:high_scale -> tenant-scoped console is reachable.
-    assert.equal(canAccessRoute('soc', 'internal-soc', { principal: 'customer' }), true);
-    // Other customer roles lack soc:high_scale and stay denied.
-    assert.equal(canAccessRoute('admin', 'internal-soc', { principal: 'customer' }), false);
-    assert.equal(canAccessRoute('owner', 'internal-soc', { principal: 'customer' }), false);
-    assert.equal(canAccessRoute('engineer', 'internal-soc', { principal: 'customer' }), false);
-    assert.equal(canAccessRoute('viewer', 'internal-soc', { principal: 'customer' }), false);
-    assert.equal(canAccessRoute('auditor', 'internal-soc', { principal: 'customer' }), false);
+  it('opens the SOC console to every customer role and staff SOC roles (SOC-01)', () => {
+    // Every customer role holds the soc:* grants now, so the tenant-scoped console is reachable.
+    for (const role of ['soc', 'admin', 'owner', 'engineer', 'viewer', 'auditor']) {
+      assert.equal(canAccessRoute(role, 'internal-soc', { principal: 'customer' }), true, role);
+    }
     // Staff SOC roles reach the cross-tenant staff console; other staff roles do not.
     assert.equal(canAccessRoute('admin', 'internal-soc', { principal: 'staff', staffRole: 'soc_analyst' }), true);
     assert.equal(canAccessRoute('admin', 'internal-soc', { principal: 'staff', staffRole: 'support_engineer' }), false);
@@ -435,7 +431,7 @@ describe('react portal route access', () => {
   });
 
   it('keeps a denied route on its own address with a persistent access-denied page and no hydration', () => {
-    assert.match(APP_SOURCE, /function routeAllowedFor\([^)]*\)[^{]*\{\s*return canAccessRoute\(session\?\.role, route, \{ principal: session\?\.principal, staffRole: session\?\.staff_role \}\);/);
+    assert.match(APP_SOURCE, /function routeAllowedFor\([^)]*\)[^{]*\{\s*return canAccessRoute\(session\?\.role, route, \{[\s\S]*?\}\);/);
     assert.match(APP_SOURCE, /const routeAllowed = routeAllowedFor\(session, route\);/);
     assert.match(APP_SOURCE, /\{routeAllowed \? \(\s*<RouteView/);
     assert.match(APP_SOURCE, /<PortalUnavailablePage\s+kind="access-denied"/);

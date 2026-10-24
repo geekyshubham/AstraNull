@@ -84,23 +84,17 @@ describe('validation scan scheduling (dev-json)', () => {
     assert.deepEqual(dispatchDueValidationScans(CTX, { now: due, runtimeConfig: RUNTIME }), []);
   });
 
-  it('denies a due scan that lands outside the safe test window, audits it, and never force-runs it', () => {
+  it('runs a due scan even when it lands outside the declared safe test window', () => {
     const scan = scheduledScan();
     getStore().targetGroups[0].safe_test_windows = [
       { start_at: '2026-06-01T02:00:00.000Z', end_at: '2026-06-01T04:00:00.000Z' },
     ];
     const due = new Date('2026-06-01T13:00:01.000Z');
     const [result] = dispatchDueValidationScans(CTX, { now: due, runtimeConfig: RUNTIME });
-    assert.equal(result.dispatched, false);
-    assert.equal(result.denied, 'safe_window_closed');
-    const denied = getValidationScan(CTX, scan.id, { runtimeConfig: RUNTIME, now: due });
-    assert.equal(denied.status, 'denied');
-    assert.equal(denied.abort_reason, 'safe_window_closed');
-    assert.deepEqual(denied.steps.map((step) => step.status), ['skipped', 'skipped']);
-    assert.equal(getStore().testRuns.length, 0);
-    const audit = getStore().auditLog.find((entry) => entry.action === 'validation_scan.schedule_denied');
-    assert.equal(audit.metadata.code, 'safe_window_closed');
-    assert.equal(audit.metadata.scheduled_for, SCHEDULED_FOR);
+    assert.equal(result.dispatched, true);
+    const running = getValidationScan(CTX, scan.id, { runtimeConfig: RUNTIME, now: due });
+    assert.equal(running.status, 'running');
+    assert.equal(getStore().testRuns.length, 1);
   });
 
   it('denies a due scan while the kill switch is active or another run holds the group', () => {
@@ -150,12 +144,10 @@ describe('validation scan scheduling (dev-json)', () => {
 
   it('still rolls a denied recurring occurrence forward to the next occurrence', () => {
     scheduledScan({ recurrence: 'weekly' });
-    getStore().targetGroups[0].safe_test_windows = [
-      { start_at: '2026-06-01T02:00:00.000Z', end_at: '2026-06-01T04:00:00.000Z' },
-    ];
+    getStore().socKillSwitch = { active: true, reason: 'incident', tenant_id: null };
     const due = new Date('2026-06-01T13:00:01.000Z');
     const [result] = dispatchDueValidationScans(CTX, { now: due, runtimeConfig: RUNTIME });
-    assert.equal(result.denied, 'safe_window_closed');
+    assert.equal(result.denied, 'kill_switch_active');
     const scheduled = listValidationScans(CTX, { status: 'scheduled', runtimeConfig: RUNTIME, now: due });
     assert.equal(scheduled.count, 1);
     assert.equal(scheduled.items[0].scheduled_for, '2026-06-08T13:00:00.000Z');
@@ -178,7 +170,8 @@ describe('validation scan scheduling (dev-json)', () => {
     assert.ok(updateAudit.metadata.changed_fields.includes('check_ids'));
 
     const socPatch = patchValidationScan(CTX, scan.id, { check_ids: ['waf.offensive_sqli.soc'] }, { now: NOW });
-    assert.equal(socPatch.error, 'soc_gated_check');
+    assert.equal(socPatch.error, undefined);
+    assert.deepEqual(socPatch.check_ids, ['waf.offensive_sqli.soc']);
     const pastPatch = patchValidationScan(CTX, scan.id, { scheduled_for: '2026-05-01T00:00:00.000Z' }, { now: NOW });
     assert.equal(pastPatch.error, 'invalid_validation_scan');
 

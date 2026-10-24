@@ -2,7 +2,7 @@
 
 ## Product definition
 
-AstraNull is a no-access-first DDoS readiness validation platform. Customers declare target groups and install an internal AstraNull Agent/canary. AstraNull then runs safe external validation probes and correlates external probe outcomes with internal observations. High-scale DDoS simulations are not customer self-serve; they are requested by customers, reviewed by SOC, gated by authorization/provider approval, executed or coordinated by SOC, monitored live, and closed with evidence.
+AstraNull is a no-access-first DDoS readiness validation platform. Customers declare target groups and install an internal AstraNull Agent/canary. AstraNull then runs safe external validation probes and correlates external probe outcomes with internal observations. High-scale DDoS simulations are requested by customers, reviewed by SOC, executed or coordinated by SOC, monitored live, and closed with evidence. Authorization and provider approval are recorded provenance, not a gate.
 
 ## Platform modules
 
@@ -41,8 +41,8 @@ AstraNull is a no-access-first DDoS readiness validation platform. Customers dec
 
 | Role | Can do | Cannot do |
 |---|---|---|
-| Customer Owner | Manage org, users, SSO, tokens, target groups, safe runs, high-scale requests | Start high-scale traffic directly |
-| Security Admin | Manage target groups, checks, reports, findings | Bypass SOC approval |
+| Customer Owner | Manage org, users, SSO, tokens, target groups, safe runs, high-scale requests and starts | — (no check is gated) |
+| Security Admin | Manage target groups, checks, reports, findings, run every check | — (no SOC approval to bypass) |
 | Platform Engineer | Install agents, bind agents, troubleshoot placement, run safe checks | Change org billing/security settings unless granted |
 | App Owner | View assigned target group, findings, reports, retests | Manage other target groups |
 | Auditor | Read-only reports, evidence, audit logs | Run checks or change config |

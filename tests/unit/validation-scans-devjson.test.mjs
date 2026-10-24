@@ -27,6 +27,12 @@ function auditActions(filter = () => true) {
   return getStore().auditLog.filter(filter).map((entry) => entry.action);
 }
 
+function bypassedGates() {
+  return getStore().auditLog
+    .filter((entry) => entry.action === 'test_run.demo_gates_bypassed')
+    .flatMap((entry) => entry.metadata?.bypassed ?? []);
+}
+
 describe('validation scans (dev-json): selection and sequential execution', () => {
   beforeEach(() => freshStore());
 
@@ -67,16 +73,14 @@ describe('validation scans (dev-json): selection and sequential execution', () =
     assert.equal(actions.at(-1), 'validation_scan.completed');
   });
 
-  it('rejects the whole request when a SOC-gated or unknown check is selected and audits the denial', () => {
+  it('accepts a SOC-gated check and rejects an unknown check', () => {
     const soc = createValidationScan(CTX, { target_group_id: 'tg_1', check_ids: ['origin.leak_scan.safe', 'waf.offensive_sqli.soc'] }, RUNTIME);
-    assert.equal(soc.error, 'soc_gated_check');
-    assert.equal(soc.status, 403);
-    assert.equal(soc.check_id, 'waf.offensive_sqli.soc');
+    assert.equal(soc.error, undefined);
+    assert.equal(soc.status, 'running');
     const unknown = createValidationScan(CTX, { target_group_id: 'tg_1', check_ids: ['does.not.exist'] }, RUNTIME);
     assert.equal(unknown.error, 'unknown_check');
-    assert.equal(getStore().validationScans.length, 0);
-    assert.equal(getStore().testRuns.length, 0);
-    assert.deepEqual(auditActions((entry) => entry.action === 'validation_scan.create_denied').length, 2);
+    assert.equal(getStore().validationScans.length, 1);
+    assert.deepEqual(auditActions((entry) => entry.action === 'validation_scan.create_denied').length, 1);
   });
 
   it('expands whole-group scans across compatible targets and records incompatible pairs', () => {
@@ -104,26 +108,27 @@ describe('validation scans (dev-json): selection and sequential execution', () =
     assert.equal(second.status, 409);
   });
 
-  it('defers the next step while the target-group cooldown is active and resumes when eligible', () => {
-    getStore().targetGroups[0].safety_policy = { min_seconds_between_runs: 300 };
-    const scan = createValidationScan(CTX, { target_group_id: 'tg_1', check_ids: ['dns.authoritative_response.safe', 'origin.leak_scan.safe'] }, RUNTIME);
-    expireCollectionWindows();
-    const deferred = getValidationScan(CTX, scan.id, { runtimeConfig: RUNTIME });
-    assert.deepEqual(deferred.steps.map((step) => step.status), ['verdicted', 'deferred']);
-    assert.ok(deferred.steps[1].eligible_at);
-    assert.equal(deferred.next_eligible_at, deferred.steps[1].eligible_at);
-    assert.equal(getStore().testRuns.length, 1);
-    assert.ok(auditActions().includes('validation_scan.step_deferred'));
+  it('starts the next step past the hourly cap and only records the bypass', () => {
+    // Group safety policies are advisory now; the cap is still counted but never defers a step.
+    getStore().targetGroups[0].safety_policy = { max_runs_per_hour: 1, min_seconds_between_runs: 0 };
+    process.env.ASTRANULL_DEMO_MAX_RUNS_PER_HOUR = '1';
+    try {
+      const scan = createValidationScan(CTX, { target_group_id: 'tg_1', check_ids: ['dns.authoritative_response.safe', 'origin.leak_scan.safe'] }, RUNTIME);
+      expireCollectionWindows();
+      const advanced = getValidationScan(CTX, scan.id, { runtimeConfig: RUNTIME });
+      assert.deepEqual(advanced.steps.map((step) => step.status), ['verdicted', 'collecting']);
+      assert.equal(advanced.next_eligible_at, null);
+      assert.equal(getStore().testRuns.length, 2);
+      assert.ok(!auditActions().includes('validation_scan.step_deferred'));
+      assert.ok(bypassedGates().includes('hourly_cap'), 'the bypass stays recorded');
 
-    getStore().testRuns[0].created_at = new Date(Date.now() - 301_000).toISOString();
-    const resumed = advanceScan(CTX, scan.id, {
-      runtimeConfig: RUNTIME,
-      now: new Date(new Date(deferred.steps[1].eligible_at).getTime() + 1000),
-    });
-    assert.equal(resumed.acquired, true);
-    const after = getValidationScan(CTX, scan.id, { runtimeConfig: RUNTIME });
-    assert.equal(after.steps[1].status, 'collecting');
-    assert.equal(getStore().testRuns.length, 2);
+      expireCollectionWindows();
+      const finished = getValidationScan(CTX, scan.id, { runtimeConfig: RUNTIME });
+      assert.equal(finished.status, 'completed');
+      assert.equal(getStore().testRuns.length, 2);
+    } finally {
+      delete process.env.ASTRANULL_DEMO_MAX_RUNS_PER_HOUR;
+    }
   });
 
   it('aborts the remaining steps when the kill switch cancels the active child', () => {
@@ -141,34 +146,41 @@ describe('validation scans (dev-json): selection and sequential execution', () =
   });
 
   it('rejects forged or conflicting scan dispatch contexts inside startTestRun', () => {
-    getStore().targetGroups[0].safety_policy = { min_seconds_between_runs: 300 };
-    const scan = createValidationScan(CTX, { target_group_id: 'tg_1', check_ids: ['origin.leak_scan.safe', 'dns.authoritative_response.safe'] }, RUNTIME);
-    expireCollectionWindows();
-    const deferred = getValidationScan(CTX, scan.id, { runtimeConfig: RUNTIME });
-    assert.deepEqual(deferred.steps.map((step) => step.status), ['verdicted', 'deferred']);
-    const stored = getStore().validationScans[0];
-    const forged = startTestRun(
-      CTX,
-      { check_id: 'dns.authoritative_response.safe', target_group_id: 'tg_1', target_id: 'tgt_1' },
-      RUNTIME,
-      { scanDispatch: { scan_id: scan.id, step_id: stored.steps[1].id, lease_token: 'forged' } },
-    );
-    assert.equal(forged.error, 'scan_dispatch_invalid');
-    const conflicting = startTestRun(
-      CTX,
-      { check_id: 'dns.authoritative_response.safe', target_group_id: 'tg_1', target_id: 'tgt_1', policy_id: 'pol_x' },
-      RUNTIME,
-      { scanDispatch: { scan_id: scan.id, step_id: stored.steps[1].id, lease_token: 'forged' } },
-    );
-    assert.equal(conflicting.error, 'conflicting_dispatch_context');
-    assert.equal(getStore().testRuns.length, 1);
-    const bodyOnly = startTestRun(
-      CTX,
-      { check_id: 'dns.authoritative_response.safe', target_group_id: 'tg_1', target_id: 'tgt_1', scan_id: scan.id, scan_step_id: stored.steps[1].id },
-      RUNTIME,
-    );
-    assert.equal(bodyOnly.error, 'concurrent_run_blocked');
-    assert.equal(getStore().testRuns.some((run) => run.scan_step_id === stored.steps[1].id), false);
+    getStore().targetGroups[0].safety_policy = { max_runs_per_hour: 1, min_seconds_between_runs: 0 };
+    process.env.ASTRANULL_DEMO_MAX_RUNS_PER_HOUR = '1';
+    try {
+      const scan = createValidationScan(CTX, { target_group_id: 'tg_1', check_ids: ['origin.leak_scan.safe', 'dns.authoritative_response.safe'] }, RUNTIME);
+      expireCollectionWindows();
+      const advanced = getValidationScan(CTX, scan.id, { runtimeConfig: RUNTIME });
+      assert.deepEqual(advanced.steps.map((step) => step.status), ['verdicted', 'collecting']);
+      const stored = getStore().validationScans[0];
+      // Cancel the active child so the dispatcher checks, not the concurrency guard, answer these.
+      getStore().testRuns[1].status = 'verdicted';
+      const forged = startTestRun(
+        CTX,
+        { check_id: 'dns.authoritative_response.safe', target_group_id: 'tg_1', target_id: 'tgt_1' },
+        RUNTIME,
+        { scanDispatch: { scan_id: scan.id, step_id: stored.steps[1].id, lease_token: 'forged' } },
+      );
+      assert.equal(forged.error, 'scan_dispatch_invalid');
+      const conflicting = startTestRun(
+        CTX,
+        { check_id: 'dns.authoritative_response.safe', target_group_id: 'tg_1', target_id: 'tgt_1', policy_id: 'pol_x' },
+        RUNTIME,
+        { scanDispatch: { scan_id: scan.id, step_id: stored.steps[1].id, lease_token: 'forged' } },
+      );
+      assert.equal(conflicting.error, 'conflicting_dispatch_context');
+      assert.equal(getStore().testRuns.length, 2);
+      const bodyOnly = startTestRun(
+        CTX,
+        { check_id: 'dns.authoritative_response.safe', target_group_id: 'tg_1', target_id: 'tgt_1', scan_id: scan.id, scan_step_id: stored.steps[1].id },
+        RUNTIME,
+      );
+      assert.equal(bodyOnly.error, 'concurrent_run_blocked');
+      assert.equal(getStore().testRuns.filter((run) => run.scan_step_id === stored.steps[1].id).length, 1);
+    } finally {
+      delete process.env.ASTRANULL_DEMO_MAX_RUNS_PER_HOUR;
+    }
   });
 });
 
@@ -274,15 +286,19 @@ describe('validation scans (dev-json): parity guards', () => {
     assert.ok(auditActions().includes('validation_scan.advance_blocked'));
   });
 
-  it('defers a step on the hourly safe-run cap instead of aborting the scan', () => {
-    getStore().targetGroups[0].safety_policy = { max_runs_per_hour: 1 };
-    const scan = createValidationScan(CTX, { target_group_id: 'tg_1', check_ids: CHECKS.slice(0, 2), target_id: 'tgt_1' }, RUNTIME);
-    expireCollectionWindows();
-    const current = getValidationScan(CTX, scan.id, { runtimeConfig: RUNTIME });
-    assert.equal(current.status, 'running');
-    assert.deepEqual(current.steps.map((step) => step.status), ['verdicted', 'deferred']);
-    const firstRunAt = new Date(getStore().testRuns[0].created_at).getTime();
-    assert.equal(current.steps[1].eligible_at, new Date(firstRunAt + 3_600_000 + 1000).toISOString());
+  it('runs through the hourly safe-run cap instead of deferring the step', () => {
+    getStore().targetGroups[0].safety_policy = { max_runs_per_hour: 1, min_seconds_between_runs: 0 };
+    process.env.ASTRANULL_DEMO_MAX_RUNS_PER_HOUR = '1';
+    try {
+      const scan = createValidationScan(CTX, { target_group_id: 'tg_1', check_ids: CHECKS.slice(0, 2), target_id: 'tgt_1' }, RUNTIME);
+      expireCollectionWindows();
+      const current = getValidationScan(CTX, scan.id, { runtimeConfig: RUNTIME });
+      assert.equal(current.status, 'running');
+      assert.deepEqual(current.steps.map((step) => step.status), ['verdicted', 'collecting']);
+      assert.equal(current.steps[1].eligible_at, null);
+    } finally {
+      delete process.env.ASTRANULL_DEMO_MAX_RUNS_PER_HOUR;
+    }
   });
 });
 
@@ -313,16 +329,24 @@ describe('explicit domain sets preserve each target execution policy', () => {
     assert.ok(getStore().testRuns.every((run) => run.target_id !== 'tgt_unselected'));
   });
 
-  it('keeps a later domain deferred by its existing cooldown instead of using the first domain policy', () => {
-    getStore().targetGroups[1].safety_policy.min_seconds_between_runs = 3600;
-    const priorAt = new Date(Date.now() - 60_000).toISOString();
-    getStore().testRuns.push({ id: 'prior', tenant_id: CTX.tenantId, target_group_id: 'tg_second', target_id: 'tgt_second', check_id: CHECKS[0], created_at: priorAt, status: 'verdicted' });
-    const scan = createValidationScan(CTX, { target_group_id: 'tg_1', target_ids: ['tgt_1', 'tgt_second'], check_ids: [CHECKS[0]] }, RUNTIME);
-    expireCollectionWindows();
-    const next = getValidationScan(CTX, scan.id, { runtimeConfig: RUNTIME });
-    assert.equal(next.steps[1].status, 'deferred');
-    assert.equal(next.steps[1].eligible_at, new Date(Date.parse(priorAt) + 3_600_000).toISOString());
-    assert.equal(getStore().testRuns.length, 2);
+  it('runs a later domain past the hourly cap and records the bypass on its own run', () => {
+    getStore().targetGroups[0].safety_policy = { max_runs_per_hour: 1, min_seconds_between_runs: 0 };
+    getStore().targetGroups[1].safety_policy = { max_runs_per_hour: 1, min_seconds_between_runs: 0 };
+    process.env.ASTRANULL_DEMO_MAX_RUNS_PER_HOUR = '2';
+    try {
+      const priorAt = new Date(Date.now() - 60_000).toISOString();
+      getStore().testRuns.push({ id: 'prior', tenant_id: CTX.tenantId, target_group_id: 'tg_second', target_id: 'tgt_second', check_id: CHECKS[0], created_at: priorAt, status: 'verdicted' });
+      const scan = createValidationScan(CTX, { target_group_id: 'tg_1', target_ids: ['tgt_1', 'tgt_second'], check_ids: [CHECKS[0]] }, RUNTIME);
+      expireCollectionWindows();
+      const next = getValidationScan(CTX, scan.id, { runtimeConfig: RUNTIME });
+      assert.equal(next.steps[1].status, 'collecting');
+      assert.equal(getStore().testRuns.length, 3);
+      const secondRun = getStore().testRuns.find((run) => run.target_id === 'tgt_second' && run.id !== 'prior');
+      assert.equal(secondRun.target_group_id, 'tg_second');
+      assert.ok(bypassedGates().includes('hourly_cap'));
+    } finally {
+      delete process.env.ASTRANULL_DEMO_MAX_RUNS_PER_HOUR;
+    }
   });
 
   it('rejects an absent or foreign domain before creating a scan or starting a run', () => {

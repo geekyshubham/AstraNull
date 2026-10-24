@@ -1,4 +1,4 @@
-import { getCheckById, isCustomerRunnable, WAF_SAFE_CHECK_IDS } from '../../contracts/checks.mjs';
+import { getCheckById, WAF_SAFE_CHECK_IDS } from '../../contracts/checks.mjs';
 import {
   computeRetestVerdict,
   createBaselineApproval,
@@ -115,16 +115,6 @@ function validateWorkItemPreflight({ asset, scenario }, targets, ctx = null) {
       message: 'Scenario does not map to an allowed safe WAF check.',
     };
   }
-  if (!isCustomerRunnable(check, ctx)) {
-    return {
-      error: 'soc_gated_check',
-      status: 403,
-      check_id: check.check_id,
-      scenario,
-      message: `Scenario '${scenario}' maps to SOC-only check ${check.check_id}; request it through the SOC offensive validation workflow instead of a self-serve plan.`,
-    };
-  }
-
   const targetId = asset.target_id;
   if (!targetId || !targets.some((t) => t.id === targetId)) {
     return {
@@ -897,20 +887,7 @@ export function createPostgresWafOrchestratorServices(repositories, options = {}
       }
 
       const planPreflightError = preflightWorkItems(workQueue, targets, ctx);
-      if (planPreflightError) {
-        if (planPreflightError.error === 'soc_gated_check') {
-          await auditRepo.appendAuditEvent({
-            tenant_id: ctx.tenantId,
-            actor_user_id: ctx.userId,
-            actor_role: ctx.role,
-            action: 'waf.validation_plan.blocked_soc_gated',
-            resource_type: 'waf_validation_plan',
-            resource_id: plan.id,
-            metadata: { check_id: planPreflightError.check_id, scenario: planPreflightError.scenario },
-          });
-        }
-        return planPreflightError;
-      }
+      if (planPreflightError) return planPreflightError;
 
       const lockToken = newIdFn('lock');
       const claimNow = nowFn();

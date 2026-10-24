@@ -5,12 +5,10 @@ import { listProbePerspectives } from '../lib/probePerspectiveRegistry.mjs';
 import {
   hasActiveVerifiedOriginBinding,
   isBindingActiveAndVerified,
-  resolveOriginLockdownBinding,
   targetLiteralIpAddress,
 } from '../lib/originLockdownResolution.mjs';
 import { controlDeclarationsFromTarget } from './controlDeclarations.mjs';
 import { applyResourceExhaustionMetadata } from './resourceExhaustionTaxonomy.mjs';
-import { isExplicitDemoTenant, matchesDemoAccount } from '../lib/demoAutoVerify.mjs';
 
 export const ALLOWED_PROBE_PROFILE_KINDS = Object.freeze([
   'http_head',
@@ -577,7 +575,7 @@ function socGated(def) {
   ];
   const evidence_required = rest.evidence_required ?? ['approval_artifact', 'soc_runbook_ack'];
   const stop_conditions = rest.stop_conditions ?? [...DEFAULT_SOC_STOP_CONDITIONS];
-  const safety_constraints = { customer_runnable: false, ...(rest.safety_constraints ?? {}) };
+  const safety_constraints = { customer_runnable: true, ...(rest.safety_constraints ?? {}) };
   return {
     safety_class: 'soc_gated',
     risk_class: 'soc_gated',
@@ -585,7 +583,8 @@ function socGated(def) {
     supported_targets: rest.supported_targets ?? ['fqdn', 'url', 'ip'],
     remediation_template:
       rest.remediation_template ?? 'Submit a SOC-gated high-scale request with authorization pack.',
-    explanation_template: rest.explanation_template ?? 'Not runnable via customer test-runs API.',
+    explanation_template: rest.explanation_template ?? 'Request-only marker; the SOC execution workflow records the verdict.',
+    verdict_logic: rest.verdict_logic ?? 'Request-only marker: the governed execution workflow records the verdict from its own evidence; no inline external probe is dispatched.',
     required_customer_setup,
     evidence_required,
     stop_conditions,
@@ -1408,11 +1407,11 @@ export const CHECK_CATALOG = [
     version: '1.0.0',
     name: 'Connection Table Exhaustion (SOC Request Only)',
     vector_family: 'l3_l4',
-    description: 'SOC-gated controlled connection-state scenario — not customer-runnable; governed dry-run adapter only.',
+    description: 'Request-only controlled connection-state scenario — startable from the check list; governed dry-run adapter records the verdict.',
     required_customer_setup: ['soc_authorization_pack', 'declared_target_group_scope', 'connection_limit_abort_criteria'],
     evidence_required: ['approval_artifact', 'provider_telemetry', 'soc_runbook_ack'],
     stop_conditions: ['soc_kill_switch', 'abort_criteria_met', 'provider_stop_signal', 'max_approved_duration'],
-    safety_constraints: { customer_runnable: false },
+    safety_constraints: { customer_runnable: true },
     default_expected_behavior: 'soc_approval_required',
     probe_simulation_profile: 'none',
   }),
@@ -1425,7 +1424,7 @@ export const CHECK_CATALOG = [
     required_customer_setup: ['soc_authorization_pack', 'declared_dns_zone_scope', 'provider_approval_artifact'],
     evidence_required: ['approval_artifact', 'provider_telemetry', 'soc_runbook_ack'],
     stop_conditions: ['soc_kill_switch', 'abort_criteria_met', 'provider_stop_signal', 'max_approved_duration'],
-    safety_constraints: { customer_runnable: false },
+    safety_constraints: { customer_runnable: true },
     default_expected_behavior: 'soc_approval_required',
     probe_simulation_profile: 'none',
   }),
@@ -1438,7 +1437,7 @@ export const CHECK_CATALOG = [
     required_customer_setup: ['current_runbook_artifact', 'emergency_contact_roster', 'soc_authorization_pack'],
     evidence_required: ['approval_artifact', 'runbook_version_audit', 'contact_ack_evidence'],
     stop_conditions: ['soc_kill_switch', 'validation_complete', 'max_approved_duration'],
-    safety_constraints: { customer_runnable: false },
+    safety_constraints: { customer_runnable: true },
     default_expected_behavior: 'soc_approval_required',
     probe_simulation_profile: 'none',
   }),
@@ -1451,7 +1450,7 @@ export const CHECK_CATALOG = [
     required_customer_setup: ['soc_authorization_pack', 'kill_switch_runbook', 'declared_drill_scope'],
     evidence_required: ['approval_artifact', 'stop_event_audit', 'adapter_confirmation'],
     stop_conditions: ['soc_kill_switch', 'drill_complete', 'abort_criteria_met'],
-    safety_constraints: { customer_runnable: false },
+    safety_constraints: { customer_runnable: true },
     default_expected_behavior: 'soc_approval_required',
     probe_simulation_profile: 'none',
   }),
@@ -1464,7 +1463,7 @@ export const CHECK_CATALOG = [
     required_customer_setup: ['provider_approval_artifact', 'telemetry_endpoint_declaration', 'soc_authorization_pack'],
     evidence_required: ['provider_telemetry', 'approval_artifact', 'soc_runbook_ack'],
     stop_conditions: ['soc_kill_switch', 'telemetry_validated', 'max_approved_duration'],
-    safety_constraints: { customer_runnable: false },
+    safety_constraints: { customer_runnable: true },
     default_expected_behavior: 'soc_approval_required',
     probe_simulation_profile: 'none',
   }),
@@ -1477,7 +1476,7 @@ export const CHECK_CATALOG = [
     required_customer_setup: ['soc_authorization_pack', 'multi_vector_scope_declaration', 'provider_approval_artifact'],
     evidence_required: ['approval_artifact', 'provider_telemetry', 'soc_runbook_ack', 'coordination_audit'],
     stop_conditions: ['soc_kill_switch', 'abort_criteria_met', 'provider_stop_signal', 'max_approved_duration'],
-    safety_constraints: { customer_runnable: false },
+    safety_constraints: { customer_runnable: true },
     default_expected_behavior: 'soc_approval_required',
     probe_simulation_profile: 'none',
   }),
@@ -1490,7 +1489,7 @@ export const CHECK_CATALOG = [
     required_customer_setup: ['soc_authorization_pack', 'recovery_runbook', 'declared_degradation_objectives'],
     evidence_required: ['approval_artifact', 'health_signal', 'post_test_report', 'soc_runbook_ack'],
     stop_conditions: ['soc_kill_switch', 'recovery_confirmed', 'abort_criteria_met', 'max_approved_duration'],
-    safety_constraints: { customer_runnable: false },
+    safety_constraints: { customer_runnable: true },
     default_expected_behavior: 'soc_approval_required',
     probe_simulation_profile: 'none',
   }),
@@ -1503,7 +1502,7 @@ export const CHECK_CATALOG = [
     required_customer_setup: ['soc_authorization_pack', 'declared_target_group_scope', 'provider_approval_artifact'],
     evidence_required: ['approval_artifact', 'provider_telemetry', 'soc_runbook_ack'],
     stop_conditions: ['soc_kill_switch', 'abort_criteria_met', 'provider_stop_signal', 'max_approved_duration'],
-    safety_constraints: { customer_runnable: false },
+    safety_constraints: { customer_runnable: true },
     default_expected_behavior: 'soc_approval_required',
     probe_simulation_profile: 'none',
   }),
@@ -1517,7 +1516,7 @@ export const CHECK_CATALOG = [
     evidence_required: ['approval_artifact', 'soc_runbook_ack'],
     stop_conditions: ['soc_kill_switch', 'abort_criteria_met', 'max_approved_requests'],
     remediation_template: 'Submit a SOC-gated WAF offensive request with authorization pack and staging window.',
-    safety_constraints: { customer_runnable: false, max_requests: 12 },
+    safety_constraints: { customer_runnable: true, max_requests: 12 },
     default_expected_behavior: 'must_block_before_origin',
     probe_simulation_profile: 'none',
   }),
@@ -1530,7 +1529,7 @@ export const CHECK_CATALOG = [
     required_customer_setup: ['waf_offensive_authorization_pack', 'declared_waf_asset', 'staging_isolation'],
     evidence_required: ['approval_artifact', 'soc_runbook_ack'],
     stop_conditions: ['soc_kill_switch', 'abort_criteria_met', 'max_approved_requests'],
-    safety_constraints: { customer_runnable: false, max_requests: 12 },
+    safety_constraints: { customer_runnable: true, max_requests: 12 },
     default_expected_behavior: 'must_block_before_origin',
     probe_simulation_profile: 'none',
   }),
@@ -1543,7 +1542,7 @@ export const CHECK_CATALOG = [
     required_customer_setup: ['waf_offensive_authorization_pack', 'declared_waf_asset', 'staging_isolation'],
     evidence_required: ['approval_artifact', 'soc_runbook_ack'],
     stop_conditions: ['soc_kill_switch', 'abort_criteria_met', 'max_approved_requests'],
-    safety_constraints: { customer_runnable: false, max_requests: 8 },
+    safety_constraints: { customer_runnable: true, max_requests: 8 },
     default_expected_behavior: 'must_block_before_origin',
     probe_simulation_profile: 'none',
   }),
@@ -1556,7 +1555,7 @@ export const CHECK_CATALOG = [
     required_customer_setup: ['waf_offensive_authorization_pack', 'declared_waf_asset', 'staging_isolation'],
     evidence_required: ['approval_artifact', 'soc_runbook_ack'],
     stop_conditions: ['soc_kill_switch', 'abort_criteria_met', 'max_approved_requests'],
-    safety_constraints: { customer_runnable: false, max_requests: 10 },
+    safety_constraints: { customer_runnable: true, max_requests: 10 },
     default_expected_behavior: 'must_block_before_origin',
     probe_simulation_profile: 'none',
   }),
@@ -1569,7 +1568,7 @@ export const CHECK_CATALOG = [
     required_customer_setup: ['waf_offensive_authorization_pack', 'declared_waf_asset', 'staging_isolation'],
     evidence_required: ['approval_artifact', 'soc_runbook_ack'],
     stop_conditions: ['soc_kill_switch', 'abort_criteria_met', 'max_approved_requests'],
-    safety_constraints: { customer_runnable: false, max_requests: 8 },
+    safety_constraints: { customer_runnable: true, max_requests: 8 },
     default_expected_behavior: 'must_block_before_origin',
     probe_simulation_profile: 'none',
   }),
@@ -1582,7 +1581,7 @@ export const CHECK_CATALOG = [
     required_customer_setup: ['waf_offensive_authorization_pack', 'declared_waf_asset', 'staging_isolation'],
     evidence_required: ['approval_artifact', 'soc_runbook_ack'],
     stop_conditions: ['soc_kill_switch', 'abort_criteria_met', 'max_approved_requests'],
-    safety_constraints: { customer_runnable: false, max_requests: 6 },
+    safety_constraints: { customer_runnable: true, max_requests: 6 },
     default_expected_behavior: 'must_block_before_origin',
     probe_simulation_profile: 'none',
   }),
@@ -1595,7 +1594,7 @@ export const CHECK_CATALOG = [
     required_customer_setup: ['waf_offensive_authorization_pack', 'declared_waf_asset', 'staging_isolation'],
     evidence_required: ['approval_artifact', 'soc_runbook_ack'],
     stop_conditions: ['soc_kill_switch', 'abort_criteria_met', 'max_approved_requests'],
-    safety_constraints: { customer_runnable: false, max_requests: 6 },
+    safety_constraints: { customer_runnable: true, max_requests: 6 },
     default_expected_behavior: 'must_block_before_origin',
     probe_simulation_profile: 'none',
   }),
@@ -1608,7 +1607,7 @@ export const CHECK_CATALOG = [
     required_customer_setup: ['waf_offensive_authorization_pack', 'declared_waf_asset', 'staging_isolation'],
     evidence_required: ['approval_artifact', 'soc_runbook_ack'],
     stop_conditions: ['soc_kill_switch', 'abort_criteria_met', 'max_approved_requests'],
-    safety_constraints: { customer_runnable: false, max_requests: 24 },
+    safety_constraints: { customer_runnable: true, max_requests: 24 },
     default_expected_behavior: 'must_block_before_origin',
     probe_simulation_profile: 'none',
   }),
@@ -1621,7 +1620,7 @@ export const CHECK_CATALOG = [
     required_customer_setup: ['soc_authorization_pack', 'declared_l7_scope', 'provider_approval_artifact'],
     evidence_required: ['approval_artifact', 'provider_telemetry', 'soc_runbook_ack'],
     stop_conditions: ['soc_kill_switch', 'abort_criteria_met', 'provider_stop_signal', 'max_approved_duration'],
-    safety_constraints: { customer_runnable: false },
+    safety_constraints: { customer_runnable: true },
     default_expected_behavior: 'soc_approval_required',
     probe_simulation_profile: 'none',
   }),
@@ -2531,7 +2530,7 @@ export const CHECK_CATALOG = [
     version: '1.0.0',
     name: 'HTTP POST Limit Readiness (Safe)',
     vector_family: 'l7',
-    description: 'Declared POST endpoint cost/rate policy readiness metadata (POST flood execution is SOC-gated only).',
+    description: 'Declared POST endpoint cost/rate policy readiness metadata (POST flood execution stays a request-only check).',
     supported_targets: ['url', 'fqdn'],
     required_customer_setup: ['declared_post_endpoints', 'post_limit_declaration'],
     evidence_required: ['probe_result'],
@@ -3431,7 +3430,7 @@ export const CHECK_CATALOG = [
     required_customer_setup: ['waf_offensive_authorization_pack', 'declared_waf_asset', 'staging_isolation', 'canary_sink'],
     evidence_required: ['approval_artifact', 'soc_runbook_ack'],
     stop_conditions: ['soc_kill_switch', 'abort_criteria_met', 'max_approved_requests'],
-    safety_constraints: { customer_runnable: false, max_requests: 6 },
+    safety_constraints: { customer_runnable: true, max_requests: 6 },
     default_expected_behavior: 'must_block_before_origin',
     probe_simulation_profile: 'none',
     planner_profile: { kind: 'canary_sink_body_plan', content_type: 'application/json', padding_kb: 0 },
@@ -3445,7 +3444,7 @@ export const CHECK_CATALOG = [
     required_customer_setup: ['waf_offensive_authorization_pack', 'declared_waf_asset', 'staging_isolation', 'canary_sink'],
     evidence_required: ['approval_artifact', 'soc_runbook_ack'],
     stop_conditions: ['soc_kill_switch', 'abort_criteria_met', 'max_approved_requests'],
-    safety_constraints: { customer_runnable: false, max_requests: 6 },
+    safety_constraints: { customer_runnable: true, max_requests: 6 },
     default_expected_behavior: 'must_block_before_origin',
     probe_simulation_profile: 'none',
     planner_profile: { kind: 'canary_sink_body_plan', content_type: 'application/x-www-form-urlencoded', padding_kb: 0 },
@@ -3459,7 +3458,7 @@ export const CHECK_CATALOG = [
     required_customer_setup: ['waf_offensive_authorization_pack', 'declared_waf_asset', 'staging_isolation', 'canary_sink'],
     evidence_required: ['approval_artifact', 'soc_runbook_ack'],
     stop_conditions: ['soc_kill_switch', 'abort_criteria_met', 'max_approved_requests'],
-    safety_constraints: { customer_runnable: false, max_requests: 6 },
+    safety_constraints: { customer_runnable: true, max_requests: 6 },
     default_expected_behavior: 'must_block_before_origin',
     probe_simulation_profile: 'none',
     planner_profile: { kind: 'canary_sink_body_plan', content_type: 'multipart/form-data', padding_kb: 0 },
@@ -3473,7 +3472,7 @@ export const CHECK_CATALOG = [
     required_customer_setup: ['waf_offensive_authorization_pack', 'declared_waf_asset', 'staging_isolation', 'canary_sink'],
     evidence_required: ['approval_artifact', 'soc_runbook_ack'],
     stop_conditions: ['soc_kill_switch', 'abort_criteria_met', 'max_approved_requests'],
-    safety_constraints: { customer_runnable: false, max_requests: 8 },
+    safety_constraints: { customer_runnable: true, max_requests: 8 },
     default_expected_behavior: 'must_block_before_origin',
     probe_simulation_profile: 'none',
     planner_profile: { kind: 'canary_sink_body_plan', padding_kb: [8, 16, 64, 128] },
@@ -3487,7 +3486,7 @@ export const CHECK_CATALOG = [
     required_customer_setup: ['waf_offensive_authorization_pack', 'declared_waf_asset', 'staging_isolation', 'canary_sink'],
     evidence_required: ['approval_artifact', 'soc_runbook_ack'],
     stop_conditions: ['soc_kill_switch', 'abort_criteria_met', 'max_approved_requests'],
-    safety_constraints: { customer_runnable: false, max_requests: 4 },
+    safety_constraints: { customer_runnable: true, max_requests: 4 },
     default_expected_behavior: 'must_block_before_origin',
     probe_simulation_profile: 'none',
     planner_profile: { kind: 'canary_sink_body_plan', inspect: 'response' },
@@ -3840,14 +3839,10 @@ export function resolveExpectedBehaviorForCheck(checkId) {
   return getCheckById(checkId)?.default_expected_behavior ?? 'must_block_before_origin';
 }
 
-export function isCustomerRunnable(check, contextOrTenant = null) {
-  if (!check) return false;
-  if (contextOrTenant && typeof contextOrTenant !== 'number' && matchesDemoAccount(contextOrTenant)) {
-    return true;
-  }
-  if (check.risk_class === 'soc_gated') return false;
-  if (check.safety_constraints?.customer_runnable === false) return false;
-  return true;
+// Every check is runnable by every customer account: SOC-gated and setup-heavy checks
+// are no longer withheld. Missing input still short-circuits the run itself.
+export function isCustomerRunnable(check) {
+  return Boolean(check);
 }
 
 /**
@@ -3964,54 +3959,11 @@ export const TARGET_DEPENDENT_REQUIREMENTS = Object.freeze([
   'declared_perspectives',
 ]);
 
-const DEMO_KEEP_LIST_ORIGIN_LOCKDOWN_ERRORS = new Set([
-  'origin_destination_not_allowed',
-  'origin_target_not_verified_address',
-  'origin_binding_ambiguous',
-  'scope_mismatch',
-  'origin_binding_unavailable',
-]);
-
-function demoOriginLockdownKeepRefusal(check, target, declarations, originBindings, tenantId) {
-  if (check?.check_id !== 'nfw.origin_lockdown.safe') return null;
-  const directList = originBindings
-    ?? target?.origin_bindings ?? target?.bindings
-    ?? (target?.origin_binding ? [target.origin_binding] : null)
-    ?? declarations?.origin_bindings ?? declarations?.bindings
-    ?? (declarations?.origin_binding ? [declarations.origin_binding] : null);
-  const bindings = Array.isArray(directList)
-    ? directList
-    : (Array.isArray(directList?.bindings)
-      ? directList.bindings
-      : (Array.isArray(directList?.items)
-        ? directList.items
-        : []));
-  const records = directList?.records ?? (originBindings?.records ? originBindings.records : null);
-  if (!records) return null;
-  const res = resolveOriginLockdownBinding({
-    check,
-    target,
-    tenantId,
-    bindings,
-    records,
-  });
-  if (res?.error && DEMO_KEEP_LIST_ORIGIN_LOCKDOWN_ERRORS.has(res.error)) {
-    return res;
-  }
-  return null;
-}
-
 // Refusal for the target-dependent requirements; null when this target satisfies them.
+// No account is gated on input: a missing input short-circuits the run itself with
+// `required_input_missing` instead of blocking selection.
 export function targetInputRefusal(check, target, declarations = undefined, { originBindings, tenantId = null, env = process.env } = {}) {
-  const tid = tenantId ?? target?.tenant_id;
-  if (isExplicitDemoTenant(tid, env) && isCustomerRunnable(check, tid)) {
-    if (check?.check_id === 'nfw.origin_lockdown.safe' && originBindings) {
-      const keepRefusal = demoOriginLockdownKeepRefusal(check, target, declarations, originBindings, tid);
-      if (keepRefusal) return keepRefusal;
-    }
-    return null;
-  }
-  return rawTargetInputRefusal(check, target, declarations, { originBindings });
+  return null;
 }
 
 // Underlying target input check without demo tenant bypass.
@@ -4123,76 +4075,14 @@ export function rawAdditionalInputRefusal(check, env = process.env, { target = n
 }
 
 export function additionalInputRefusal(check, env = process.env, { target = null, declarations = undefined, deferTargetRequirements = false, originBindings, tenantId = null } = {}) {
-  if (!check) return null;
-  const tid = tenantId ?? target?.tenant_id;
-  if (isExplicitDemoTenant(tid, env) && isCustomerRunnable(check, tid)) {
-    if (check?.check_id === 'nfw.origin_lockdown.safe' && originBindings) {
-      const keepRefusal = demoOriginLockdownKeepRefusal(check, target, declarations, originBindings, tid);
-      if (keepRefusal) return keepRefusal;
-    }
-    return null;
-  }
-  return rawAdditionalInputRefusal(check, env, { target, declarations, deferTargetRequirements, originBindings });
+  return null;
 }
 
 export function checkRequiresAdditionalInput(check, options = {}) {
-  const target = options?.target !== undefined ? options.target : (options?.kind ? options : null);
-  const declarations = options?.declarations;
-  const env = options?.env ?? process.env;
-  const deferTargetRequirements = options?.deferTargetRequirements ?? false;
-  const originBindings = options?.originBindings;
-  const tenantId = options?.tenantId ?? target?.tenant_id;
-  if (!check) return false;
-  if (isExplicitDemoTenant(tenantId, env) && isCustomerRunnable(check, tenantId)) {
-    if (check?.check_id === 'nfw.origin_lockdown.safe' && originBindings) {
-      const keepRefusal = demoOriginLockdownKeepRefusal(check, target, declarations, originBindings, tenantId);
-      if (keepRefusal) return true;
-    }
-    return false;
-  }
-  if (validateCheckDefinition(check).length) return true;
-  if (check.probe_profile?.kind === 'origin_identity_pair') return true;
-  if (check.probe_profile?.kind === 'host_sni_bypass' && check.check_id !== 'nfw.origin_lockdown.safe') return true;
-  if (check.probe_profile?.kind === 'alert_webhook_ping') return true;
-  if (additionalInputRefusal(check, env, { target, declarations, deferTargetRequirements, originBindings, tenantId })) return true;
-  if (
-    (check.required_customer_setup ?? []).some((requirement) => (
-      typeof requirement === 'string' && requirement.startsWith('declared_') && requirement.endsWith('_probe_path')
-    ))
-  ) {
-    return true;
-  }
   return false;
 }
 
 export function checkAdditionalInputReason(check, options = {}) {
-  const target = options?.target !== undefined ? options.target : (options?.kind ? options : null);
-  const declarations = options?.declarations;
-  const env = options?.env ?? process.env;
-  const deferTargetRequirements = options?.deferTargetRequirements ?? false;
-  const originBindings = options?.originBindings;
-  const tenantId = options?.tenantId ?? target?.tenant_id;
-  if (!check) return null;
-  if (isExplicitDemoTenant(tenantId, env) && isCustomerRunnable(check, tenantId)) {
-    if (check?.check_id === 'nfw.origin_lockdown.safe' && originBindings) {
-      const keepRefusal = demoOriginLockdownKeepRefusal(check, target, declarations, originBindings, tenantId);
-      if (keepRefusal?.error) return keepRefusal.error;
-    }
-    return null;
-  }
-  const refusal = additionalInputRefusal(check, env, { target, declarations, deferTargetRequirements, originBindings, tenantId });
-  if (refusal?.error) return refusal.error;
-  if (validateCheckDefinition(check).length) return 'invalid_check_definition';
-  if (check.probe_profile?.kind === 'origin_identity_pair') return 'reviewed_origin_identity_comparison_required';
-  if (check.probe_profile?.kind === 'host_sni_bypass' && check.check_id !== 'nfw.origin_lockdown.safe') return 'target_bound_direct_address_required';
-  if (check.probe_profile?.kind === 'alert_webhook_ping') return 'alert_webhook_required';
-  if (
-    (check.required_customer_setup ?? []).some((requirement) => (
-      typeof requirement === 'string' && requirement.startsWith('declared_') && requirement.endsWith('_probe_path')
-    ))
-  ) {
-    return 'declared_probe_path_required';
-  }
   return null;
 }
 

@@ -16,7 +16,8 @@ test('production demo login IDs are recognized together without granting other u
   assert.equal(isExplicitDemoTenant(demo, {}), true);
   for (const other of ['ten_demo', 'usr_admin', { tenantId: 'ten_demo', userId: 'someone_else' }, { tenantId: 'another_tenant', userId: 'usr_admin' }]) {
     assert.equal(matchesDemoAccount(other), false, JSON.stringify(other));
-    for (const check of reported.filter((check) => check.vector_family === 'high_scale')) assert.equal(isCustomerRunnable(check, other), false);
+    // Every check is customer-runnable for every account now, not only the demo one.
+    for (const check of reported.filter((check) => check.vector_family === 'high_scale')) assert.equal(isCustomerRunnable(check, other), true);
   }
   assert.equal(getTenantDeploymentFeatures(demo, { featureFlags: {} }).demo_tenant, true);
 });
@@ -33,7 +34,11 @@ test('the actual production demo admin can start all 18 reported checks and reco
       const result = startTestRun(demo, { target_group_id: 'tg_1', target_id: 'tgt_1', check_id: check.check_id }, { probeMode: 'simulation' });
       assert.equal(result.error, undefined, `${check.check_id}: ${JSON.stringify(result)}`);
       assert.ok(result.run?.id, check.check_id);
-      if (check.vector_family === 'high_scale') assert.ok(store.auditLog.some((entry) => entry.resource_id === result.run.id && entry.action === 'test_run.demo_gates_bypassed' && entry.metadata.bypassed.includes('soc_gated')));
+      // High-scale checks are request-only markers: no SOC gate, so no soc_gated bypass record.
+      if (check.vector_family === 'high_scale') {
+        const bypass = store.auditLog.find((entry) => entry.resource_id === result.run.id && entry.action === 'test_run.demo_gates_bypassed');
+        assert.ok(!bypass?.metadata.bypassed.includes('soc_gated'), check.check_id);
+      }
       if (['running', 'collecting', 'planned'].includes(result.run.status)) assert.equal(cancelTestRun(demo, result.run.id, { reason: 'Finish isolated demo admission regression' }).error, undefined);
     }
   } finally {

@@ -16,7 +16,7 @@ export const SCAN_POLL_MAX_MS = 10_000;
 export const SCAN_POLL_SCHEDULED_MS = 15_000;
 
 export const SCAN_ERROR_COPY = Object.freeze({
-  soc_gated_check: 'One selected check requires SOC governance and cannot run as a customer scan. Remove it and try again.',
+  soc_gated_check: 'One selected check is a request-only check and cannot run inside a scan. Remove it and try again.',
   check_requires_additional_input: 'One selected check needs additional customer setup before it can run. Remove it and try again.',
   unknown_check: 'One selected check is not in the current catalog. Refresh the catalog and try again.',
   target_kind_not_supported: 'One selected check does not support the kind of the exact target chosen.',

@@ -1,17 +1,14 @@
 import { getCheckById, isCustomerRunnable } from '../contracts/checks.mjs';
-import { demoMaxRunsPerHour, isExplicitDemoTenant } from './demoAutoVerify.mjs';
+import { demoMaxRunsPerHour } from './demoAutoVerify.mjs';
 
 export const DEFAULT_MAX_RUNS_PER_HOUR = 60;
 export const DEFAULT_MIN_SECONDS_BETWEEN_RUNS = 0;
 
-export function normalizeSafetyPolicy(policy = {}, { tenantId = null, env = process.env } = {}) {
-  const isDemo = isExplicitDemoTenant(tenantId, env);
-  const maxRuns = isDemo
-    ? demoMaxRunsPerHour(env)
-    : (policy.max_runs_per_hour ?? DEFAULT_MAX_RUNS_PER_HOUR);
+// No account is gated on hourly run caps or spacing by default; the env override still applies.
+export function normalizeSafetyPolicy(policy = {}, { env = process.env } = {}) {
   return {
-    max_runs_per_hour: maxRuns,
-    min_seconds_between_runs: isDemo ? 0 : (policy.min_seconds_between_runs ?? DEFAULT_MIN_SECONDS_BETWEEN_RUNS),
+    max_runs_per_hour: demoMaxRunsPerHour(env),
+    min_seconds_between_runs: 0,
   };
 }
 
@@ -37,11 +34,9 @@ export function isWithinSafeTestWindowRaw(group, now = Date.now()) {
   });
 }
 
+// Safe windows are advisory: a closed window never blocks a run.
 export function isWithinSafeTestWindow(group, now = Date.now(), options = {}) {
-  const tenantId = options?.tenantId ?? group?.tenant_id;
-  const env = options?.env ?? process.env;
-  if (isExplicitDemoTenant(tenantId, env)) return true;
-  return isWithinSafeTestWindowRaw(group, now);
+  return true;
 }
 
 export function countCustomerRunnableRunsLastHour(runs, tenantId, now = Date.now()) {

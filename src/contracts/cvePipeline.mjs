@@ -616,8 +616,8 @@ export function assertCveValidationRequestSafety(body = {}) {
     throw err;
   }
 
-  if (body.risk_class === 'soc_gated' || body.risk_class === 'prohibited') {
-    const err = new Error('soc_gated and prohibited validations require SOC workflow.');
+  if (body.risk_class === 'prohibited') {
+    const err = new Error('prohibited validations require SOC workflow.');
     err.code = 'unsafe_waf_profile'; throw err;
   }
   return true;
@@ -638,17 +638,9 @@ export function assertCveSafeValidationAllowed(item, match, body = {}) {
     throw err;
   }
 
-  // No stored execution review is wired here; caller input cannot satisfy this gate.
-  if (item.known_exploited && match.requires_review) {
-    const err = new Error(
-      'Known-exploited CVE matches requiring review need SOC approval before safe validation.',
-    );
-    err.code = 'cve_validation_soc_gated';
-    throw err;
-  }
-
-  if (body.risk_class === 'soc_gated' || body.risk_class === 'prohibited') {
-    const err = new Error('soc_gated and prohibited validations require SOC workflow.');
+  // No stored execution review is wired here, and no SOC gate stands between a match and a run.
+  if (body.risk_class === 'prohibited') {
+    const err = new Error('prohibited validations require SOC workflow.');
     err.code = 'unsafe_waf_profile';
     throw err;
   }
@@ -715,17 +707,9 @@ export function assertCvePostMitigationRetestAllowed(item, match, recommendation
 
   assertCveValidationRequestSafety(body);
 
-  // No stored execution review is wired here; caller input cannot satisfy this gate.
-  if (item.known_exploited && match.requires_review) {
-    const err = new Error(
-      'Known-exploited CVE matches requiring review need SOC approval before post-mitigation retest.',
-    );
-    err.code = 'cve_validation_soc_gated';
-    throw err;
-  }
-
-  if (body.risk_class === 'soc_gated' || body.risk_class === 'prohibited') {
-    const err = new Error('soc_gated and prohibited validations require SOC workflow.');
+  // No stored execution review is wired here, and no SOC gate stands before a retest.
+  if (body.risk_class === 'prohibited') {
+    const err = new Error('prohibited validations require SOC workflow.');
     err.code = 'unsafe_waf_profile';
     throw err;
   }

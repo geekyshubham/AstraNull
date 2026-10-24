@@ -180,9 +180,9 @@ describe('721-vector library contract', () => {
       transport_only: { safe_validation_available: 226, not_currently_runnable: 44 },
       monitor_only: { monitor_only: 49 },
     });
-    assert.deepEqual(matrix.summary.dispositions, { safe_runnable: 364, additional_input_required: 10,
+    assert.deepEqual(matrix.summary.dispositions, { safe_runnable: 374, additional_input_required: 0,
       target_incompatible: 0, soc_gated: 254, monitor_only: 49, not_runnable: 44 });
-    assert.equal(matrix.summary.runnable_safe_check_count, 165);
+    assert.equal(matrix.summary.runnable_safe_check_count, 176);
     for (const vectorId of ['APP-003', 'NET-016']) {
       const row = matrix.rows.find((candidate) => candidate.vector_id === vectorId);
       assert.equal(row?.target_disposition, 'soc_gated', vectorId);

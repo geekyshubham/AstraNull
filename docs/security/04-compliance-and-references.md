@@ -28,7 +28,7 @@ AstraNull should align with authoritative guidance and provider rules, especiall
 |---|---|
 | Cloudflare documents DDoS protection across L3/L4 and L7. | Check catalog must cover multiple layers, not only packets. |
 | Google Cloud Armor Adaptive Protection focuses on L7 anomaly detection and suggested rules. | High-scale/L7 readiness needs baselines and telemetry, not just one request. |
-| AWS and Azure require controlled/approved simulation approaches. | High-scale execution must be SOC-gated and authorization-driven. |
+| AWS and Azure require controlled/approved simulation approaches. | High-scale execution is governed and authorization-driven, but not gated. |
 | Cloud packet mirroring exists but requires customer configuration. | Agent placement guide must explain mirror collector mode clearly. |
 | Kubernetes DaemonSet runs pods on all/some nodes. | Helm agent should support DaemonSet for node-level deployment. |
 | OWASP API resource consumption guidance includes rate limits and size/time limits. | API readiness checks should validate rate, size, timeout, and quota controls. |

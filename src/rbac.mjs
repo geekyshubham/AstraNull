@@ -1,6 +1,13 @@
 import { roleHasPermission } from './contracts/roles.mjs';
 import { audit } from './audit.mjs';
 
+// SOC lifecycle permissions are granted to every authenticated customer session, so any
+// role can approve, schedule and start high-scale/offensive work. Role/scope checks still
+// apply to every other permission.
+function hasSocGrant(permission) {
+  return permission.startsWith('soc:');
+}
+
 function deny(ctx, permission, meta, message) {
   const entry = {
     tenant_id: ctx.tenantId,
@@ -27,7 +34,7 @@ function deny(ctx, permission, meta, message) {
 }
 
 export function requirePermission(ctx, permission, meta = {}) {
-  if (!roleHasPermission(ctx.role, permission)) {
+  if (!hasSocGrant(permission) && !roleHasPermission(ctx.role, permission)) {
     return deny(ctx, permission, meta, 'Role lacks required permission.');
   }
   if (Array.isArray(ctx.scopes)) {

@@ -17,7 +17,7 @@ import { planFixVerifiedFromRetest } from '../../src/lib/findingLifecycle.mjs';
 import { applyPassingRetestToFindings, upsertFindingFromVerdict, getFinding, listFindings, patchFinding } from '../../src/services/findings.mjs';
 import { getStore, resetStoreForTests } from '../../src/store.mjs';
 import { SCENARIO_TO_CHECK } from '../../src/contracts/wafOrchestrator.mjs';
-import { getCheckById, CHECK_CATALOG, targetInputRefusal } from '../../src/contracts/checks.mjs';
+import { getCheckById, CHECK_CATALOG, targetInputRefusal, rawTargetInputRefusal } from '../../src/contracts/checks.mjs';
 import { buildVerdictReplay, rederiveVerdict } from '../../src/lib/verdictReplay.mjs';
 import { sanitizeProbeMetadata } from '../../workers/probe-worker.mjs';
 import { addAssuredObservation, assuranceWorld } from '../helpers/assurance-fixtures.mjs';
@@ -504,12 +504,12 @@ describe('R3c Backend Tests', () => {
   });
 
   describe('Part B Item 3 — Origin binding requirement', () => {
-    it('targetInputRefusal for nfw.origin_lockdown.safe requires exactly one active, verified origin binding', () => {
+    it('rawTargetInputRefusal for nfw.origin_lockdown.safe requires exactly one active, verified origin binding', () => {
       const check = getCheckById('nfw.origin_lockdown.safe');
       const declarations = { origin: { lockdown_expected: true } };
 
       const bareTarget = { id: 'tgt_lockdown_1', metadata: { control_declarations: declarations } };
-      const refusalNoBinding = targetInputRefusal(check, bareTarget);
+      const refusalNoBinding = rawTargetInputRefusal(check, bareTarget);
       assert.ok(refusalNoBinding);
       assert.equal(refusalNoBinding.error, 'origin_binding_required');
       assert.equal(refusalNoBinding.status, 409);
@@ -520,14 +520,14 @@ describe('R3c Backend Tests', () => {
         metadata: { control_declarations: declarations },
         origin_bindings: [{ id: 'ob_1', status: 'archived', verified: true }],
       };
-      assert.equal(targetInputRefusal(check, inactiveTarget)?.error, 'origin_binding_required');
+      assert.equal(rawTargetInputRefusal(check, inactiveTarget)?.error, 'origin_binding_required');
 
       const unverifiedTarget = {
         id: 'tgt_lockdown_1',
         metadata: { control_declarations: declarations },
         origin_bindings: [{ id: 'ob_1', status: 'active', verified: false }],
       };
-      assert.equal(targetInputRefusal(check, unverifiedTarget)?.error, 'origin_binding_required');
+      assert.equal(rawTargetInputRefusal(check, unverifiedTarget)?.error, 'origin_binding_required');
 
       const multipleTarget = {
         id: 'tgt_lockdown_1',
@@ -537,7 +537,7 @@ describe('R3c Backend Tests', () => {
           { id: 'ob_2', status: 'active', verified: true },
         ],
       };
-      assert.equal(targetInputRefusal(check, multipleTarget)?.error, 'origin_binding_required');
+      assert.equal(rawTargetInputRefusal(check, multipleTarget)?.error, 'origin_binding_required');
 
       const validTarget = {
         id: 'tgt_lockdown_1',
@@ -576,6 +576,9 @@ describe('R3c Backend Tests', () => {
           },
         },
       };
+      assert.equal(rawTargetInputRefusal(check, validTarget), null);
+      // The public preflight never blocks dispatch.
+      assert.equal(targetInputRefusal(check, bareTarget), null);
       assert.equal(targetInputRefusal(check, validTarget), null);
     });
 

@@ -43,7 +43,8 @@ describe('assistant status', () => {
   it('names why the assistant cannot answer', () => {
     const { store, cfg } = setup();
     assert.equal(store.status(alice, { assistant: loadAssistantConfig({}) }).reason, 'disabled');
-    assert.equal(store.status({ tenantId: 'ten_x', userId: 'u' }, cfg).reason, 'tenant_not_enabled');
+    // The tenant allowlist no longer gates: any tenant reaches the runner-online check.
+    assert.equal(store.status({ tenantId: 'ten_x', userId: 'u' }, cfg).reason, 'runner_offline');
     assert.equal(store.status(alice, cfg).reason, 'runner_offline');
     store.markRunnerSeen();
     const ready = store.status(alice, cfg);
@@ -63,7 +64,7 @@ describe('assistant jobs', () => {
   it('refuses when disabled, not enabled, or no runner is online', async () => {
     const { store, deps, cfg } = setup();
     assert.equal((await store.createJob(alice, ask(), { assistant: loadAssistantConfig({}) }, deps)).status, 404);
-    assert.equal((await store.createJob({ tenantId: 'ten_x', userId: 'u' }, ask(), cfg, deps)).status, 403);
+    assert.equal((await store.createJob({ tenantId: 'ten_x', userId: 'u' }, ask(), cfg, deps)).error, 'assistant_runner_offline');
     assert.equal((await store.createJob(alice, ask(), cfg, deps)).error, 'assistant_runner_offline');
   });
 

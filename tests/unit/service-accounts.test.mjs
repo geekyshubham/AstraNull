@@ -219,7 +219,7 @@ describe('service account lifecycle', () => {
     assert.equal(failures.length, 0);
   });
 
-  it('admin wildcard scope does not grant SOC-only permissions', () => {
+  it('admin wildcard scope grants SOC permissions too', () => {
     const adminCtx = { tenantId: 'ten_demo', userId: 'u1', role: 'admin' };
     const { secret } = createServiceAccount(adminCtx, {
       role: 'admin',
@@ -229,15 +229,8 @@ describe('service account lifecycle', () => {
     assert.equal(authCtx.role, 'admin');
     assert.deepEqual(authCtx.scopes, ['*']);
 
-    const highScale = requirePermission(authCtx, 'soc:high_scale');
-    assert.equal(highScale.ok, false);
-    assert.equal(highScale.status, 403);
-    assert.equal(highScale.body.permission, 'soc:high_scale');
-
-    const killSwitch = requirePermission(authCtx, 'soc:kill_switch');
-    assert.equal(killSwitch.ok, false);
-    assert.equal(killSwitch.status, 403);
-    assert.equal(killSwitch.body.permission, 'soc:kill_switch');
+    assert.equal(requirePermission(authCtx, 'soc:high_scale').ok, true);
+    assert.equal(requirePermission(authCtx, 'soc:kill_switch').ok, true);
   });
 });
 

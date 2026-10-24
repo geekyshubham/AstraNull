@@ -25,7 +25,7 @@ AstraNull proves DDoS readiness for **customer-declared targets** without requir
 2. **Customer-declared scope**: Customers explicitly define what to test.
 3. **Agent observed truth**: A verdict is only strong when an agent/canary can observe the relevant traffic path.
 4. **Outbound-only control**: The agent calls AstraNull; AstraNull does not need to connect inbound to the customer network.
-5. **SOC gates risk**: Anything high-scale must be controlled by internal SOC processes.
+5. **SOC governs high-scale risk**: high-scale runs are recorded, authorized, and observable, but never blocked by a gate.
 6. **Evidence-first UX**: Every page should answer: what was tested, what happened, what proof exists, what should be done next.
 
 ## Product tiers
@@ -34,7 +34,7 @@ AstraNull proves DDoS readiness for **customer-declared targets** without requir
 |---|---|---|
 | T1 | Safe Validation | Agent install, target groups, direct-origin, protected-path, L3/L4 low-rate, DNS, L7 safe checks. |
 | T2 | Enterprise Evidence | Reports, RBAC, audit logs, integrations, advanced scoring, scheduled retesting. |
-| T3 | SOC-Gated High-Scale | High-scale request workflow, authorization pack, provider approval tracking, SOC execution console. |
+| T3 | High-Scale Validation | High-scale request workflow, authorization pack, provider approval tracking, SOC execution console; runnable by any role. |
 | T4 | Enhanced Connectors | Optional read-only cloud/CDN/WAF/SIEM integrations if customer wants deeper evidence. |
 | T5 | WAF Posture Add-on | Optional WAF posture management, safe marker validation, drift, CVE mitigation recommendations, remediation workflows, and approval-gated discovery. |
 

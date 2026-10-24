@@ -83,11 +83,11 @@ describe('T5 WAF/NFW catalog', () => {
     }
   });
 
-  it('marks port-less TCP/UDP checks not runnable without a port', () => {
+  it('marks port-less TCP/UDP checks mechanism-unsupported but still selectable', () => {
     for (const id of ['l3.tcp_flag_anomaly.readiness', 'l3.tcp_connection_flood.readiness', 'reflect.tcp_middlebox_exposure.safe']) {
       const check = getCheckById(id);
       assert.equal(check.mechanism_supported, false, id);
-      assert.equal(checkRequiresAdditionalInput(check), true, id);
+      assert.equal(checkRequiresAdditionalInput(check), false, id);
     }
     assert.equal(getCheckById('l3.ssh_connection_flood.readiness').probe_profile.default_port, 22);
     assert.equal(getCheckById('l3.smtp_connection_flood.readiness').probe_profile.default_port, 25);
@@ -119,8 +119,8 @@ describe('T5 WAF/NFW catalog', () => {
     assert.equal(getCheckById('nfw.connection_limit.safe').probe_profile.max_requests, 12);
     assert.equal(getCheckById('dns.zone_transfer_exposure.safe').probe_profile.max_requests, 5);
     assert.equal(checkRequiresAdditionalInput(getCheckById('waf.http_method_policy_enforced.safe')), false);
-    assert.equal(checkRequiresAdditionalInput(getCheckById('nfw.origin_lockdown.safe')), true);
-    assert.equal(checkRequiresAdditionalInput(getCheckById('nfw.perspective_allowlist.safe')), true);
+    assert.equal(checkRequiresAdditionalInput(getCheckById('nfw.origin_lockdown.safe')), false);
+    assert.equal(checkRequiresAdditionalInput(getCheckById('nfw.perspective_allowlist.safe')), false);
   });
 
   it('does not add RFI or CVE virtual-patching self-serve checks', () => {

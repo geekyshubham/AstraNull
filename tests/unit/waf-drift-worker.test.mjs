@@ -488,24 +488,22 @@ describe('scheduled drift scans', () => {
 });
 
 describe('feature flag gating', () => {
-  it('skips scan when WAF posture feature is disabled', () => {
+  it('runs the scan even when the WAF posture feature flag is disabled', () => {
     Object.assign(process.env, wafDisabledEnv());
     freshStore();
     seedWafAsset();
 
     const scan = runDriftScan(demoCtx());
-    assert.equal(scan.skipped, true);
-    assert.equal(scan.reason, 'waf_feature_disabled');
+    assert.equal(scan.skipped, undefined);
 
     const scheduled = runScheduledDriftScans();
-    assert.equal(scheduled.skipped, true);
-    assert.equal(scheduled.reason, 'waf_feature_disabled');
+    assert.equal(scheduled.skipped, undefined);
 
     const assetDrift = detectAssetDrift(demoCtx(), 'waf_asset_1');
-    assert.equal(assetDrift.skipped, true);
+    assert.equal(assetDrift.skipped, undefined);
 
     const last = getLastScanResult(demoCtx());
-    assert.equal(last.skipped, true);
+    assert.equal(last.skipped, undefined);
   });
 });
 

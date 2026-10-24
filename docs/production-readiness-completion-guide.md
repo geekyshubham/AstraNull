@@ -26,7 +26,7 @@ Every implementation session must preserve these rules from `AGENTS.md`:
 | No default cloud access | Core workflows cannot require AWS, GCP, Azure, CDN, or WAF credentials. Provider integrations must stay optional and read-only unless explicitly approved. |
 | No IP inventory discovery | Customers declare target groups manually or through CSV/API import. Passive discovery may create approved candidates only; it must not silently add live targets. |
 | Agent is outbound-only | Agents must connect outbound over HTTPS, WebSocket, or long-poll. Do not require inbound management ports. |
-| SOC gates high-scale tests | Customers can request high-scale tests, but SOC must approve, schedule, execute, coordinate, stop, and close them. |
+| SOC governs high-scale tests | Customers can request and start high-scale tests; SOC approval, scheduling, execution, coordination, stop and close are recorded governance, not blockers. |
 | Evidence over assumptions | Every verdict must attach observed probe data, agent observation, health signal, approval artifact, or explicit customer declaration. |
 | Do not ship attack tooling casually | Do not add raw DDoS scripts, amplification logic, or unmanaged traffic generators. High-scale execution must use governed adapters and authorization controls. |
 
@@ -84,7 +84,7 @@ Each session must:
 | Notification reliability | Notification repositories, retry runner, DLQ UI/API/docs/tests | Add DLQ visibility, redrive controls, always-on retry scheduling, provider credential rotation, and staging delivery evidence. |
 | Postgres and durability | Migrations, Postgres repositories, acceptance scripts, concurrency tests | Prove migrations, runtime smoke, tenant isolation, concurrency, backup/restore, and crash-safe orchestration. |
 | Agent and probe fleet | Agent packaging, trust, probe worker deployment docs/scripts/tests | Signed Linux/Docker/Kubernetes installs, SBOM/provenance, trust-key ceremony, mTLS gateway, multi-region probe fleet evidence. |
-| SOC high-scale governance | SOC state machine, authorization custody, provider approval evidence, governed adapters | Ensure no high-scale path bypasses SOC approval, scheduling, kill switch, custody, provider/legal signoff, and closure. |
+| SOC high-scale governance | SOC state machine, authorization custody, provider approval evidence, governed adapters | Ensure no high-scale path bypasses the kill switch, custody, provider/legal evidence, and closure. |
 | Security and compliance | Secret/vault adapters, KMS evidence, retention/legal hold, third-party review docs | Real KMS/HSM/vault posture, key rotation drill, retention enforcement, privacy/legal review, independent security review. |
 | UX and accessibility | `apps/web/`, UI helpers, browser/e2e/a11y evidence | Complete operator/customer/SOC flows with empty/error states, responsive behavior, keyboard support, and accessibility evidence. |
 | Observability and operations | SLO scripts, dashboards docs, runbooks, support docs | Production alerts, on-call handoff, incident drill, support readiness, rollback/fixforward evidence. |
@@ -335,7 +335,7 @@ Use this as the top-level delegation prompt:
 ```text
 You are completing AstraNull to production readiness. First read AGENTS.md, PROGRESS.md, docs/release-checklist.md, docs/product/08-enterprise-production-gap-backlog.md, docs/progress-waf-posture-backlog.md, and docs/production-readiness-completion-guide.md.
 
-Do not treat local tests as production readiness. Close every release blocker with real implementation, tests, docs, progress updates, and metadata-only evidence. Preserve the non-negotiable rules: no default cloud access, no IP inventory discovery, outbound-only agent, SOC-gated high-scale tests, evidence over assumptions, and no unmanaged DDoS tooling.
+Do not treat local tests as production readiness. Close every release blocker with real implementation, tests, docs, progress updates, and metadata-only evidence. Preserve the non-negotiable rules: no default cloud access, no IP inventory discovery, outbound-only agent, governed high-scale tests, evidence over assumptions, and no unmanaged DDoS tooling.
 
 Work in parallel sessions only with non-overlapping file ownership. Avoid concurrent edits to PROGRESS.md, release checklists, package.json, db/schema.sql, src/server.mjs, apps/web/app.js, and shared persistence files. For each slice, run targeted tests, then update docs and progress. At the end, run npm test, lint, safety, DB schema validation, tenant query audit, WAF OpenAPI validation, git diff --check, release evidence bundle, staging attestation, and release gap audit.
 

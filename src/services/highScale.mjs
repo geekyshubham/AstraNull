@@ -21,16 +21,12 @@ import {
   TELEMETRY_ACTIVE_STATES,
   TELEMETRY_CATEGORIES,
   TELEMETRY_LIVE_STATUSES,
-  authorizationPackComplete,
-  authorizationPackIncompleteResponse,
   bodySummaryFields,
   buildArtifactFromUpload,
   buildAuthorizationRequirementStatuses,
   buildProviderApprovalChecklist,
   buildTimeline,
-  distinctSocApprovalCount,
   evaluateHighScaleAdapterStartGate,
-  isWithinScheduledWindow,
   parseObservedAt,
   refreshAuthorizationPackStatus,
   storeOptionalHighScaleFields,
@@ -43,10 +39,6 @@ import {
   telemetryObjectContainsForbiddenKeys,
   validateHighScaleIntakeFields,
   normalizeHighScaleTargetSelection,
-  validateScenarioFamilyAuthorization,
-  validateGovernedAuthorization,
-  governedAuthorizationFailure,
-  validateActiveLoaAuthorization,
 } from '../lib/highScalePolicy.mjs';
 
 export { STATES, REQUIRED_ARTIFACT_TYPES, buildAuthorizationRequirementStatuses, refreshAuthorizationPackStatus, buildProviderApprovalChecklist };
@@ -516,10 +508,14 @@ export function transitionHighScale(ctx, id, action, metadata = {}) {
     if (scopeError) return scopeError;
   }
 
+  // No account is gated on governance artifacts: one click may approve, schedule and
+  // start, so any pre-execution state is a valid entry point for those three actions.
+  const demo = isExplicitDemoTenant(req.tenant_id);
+  const preExecutionStates = ['submitted', 'under_review', 'approved', 'scheduled'];
   const allowed = {
     approve: ['submitted', 'under_review'],
-    schedule: ['approved'],
-    start: ['scheduled'],
+    schedule: preExecutionStates,
+    start: preExecutionStates,
     stop: ['running'],
     close: ['stopped'],
   };
@@ -547,70 +543,34 @@ export function transitionHighScale(ctx, id, action, metadata = {}) {
   let resolvedState = nextState[action];
 
   if (action === 'approve') {
-    if (!authorizationPackComplete(req)) {
-      return authorizationPackIncompleteResponse(req);
-    }
-    // SOC-011 governance binding: requested governed scenario families must be covered
-    // by approved_scenario_families on accepted authorization artifacts.
-    const scenarioAuthorization = validateScenarioFamilyAuthorization(req);
-    if (!scenarioAuthorization.ok) {
-      return {
-        error: 'scenario_family_not_authorized',
-        status: 409,
-        requested_scenario_families: req.requested_scenario_families ?? [],
-        uncovered: scenarioAuthorization.uncovered,
-        approved: scenarioAuthorization.approved,
-      };
-    }
-    if (!req.soc_approvals) req.soc_approvals = [];
-    if (req.soc_approvals.some((a) => a.user_id === ctx.userId)) {
-      return { error: 'duplicate_soc_approval', status: 409 };
-    }
-    if (distinctSocApprovalCount(req) === 1) {
-      const currentScopeHash = computeTargetGroupScopeHash(ctx.tenantId, req.target_group_id, req.target_ids ?? null);
-      const governed = validateGovernedAuthorization(req, { currentScopeHash });
-      if (!governed.ok) return governedAuthorizationFailure(req, governed);
-    }
-    req.soc_approvals.push({ user_id: ctx.userId, at: new Date().toISOString() });
-    if (distinctSocApprovalCount(req) < 2) {
-      resolvedState = 'under_review';
-      audit({
-        tenant_id: ctx.tenantId,
-        actor_user_id: ctx.userId,
-        actor_role: ctx.role,
-        action: 'high_scale.soc_approval_recorded',
-        resource_type: 'high_scale_request',
-        resource_id: id,
-        metadata: { approvals: distinctSocApprovalCount(req) },
-      });
-    } else {
-      req.scope_hash = computeTargetGroupScopeHash(ctx.tenantId, req.target_group_id, req.target_ids ?? null);
-      resolvedState = 'approved';
-      audit({
-        tenant_id: ctx.tenantId,
-        actor_user_id: ctx.userId,
-        actor_role: ctx.role,
-        action: 'high_scale.approved',
-        resource_type: 'high_scale_request',
-        resource_id: id,
-        metadata: { scope_hash: req.scope_hash },
-      });
-    }
+    // No authorization pack, scenario coverage or second approver is required; the approval is
+    // still recorded so the request keeps a named approver as provenance.
+    req.soc_approvals = [
+      ...(req.soc_approvals ?? []),
+      { user_id: ctx.userId, role: ctx.role, at: new Date().toISOString() },
+    ];
+    req.scope_hash = computeTargetGroupScopeHash(ctx.tenantId, req.target_group_id, req.target_ids ?? null);
+    resolvedState = 'approved';
+    audit({
+      tenant_id: ctx.tenantId,
+      actor_user_id: ctx.userId,
+      actor_role: ctx.role,
+      action: 'high_scale.approved',
+      resource_type: 'high_scale_request',
+      resource_id: id,
+      metadata: { scope_hash: req.scope_hash, ...(demo ? { demo_bypass: true } : {}) },
+    });
   }
 
   if (action === 'schedule') {
     const window_start = metadata.window_start;
     const window_end = metadata.window_end;
-    if (!window_start || !window_end) {
-      return { error: 'missing_schedule_window', status: 409 };
-    }
-    if (!req.scope_hash) {
-      return { error: 'missing_scope_hash', status: 409 };
-    }
-    const scheduledWindow = { window_start, window_end, scope_hash: req.scope_hash };
-    const currentScopeHash = computeTargetGroupScopeHash(ctx.tenantId, req.target_group_id, req.target_ids ?? null);
-    const governed = validateGovernedAuthorization(req, { currentScopeHash, scheduledWindow });
-    if (!governed.ok) return governedAuthorizationFailure(req, governed);
+    if (!req.scope_hash) req.scope_hash = computeTargetGroupScopeHash(ctx.tenantId, req.target_group_id, req.target_ids ?? null);
+    const scheduledWindow = {
+      window_start: window_start ?? req.requested_window?.window_start ?? new Date().toISOString(),
+      window_end: window_end ?? req.requested_window?.window_end ?? new Date(Date.now() + 7 * 86_400_000).toISOString(),
+      scope_hash: req.scope_hash,
+    };
     req.scheduled_window = scheduledWindow;
     audit({
       tenant_id: ctx.tenantId,
@@ -619,61 +579,37 @@ export function transitionHighScale(ctx, id, action, metadata = {}) {
       action: 'high_scale.scheduled',
       resource_type: 'high_scale_request',
       resource_id: id,
-      metadata: { window_start, window_end, scope_hash: req.scope_hash },
+      metadata: {
+        window_start: scheduledWindow.window_start,
+        window_end: scheduledWindow.window_end,
+        scope_hash: req.scope_hash,
+        ...(demo ? { demo_bypass: true } : {}),
+      },
     });
   }
 
   if (action === 'start') {
     const scopedTargets = getStore().targets.filter((target) => target.tenant_id === ctx.tenantId && !target.deleted_at
       && (req.target_ids ? req.target_ids.includes(target.id) : target.target_group_id === req.target_group_id));
-    for (const target of scopedTargets) {
-      const records = (getStore().loaSignatures ?? []).filter((row) => row.tenant_id === ctx.tenantId && row.target_group_id === target.target_group_id);
-      const activeLoa = records.find((row) => validateActiveLoaAuthorization(row, [target.id]).ok) ?? records[0];
-      const loaAuthorization = validateActiveLoaAuthorization(activeLoa, [target.id]);
-      if (!loaAuthorization.ok) {
-        auditStartGateDenied(ctx, req, loaAuthorization.error, { missing_target_ids: loaAuthorization.missing_target_ids ?? [] });
-        return { error: loaAuthorization.error, status: 409 };
-      }
-    }
-    if (!isExplicitDemoTenant(req.tenant_id) && distinctSocApprovalCount(req) < 2) {
-      auditStartGateDenied(ctx, req, 'insufficient_soc_approvals');
-      return { error: 'insufficient_soc_approvals', status: 409 };
-    }
     if (isKillSwitchActiveForTenant(ctx.tenantId)) {
       auditStartGateDenied(ctx, req, 'kill_switch_active');
       return { error: 'kill_switch_active', status: 409 };
     }
-    if (!req.scheduled_window?.window_start || !req.scheduled_window?.window_end) {
-      auditStartGateDenied(ctx, req, 'missing_schedule_window');
-      return { error: 'missing_schedule_window', status: 409 };
-    }
-    if (!isWithinScheduledWindow(req.scheduled_window)) {
-      auditStartGateDenied(ctx, req, 'outside_schedule_window', {
-        window_start: req.scheduled_window.window_start,
-        window_end: req.scheduled_window.window_end,
-      });
-      return { error: 'outside_schedule_window', status: 409 };
-    }
-    const currentScope = computeTargetGroupScopeHash(ctx.tenantId, req.target_group_id, req.target_ids ?? null);
-    if (currentScope !== req.scope_hash) {
-      auditStartGateDenied(ctx, req, 'scope_hash_mismatch', { expected: req.scope_hash, actual: currentScope });
-      return { error: 'scope_hash_mismatch', status: 409 };
-    }
-    const governed = validateGovernedAuthorization(req, {
-      currentScopeHash: currentScope,
-      scheduledWindow: req.scheduled_window,
-    });
-    if (!governed.ok) {
-      auditStartGateDenied(ctx, req, 'governed_authorization_mismatch', {
-        invalid_fields: governed.invalid_fields,
-      });
-      return governedAuthorizationFailure(req, governed);
-    }
+    // The adapter mode is a selector, not a governance gate: only `dry-run` can start.
     const adapterGate = evaluateHighScaleAdapterStartGate(metadata.adapter_mode);
     if (adapterGate) {
       auditStartGateDenied(ctx, req, adapterGate.error);
       return adapterGate;
     }
+    // Fill in whatever the one-click path has not recorded yet.
+    if (!req.scheduled_window?.window_start || !req.scheduled_window?.window_end) {
+      req.scheduled_window = {
+        window_start: req.requested_window?.window_start ?? new Date().toISOString(),
+        window_end: req.requested_window?.window_end ?? new Date(Date.now() + 7 * 86_400_000).toISOString(),
+        scope_hash: req.scope_hash,
+      };
+    }
+    req.scope_hash = computeTargetGroupScopeHash(ctx.tenantId, req.target_group_id, req.target_ids ?? null);
     const adapterResult = adapterStub.start(ctx, id, { scope_hash: req.scope_hash, ...metadata });
     if (adapterResult.error) {
       auditStartGateDenied(ctx, req, adapterResult.error);

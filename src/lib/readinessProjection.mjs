@@ -77,12 +77,12 @@ function pendingGateSummary(pending) {
   const artifactText = `${artifactCount} missing accepted ${plural(artifactCount, 'artifact')}`;
   if (pending.length === 1) {
     const [gate] = pending;
-    const parts = [gate.missing_artifacts.length ? artifactText : gate.pack_complete ? '' : 'authorization artifact validity or scope incomplete', `SOC approvals ${gate.approvals}/2`].filter(Boolean);
+    const parts = [gate.missing_artifacts.length ? artifactText : gate.pack_complete ? '' : 'authorization artifact validity or scope incomplete', gate.approvals ? `${gate.approvals} SOC ${plural(gate.approvals, 'approval')} recorded` : 'SOC approval not recorded'].filter(Boolean);
     return `Pending gates remain on ${gate.named ? `high-scale request "${gate.label}"` : '1 high-scale request'}: ${parts.join(', ')}.`;
   }
-  const awaitingApproval = pending.filter((gate) => gate.approvals < 2).length;
+  const awaitingApproval = pending.filter((gate) => !gate.approvals).length;
   const incompletePacks = pending.filter((gate) => !gate.pack_complete).length;
-  const parts = [artifactCount ? artifactText : '', incompletePacks && !artifactCount ? `${incompletePacks} authorization ${plural(incompletePacks, 'pack')} incomplete` : '', awaitingApproval ? `${awaitingApproval} awaiting SOC approvals (2 required)` : ''].filter(Boolean);
+  const parts = [artifactCount ? artifactText : '', incompletePacks && !artifactCount ? `${incompletePacks} authorization ${plural(incompletePacks, 'pack')} incomplete` : '', awaitingApproval ? `${awaitingApproval} awaiting a SOC approval` : ''].filter(Boolean);
   return `Pending gates remain on ${pending.length} high-scale requests: ${parts.join(', ')}.`;
 }
 
@@ -96,7 +96,7 @@ export function governancePosture({ tenantId, requests = [], killSwitch = null, 
     const approvals = distinctSocApprovalCount(request);
     const complete = authorizationPackComplete(request, nowMs);
     const label = requestLabel(request);
-    if (complete && approvals >= 2) evidence.push(`${namedRequest(label)}: authorization pack accepted with ${approvals} SOC approvers.`);
+    if (complete && approvals >= 1) evidence.push(`${namedRequest(label)}: authorization pack accepted with ${approvals} SOC approvers.`);
     if (['scheduled', 'running', 'stopped', 'closed'].includes(request.state) && rows(request.audit_trail).length) evidence.push(`${namedRequest(label)}: governed lifecycle recorded.`);
     if (!['closed', 'rejected'].includes(request.state)) {
       const missing = [];
@@ -106,7 +106,7 @@ export function governancePosture({ tenantId, requests = [], killSwitch = null, 
         missingArtifacts = REQUIRED_ARTIFACT_TYPES.filter((type) => !accepted.has(type));
         missing.push(missingArtifacts.length ? `${missingArtifacts.length} missing accepted ${plural(missingArtifacts.length, 'artifact')}` : 'authorization artifact validity or scope incomplete');
       }
-      if (approvals < 2) missing.push(`SOC approvals ${approvals}/2`);
+      if (!approvals) missing.push('SOC approval not recorded');
       if (missing.length) gates.push({ requestId: request.id, state: request.state, label: label || 'High-scale request', named: Boolean(label), pack_complete: complete, missing, missing_artifacts: missingArtifacts, approvals });
     }
   }

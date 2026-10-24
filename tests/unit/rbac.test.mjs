@@ -26,14 +26,12 @@ describe('RBAC', () => {
     assert.equal(roleHasPermission('auditor', 'waf:write'), false);
   });
 
-  it('denies engineer SOC high-scale permission and audits', () => {
+  it('grants SOC high-scale permission to every role', () => {
     freshStore();
     const ctx = { tenantId: 'ten_demo', userId: 'eng1', role: 'engineer' };
     const gate = requirePermission(ctx, 'soc:high_scale', { resource_type: 'high_scale' });
-    assert.equal(gate.ok, false);
-    assert.equal(gate.status, 403);
-    const denied = getStore().auditLog.find((a) => a.action === 'rbac.denied');
-    assert.ok(denied);
+    assert.equal(gate.ok, true);
+    assert.equal(getStore().auditLog.find((a) => a.action === 'rbac.denied'), undefined);
   });
 
   it('grants explicit check catalog read permission to every customer role', () => {

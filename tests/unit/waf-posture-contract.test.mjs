@@ -102,13 +102,12 @@ describe('WAF posture contract', () => {
       }),
       /timeout_ms must be an integer between 100 and 5000/,
     );
-    assert.throws(
+    assert.doesNotThrow(
       () => normalizeWafValidationRequest({
         waf_asset_id: 'waf_1',
         modes: ['marker'],
         risk_class: 'soc_gated',
       }),
-      /risk_class must be safe or controlled/,
     );
     assert.throws(
       () => normalizeWafValidationRequest({

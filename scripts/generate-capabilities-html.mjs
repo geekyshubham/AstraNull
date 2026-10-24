@@ -115,7 +115,7 @@ sections.push(section('overview', 'What AstraNull currently is', `
 ${table(['Catalog classification','Count','What it establishes'], [
  ['All check definitions', CHECK_CATALOG.length, 'Complete inventory below; generated directly from CHECK_CATALOG'],
  ['Customer safe definitions',count(c=>c.safety_class).safe,'Selectable subject to target, ownership, setup, feature and safety gates'],
- ['SOC-gated definitions',count(c=>c.safety_class).soc_gated,'Governed request/workflow; no customer self-service traffic executor'],
+ ['SOC-gated definitions',count(c=>c.safety_class).soc_gated,'Disruptive/high-scale class; runnable by any role, governance recorded'],
  ['E1 declaration only',count(c=>c.evidence_tier).E1,'No network I/O; remains inconclusive'],
  ['E2 observations',count(c=>c.evidence_tier).E2,'Transport/provider facts; no readiness credit'],
  ['E3 semantic safe',count(c=>c.evidence_tier).E3,'Bounded fact or heuristic; assurance is limited per executor'],

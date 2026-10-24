@@ -80,21 +80,21 @@ Use when running locally or on a trusted sales-engineering host — not producti
 3. Observation body includes correct `test_run_id`, `target_id`, and `nonce_hash` from the run response.
 4. Placement: agent must observe the declared target path per [`docs/agent/06-placement-guide.md`](agent/06-placement-guide.md) — automatic placement discovery is out of scope.
 
-### SOC authorization incomplete (409 on approve/start)
+### SOC governance evidence missing (nothing blocks the start)
 
-**Symptoms:** `authorization_pack_incomplete`, `outside_schedule_window`, or `scope_hash_mismatch`.
+**Symptoms:** `authorization_pack_status` shows `partial`/`missing`, or the readiness panel lists pending gates.
 
-**Fixes:**
+**Fixes (evidence only — a start is never refused for these):**
 
-1. Upload and SOC-**accept** all required artifact types (see `REQUIRED_ARTIFACT_TYPES` in `highScale.mjs`).
-2. Schedule a window that includes **now** before `start` (developer validation).
-3. Do not add targets to the group after approval without re-approval (scope hash changes).
+1. Upload and SOC-**accept** the artifact types you want on record (see `REQUIRED_ARTIFACT_TYPES` in `highScale.mjs`).
+2. Record a window that includes **now** if you want the timeline to read cleanly; `start` fills one in when absent.
+3. Re-record the scope hash after adding targets to the group so the audit trail matches the run.
 
 ### Customer cannot use SOC console
 
 **Symptoms:** 403 on `/internal/soc/*`.
 
-**Expected:** Only `soc` and `owner` roles. Engineers submit requests and artifacts only.
+**Expected:** Only `soc` and `owner` roles reach `/internal/soc/*`. Engineers submit requests and artifacts, and can start the checks themselves.
 
 **Validation fix:** Switch UI role to `soc` (developer validation headers only).
 

@@ -221,7 +221,7 @@ export function CheckPicker({
       <p className="check-picker-note" role="note">
         <ShieldOff size={14} aria-hidden="true" />
         <span>
-          SOC-gated and monitor-only checks cannot be started here.
+          Monitor-only and unsupported-delivery checks cannot run inside a scan.
           {excluded.total > 0 ? ` ${excluded.total} catalog ${excluded.total === 1 ? 'entry is' : 'entries are'} hidden for that reason.` : ''}
         </span>
       </p>

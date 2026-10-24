@@ -28,7 +28,7 @@ export function ScheduleCheckPicker({ entries, value, onChange, disabled = false
   const filtering = Boolean(query.trim() || category);
   const countText = filtering
     ? `${formatNumber(visible.length)} of ${formatNumber(entries.length)} checks match`
-    : `${formatNumber(entries.length)} checks${gatedCount ? ` · ${formatNumber(gatedCount)} need SOC approval` : ''}`;
+    : `${formatNumber(entries.length)} checks${gatedCount ? ` · ${formatNumber(gatedCount)} need setup` : ''}`;
 
   if (selected && !browsing) {
     return (

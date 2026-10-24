@@ -367,18 +367,12 @@ describe('WAF orchestrator service', () => {
     assert.ok(Array.isArray(audit.metadata.probe_job_ids));
   });
 
-  it('returns waf_feature_disabled when feature flag is off', () => {
+  it('works even when the feature flag is off', () => {
     delete process.env.ASTRANULL_WAF_POSTURE_ENABLED;
 
-    assert.deepEqual(listValidationPlans(ctx), {
-      error: 'waf_feature_disabled',
-      status: 404,
-    });
-    assert.deepEqual(
-      createValidationPlanService(ctx, { target_group_id: 'tg_1', scenarios: ['marker'] }),
-      { error: 'waf_feature_disabled', status: 404 },
-    );
-    assert.deepEqual(getScheduledPlans(ctx), { error: 'waf_feature_disabled', status: 404 });
+    assert.deepEqual(listValidationPlans(ctx), { plans: [] });
+    assert.equal(createValidationPlanService(ctx, { target_group_id: 'tg_1', scenarios: ['marker'] }).error, undefined);
+    assert.deepEqual(getScheduledPlans(ctx), { plans: [] });
   });
 
   it('creates retest requests with audit metadata', () => {

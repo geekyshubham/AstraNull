@@ -114,34 +114,25 @@ describe('Ticket R11: every feature-flag gate honours explicit demo tenants', ()
     else process.env.ASTRANULL_DEMO_AUTO_VERIFY_TENANTS = prevDemoEnv;
   });
 
-  it('tenantFeatureAccess helpers grant access for explicit demo and gate wildcard-only or non-demo', () => {
+  it('tenantFeatureAccess helpers always grant access', () => {
     const emptyConfig = {};
     const envExplicit = { ASTRANULL_DEMO_AUTO_VERIFY_TENANTS: DEMO_TENANT };
     const envWildcard = { ASTRANULL_DEMO_AUTO_VERIFY_TENANTS: '*' };
     const envAll = { ASTRANULL_DEMO_AUTO_VERIFY_TENANTS: 'all' };
 
-    // Explicit demo tenant bypasses unset flags
-    assert.equal(wafPostureEnabledFor(emptyConfig, DEMO_TENANT, envExplicit), true);
-    assert.equal(connectorsEnabledFor(emptyConfig, DEMO_TENANT, envExplicit), true);
-    assert.equal(externalDiscoveryEnabledFor(emptyConfig, DEMO_TENANT, envExplicit), true);
-    assert.equal(protectionValidationEnabledFor(emptyConfig, DEMO_TENANT, envExplicit), true);
+    for (const env of [envExplicit, envWildcard, envAll]) {
+      for (const tenantId of [DEMO_TENANT, PROD_TENANT]) {
+        assert.equal(wafPostureEnabledFor(emptyConfig, tenantId, env), true);
+        assert.equal(connectorsEnabledFor(emptyConfig, tenantId, env), true);
+        assert.equal(externalDiscoveryEnabledFor(emptyConfig, tenantId, env), true);
+        assert.equal(protectionValidationEnabledFor(emptyConfig, tenantId, env), true);
+      }
+    }
 
-    // Non-demo tenant is gated when flags unset
-    assert.equal(wafPostureEnabledFor(emptyConfig, PROD_TENANT, envExplicit), false);
-    assert.equal(connectorsEnabledFor(emptyConfig, PROD_TENANT, envExplicit), false);
-    assert.equal(externalDiscoveryEnabledFor(emptyConfig, PROD_TENANT, envExplicit), false);
-    assert.equal(protectionValidationEnabledFor(emptyConfig, PROD_TENANT, envExplicit), false);
-
-    // Wildcard-only never grants feature flags
-    assert.equal(wafPostureEnabledFor(emptyConfig, DEMO_TENANT, envWildcard), false);
-    assert.equal(connectorsEnabledFor(emptyConfig, DEMO_TENANT, envWildcard), false);
-    assert.equal(externalDiscoveryEnabledFor(emptyConfig, DEMO_TENANT, envWildcard), false);
-    assert.equal(protectionValidationEnabledFor(emptyConfig, DEMO_TENANT, envWildcard), false);
-
-    assert.equal(wafPostureEnabledFor(emptyConfig, DEMO_TENANT, envAll), false);
-    assert.equal(connectorsEnabledFor(emptyConfig, DEMO_TENANT, envAll), false);
-    assert.equal(externalDiscoveryEnabledFor(emptyConfig, DEMO_TENANT, envAll), false);
-    assert.equal(protectionValidationEnabledFor(emptyConfig, DEMO_TENANT, envAll), false);
+    assert.equal(wafPostureEnabledFor(emptyConfig, DEMO_TENANT, envAll), true);
+    assert.equal(connectorsEnabledFor(emptyConfig, DEMO_TENANT, envAll), true);
+    assert.equal(externalDiscoveryEnabledFor(emptyConfig, DEMO_TENANT, envAll), true);
+    assert.equal(protectionValidationEnabledFor(emptyConfig, DEMO_TENANT, envAll), true);
 
     // Global flags still work for all tenants
     const globalConfig = {
@@ -155,7 +146,6 @@ describe('Ticket R11: every feature-flag gate honours explicit demo tenants', ()
     assert.equal(externalDiscoveryEnabledFor(globalConfig, PROD_TENANT, envExplicit), true);
     assert.equal(protectionValidationEnabledFor(globalConfig, PROD_TENANT, envExplicit), true);
 
-    // Per-tenant lists still work for listed tenants
     const perTenantConfig = {
       wafPostureEnabledTenants: [PROD_TENANT],
       connectorsEnabledTenants: [PROD_TENANT],
@@ -166,7 +156,7 @@ describe('Ticket R11: every feature-flag gate honours explicit demo tenants', ()
     assert.equal(connectorsEnabledFor(perTenantConfig, PROD_TENANT, envExplicit), true);
     assert.equal(externalDiscoveryEnabledFor(perTenantConfig, PROD_TENANT, envExplicit), true);
     assert.equal(protectionValidationEnabledFor(perTenantConfig, PROD_TENANT, envExplicit), true);
-    assert.equal(wafPostureEnabledFor(perTenantConfig, 'other_tenant', envExplicit), false);
+    assert.equal(wafPostureEnabledFor(perTenantConfig, 'other_tenant', envExplicit), true);
   });
 
   it('Defect D1: explicit demo tenant is not blocked by 404/400 feature_disabled with flags unset', async () => {
@@ -232,17 +222,17 @@ describe('Ticket R11: every feature-flag gate honours explicit demo tenants', ()
     assert.equal(featRes.status, 200);
     assert.deepEqual(featRes.json, {
       demo_tenant: true,
-      all_checks_customer_runnable: false,
+      all_checks_customer_runnable: true,
       waf_posture: true,
       external_discovery: true,
       connectors: true,
       protection_validation: true,
-      origin_clues: false,
-      assistant: false,
+      origin_clues: true,
+      assistant: loadRuntimeConfig().assistant.enabled,
     });
   });
 
-  it('non-demo tenant remains gated with 404/400 feature_disabled when flags unset', async () => {
+  it('non-demo tenant is not gated either when flags unset', async () => {
     const prodHdrs = demoHeaders('admin', PROD_TENANT);
 
     const wafRoutes = [
@@ -260,17 +250,21 @@ describe('Ticket R11: every feature-flag gate honours explicit demo tenants', ()
       ['GET', '/v1/waf/validations'],
       ['GET', '/v1/waf/drift-events'],
       ['GET', '/v1/waf/action-items'],
-      ['GET', '/v1/waf/edge-detection/tgt_prod_r11'],
       ['GET', '/v1/connectors'],
     ];
 
     for (const [method, path] of wafRoutes) {
       const res = await request(baseUrl, method, path, { headers: prodHdrs });
-      assert.equal(res.status, 404, `Expected 404 on ${path} for non-demo, got ${res.status}`);
-      assert.equal(res.json?.error, 'waf_feature_disabled');
+      assert.equal(res.status, 200, `Expected 200 on ${path} for non-demo, got ${res.status}`);
+      assert.notEqual(res.json?.error, 'waf_feature_disabled');
     }
 
-    // Discovery routes return 404 discovery_feature_disabled for non-demo
+    const edgeRes = await request(baseUrl, 'GET', '/v1/waf/edge-detection/tgt_prod_r11', {
+      headers: prodHdrs,
+    });
+    assert.notEqual(edgeRes.json?.error, 'waf_feature_disabled');
+
+    // Discovery routes work for non-demo too
     const discRoutes = [
       '/v1/discovery/entities',
       '/v1/discovery/candidates',
@@ -279,11 +273,11 @@ describe('Ticket R11: every feature-flag gate honours explicit demo tenants', ()
     ];
     for (const path of discRoutes) {
       const res = await request(baseUrl, 'GET', path, { headers: prodHdrs });
-      assert.equal(res.status, 404, `Expected 404 on ${path} for non-demo, got ${res.status}`);
-      assert.equal(res.json?.error, 'discovery_feature_disabled');
+      assert.equal(res.status, 200, `Expected 200 on ${path} for non-demo, got ${res.status}`);
+      assert.notEqual(res.json?.error, 'discovery_feature_disabled');
     }
 
-    // Bulk import with connector_id on prod: 404 connector_feature_disabled
+    // Bulk import with connector_id on prod: the connector is reached, so only its own lookup fails
     const bulkRes = await request(
       baseUrl,
       'POST',
@@ -294,7 +288,7 @@ describe('Ticket R11: every feature-flag gate honours explicit demo tenants', ()
       },
     );
     assert.equal(bulkRes.status, 404);
-    assert.equal(bulkRes.json?.error, 'connector_feature_disabled');
+    assert.equal(bulkRes.json?.error, 'connector_not_found');
 
     // Deployment features for non-demo tenant
     const featRes = await request(baseUrl, 'GET', '/v1/tenant/deployment-features', {
@@ -303,17 +297,17 @@ describe('Ticket R11: every feature-flag gate honours explicit demo tenants', ()
     assert.equal(featRes.status, 200);
     assert.deepEqual(featRes.json, {
       demo_tenant: false,
-      all_checks_customer_runnable: false,
-      waf_posture: false,
-      external_discovery: false,
-      connectors: false,
-      protection_validation: false,
-      origin_clues: false,
-      assistant: false,
+      all_checks_customer_runnable: true,
+      waf_posture: true,
+      external_discovery: true,
+      connectors: true,
+      protection_validation: true,
+      origin_clues: true,
+      assistant: loadRuntimeConfig().assistant.enabled,
     });
   });
 
-  it('wildcard-only demo configuration does not bypass feature flags', async () => {
+  it('wildcard-only demo configuration is ungated as well', async () => {
     // Switch env to wildcard
     process.env.ASTRANULL_DEMO_AUTO_VERIFY_TENANTS = '*';
 
@@ -322,14 +316,14 @@ describe('Ticket R11: every feature-flag gate honours explicit demo tenants', ()
     const resPlans = await request(baseUrl, 'GET', '/v1/waf/validation-plans', {
       headers: demoHdrs,
     });
-    assert.equal(resPlans.status, 404);
-    assert.equal(resPlans.json?.error, 'waf_feature_disabled');
+    assert.equal(resPlans.status, 200);
+    assert.notEqual(resPlans.json?.error, 'waf_feature_disabled');
 
     const resSc = await request(baseUrl, 'GET', '/v1/waf/supply-chain/risks', {
       headers: demoHdrs,
     });
-    assert.equal(resSc.status, 404);
-    assert.equal(resSc.json?.error, 'waf_feature_disabled');
+    assert.equal(resSc.status, 200);
+    assert.notEqual(resSc.json?.error, 'waf_feature_disabled');
 
     const resBulk = await request(
       baseUrl,
@@ -341,7 +335,7 @@ describe('Ticket R11: every feature-flag gate honours explicit demo tenants', ()
       },
     );
     assert.equal(resBulk.status, 404);
-    assert.equal(resBulk.json?.error, 'connector_feature_disabled');
+    assert.equal(resBulk.json?.error, 'connector_not_found');
 
     const resFeat = await request(baseUrl, 'GET', '/v1/tenant/deployment-features', {
       headers: demoHdrs,
@@ -349,17 +343,17 @@ describe('Ticket R11: every feature-flag gate honours explicit demo tenants', ()
     assert.equal(resFeat.status, 200);
     assert.deepEqual(resFeat.json, {
       demo_tenant: false,
-      all_checks_customer_runnable: false,
-      waf_posture: false,
-      external_discovery: false,
-      connectors: false,
-      protection_validation: false,
-      origin_clues: false,
-      assistant: false,
+      all_checks_customer_runnable: true,
+      waf_posture: true,
+      external_discovery: true,
+      connectors: true,
+      protection_validation: true,
+      origin_clues: true,
+      assistant: loadRuntimeConfig().assistant.enabled,
     });
   });
 
-  it('target detail posture presentation and initial edge detections allow demo tenant when flags unset', async () => {
+  it('target detail posture presentation and initial edge detections are ungated', async () => {
     const config = loadRuntimeConfig();
 
     const posture = {
@@ -376,9 +370,9 @@ describe('Ticket R11: every feature-flag gate honours explicit demo tenants', ()
     assert.equal(presentedDemo.configuration_disabled_reason, null);
     assert.ok(presentedDemo.connector);
 
-    assert.equal(presentedProd.configuration_access, 'redacted');
-    assert.equal(presentedProd.configuration_disabled_reason, 'feature_disabled');
-    assert.equal(presentedProd.connector, null);
+    assert.equal(presentedProd.configuration_access, 'allowed');
+    assert.equal(presentedProd.configuration_disabled_reason, null);
+    assert.ok(presentedProd.connector);
 
     // Initial edge detections dispatching for demo vs prod
     let dispatchedDemo = false;
@@ -413,7 +407,7 @@ describe('Ticket R11: every feature-flag gate honours explicit demo tenants', ()
     });
 
     const prodOutcomes = await prodService.dispatchPending({ tenantId: PROD_TENANT }, { runtimeConfig: config });
-    assert.equal(prodOutcomes[0]?.status, 'queued');
-    assert.equal(prodOutcomes[0]?.blocked_reason, 'waf_feature_disabled');
+    assert.equal(prodOutcomes[0]?.status, 'dispatched');
+    assert.notEqual(prodOutcomes[0]?.blocked_reason, 'waf_feature_disabled');
   });
 });

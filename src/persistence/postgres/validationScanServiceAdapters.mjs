@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { scanTargetIds } from '../../lib/targetExecutionScope.mjs';
-import { CHECK_CATALOG, customerSelectableChecks, getCheckById, isCustomerRunnable, targetInputRefusal } from '../../contracts/checks.mjs';
+import { CHECK_CATALOG, customerSelectableChecks, getCheckById, targetInputRefusal } from '../../contracts/checks.mjs';
 import {
   ACTIVE_SCAN_STATUSES,
   ACTIVE_STEP_STATUSES,
@@ -29,8 +29,7 @@ import { roleHasPermission } from '../../contracts/roles.mjs';
 import { probeDispatchReady } from '../../config.mjs';
 import { newId } from '../../lib/ids.mjs';
 import { incMetric } from '../../lib/metrics.mjs';
-import { isWithinSafeTestWindow, normalizeSafetyPolicy } from '../../lib/safeTestGuards.mjs';
-import { isExplicitDemoTenant } from '../../lib/demoAutoVerify.mjs';
+import { normalizeSafetyPolicy } from '../../lib/safeTestGuards.mjs';
 import { LEAN_GROUP_LOOKUP } from './coreCatalogRepository.mjs';
 
 const ACTIVE_RUN_STATUSES = Object.freeze(['planned', 'running', 'collecting']);
@@ -150,9 +149,6 @@ function resolveChecks(checkIds, ctx) {
   for (const checkId of checkIds) {
     const check = getCheckById(checkId);
     if (!check) return { error: 'unknown_check', status: 400, check_id: checkId };
-    if (!isCustomerRunnable(check, ctx)) {
-      return { error: 'soc_gated_check', status: 403, check_id: checkId, message: 'This check requires SOC governance.' };
-    }
     if (!selectable.has(checkId)) {
       return { error: 'check_requires_additional_input', status: 400, check_id: checkId };
     }
@@ -495,7 +491,7 @@ export function createPostgresValidationScanServices(repositories, options = {})
 
   async function deferStep(actor, state, step, result, now) {
     const execCtx = execCtxFor(state.scan);
-    const code = result?.error ?? 'safe_min_interval_active';
+    const code = result?.error ?? 'entitlement_limit_exceeded';
     const policyId = state.scan.plan_snapshot?.target_policy_bindings?.[step.target_id] ?? state.scan.target_group_id;
     const group = await loadGroup(execCtx, policyId);
     const policy = normalizeSafetyPolicy(group?.safety_policy);
@@ -925,7 +921,6 @@ export function createPostgresValidationScanServices(repositories, options = {})
     for (const policyId of policyIds) {
       const policy = await loadGroup(execCtx, policyId);
       if (!policy) return scheduleDenied(actor, state, 'target_execution_policy_unavailable', now);
-      if (!isExplicitDemoTenant(state.scan.tenant_id) && (policy.safe_test_windows ?? []).length && !isWithinSafeTestWindow(policy, now.getTime(), { tenantId: state.scan.tenant_id })) return scheduleDenied(actor, state, 'safe_window_closed', now);
       for (const targetId of scanTargetIds(state.scan)) {
         if (await activeRunForGroup(execCtx, policy.id, targetId) || await activeScanForGroup(execCtx, policy.id, state.scan.id, targetId)) return scheduleDenied(actor, state, 'concurrent_run_blocked', now);
       }
@@ -1131,7 +1126,7 @@ export function createPostgresValidationScanServices(repositories, options = {})
       }
       const plan = await buildPlan(ctx, input);
       if (plan.error) {
-        if (plan.error === 'soc_gated_check' || plan.error === 'unknown_check') {
+        if (plan.error === 'unknown_check') {
           await repo.appendScanAudit(ctx, {
             action: SCAN_AUDIT_ACTIONS.createDenied,
             resource_type: 'validation_scan',

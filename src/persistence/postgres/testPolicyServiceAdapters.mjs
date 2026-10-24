@@ -1,4 +1,4 @@
-import { getCheckById, isCustomerRunnable } from '../../contracts/checks.mjs';
+import { getCheckById } from '../../contracts/checks.mjs';
 import { targetKindCompatibilityError } from '../../contracts/checkTargetCompatibility.mjs';
 import {
   nextPolicyRunAt,
@@ -161,13 +161,6 @@ export function createPostgresTestPolicyServices(repositories, options = {}) {
       const checkId = String(body.check_id ?? '').trim();
       const check = getCheckById(checkId);
       if (!check) return { error: 'unknown_check', status: 400 };
-      if (!isCustomerRunnable(check, ctx)) {
-        return {
-          error: 'soc_gated_check',
-          status: 403,
-          message: 'This check requires a SOC-governed high-scale request, not a customer-runnable policy.',
-        };
-      }
       const incompatibleTarget = targetKindCompatibilityError(check, target);
       if (incompatibleTarget) return incompatibleTarget;
       const duplicate = await testPolicies.findActivePolicyByGroupCheck(

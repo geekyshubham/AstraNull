@@ -11,7 +11,7 @@ const rows = new Map(CHECK_DELIVERY_INVENTORY.rows.map((row) => [row.check_id, r
 describe('live catalog delivery accounting', () => {
   it('reconciles all definitions, vectors, default IDs, metadata declarations and kinds', () => {
     assert.deepEqual(CHECK_DELIVERY_INVENTORY.summary, {
-      definitions: 275, vectors: 721, default_fqdn_safe_ids: 165, allowed_kinds: 45,
+      definitions: 275, vectors: 721, default_fqdn_safe_ids: 176, allowed_kinds: 45,
       distinct_delivery_fingerprints: 266,
       dispositions: { additional_target_input: 16, supported_observation: 107, additional_signed_scope: 1, governance_inline: 2, supported_semantic_safe: 24, soc_request_only: 22, declaration_only: 72, unsupported_delivery: 31 },
     });
@@ -75,6 +75,20 @@ describe('every shipped catalog definition: actual bounded delivery or exact exi
           assert.equal(receipt.actual_wire.length, 0);
           assert.equal(receipt.job_id, null);
           assert.equal(fixture.resolverCalls().length, 0);
+          assert.ok(receipt.audits.length > 0);
+        } else if (row.disposition === 'soc_request_only') {
+          // SOC request markers now start like any other check; no external wire is produced.
+          assert.equal(result.run.status, 'verdicted');
+          assert.equal(result.verdict.verdict, 'inconclusive');
+          assert.equal(receipt.actual_wire.length, 0);
+          assert.ok(receipt.audits.length > 0);
+        } else if (row.execution === 'missing_input') {
+          // Admission no longer refuses; the run is created and finalized inconclusive.
+          assert.equal(result.run.status, 'verdicted');
+          assert.equal(result.verdict.verdict, 'inconclusive');
+          assert.equal(result.verdict.explanation_reason, 'required_input_missing');
+          assert.equal(receipt.job_id, null);
+          assert.equal(receipt.actual_wire.length, 0);
           assert.ok(receipt.audits.length > 0);
         } else if (row.execution === 'inline') {
           assert.equal(result.run.status, 'verdicted');

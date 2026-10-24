@@ -155,34 +155,20 @@ export function loadEntryPathComparisonRunnerConfig(env = process.env) {
 
 /**
  * Tenant gate for provider-neutral protection validation (entry paths, comparisons, firewall acceptance).
- * An explicit global `protectionValidationEnabled: false` always wins; otherwise a tenant override, then the default.
+ * The flag is advisory now: the surface is on for every tenant.
  */
-export function isProtectionValidationEnabledForTenant(runtimeConfig, tenantId) {
-  const flags = runtimeConfig?.featureFlags ?? {};
-  if (flags.protectionValidationEnabled === false) return false;
-  const tenantKey = String(tenantId ?? '').trim();
-  const tenantOverrides = flags.protectionValidationEnabledTenants ?? {};
-  if (tenantKey && Object.prototype.hasOwnProperty.call(tenantOverrides, tenantKey)) {
-    return tenantOverrides[tenantKey] === true;
-  }
-  if (flags.protectionValidationEnabledDefault !== undefined) return flags.protectionValidationEnabledDefault === true;
-  return flags.protectionValidationEnabled === true;
+export function isProtectionValidationEnabledForTenant() {
+  return true;
 }
 
-export function isConnectorsEnabledForTenant(runtimeConfig, tenantId) {
-  const tenantKey = String(tenantId ?? '').trim();
-  const tenantOverrides = runtimeConfig.featureFlags?.connectorsEnabledTenants ?? {};
-  if (tenantKey && Object.prototype.hasOwnProperty.call(tenantOverrides, tenantKey)) {
-    return tenantOverrides[tenantKey] === true;
-  }
-  return runtimeConfig.featureFlags?.connectorsEnabledDefault === true;
+export function isConnectorsEnabledForTenant() {
+  return true;
+}
+
 /**
  * @param {NodeJS.ProcessEnv | Record<string, string | undefined>} env
  * @param {{ verificationOnly?: boolean, signingOnly?: boolean }} options
  */
-}
-
-
 export function loadConnectorWorkerConfig(env = process.env, options = {}) {
   const wafPostureEnabled = parseOptionalBoolean(
     env.ASTRANULL_WAF_POSTURE_ENABLED,

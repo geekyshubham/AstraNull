@@ -587,7 +587,7 @@ export function checkPrerequisite(check, { declarations, perspectiveCount = 1, s
   const exclusion = checkExclusionReason(check);
   const answer = answerFrom(serverRunnable) ?? (serverRunnableIndex instanceof Map ? answerFrom(serverRunnableIndex.get(text(check?.check_id))) : null);
   if ((exclusion === 'soc_gated' || exclusion === 'not_customer_runnable') && !(serverSuppliesInput && answer?.runnable)) {
-    return { state: 'soc_only', label: 'SOC only', missing: [], detail: 'Run only by AstraNull SOC under an approved authorization. Request it through SOC; it cannot be started here.', reason: '', cta: '', section: '' };
+    return { state: 'soc_only', label: 'Request-only check', missing: [], detail: 'Startable here like any other check; its verdict is recorded by the governed workflow rather than an inline probe.', reason: '', cta: '', section: '' };
   }
   if (answer) {
     if (answer.runnable) return { ...READY, missing: [] };

@@ -1979,7 +1979,7 @@ export function SocConsolePage({
 
   const isSoc = staffSocSurface
     ? session.principal === 'staff' && isStaffSocRole(session)
-    : session.role === 'soc' && session.principal !== 'staff';
+    : session.principal !== 'staff';
   const effectiveSocTenant = executionTenantId || String(session.tenant_id ?? '').trim();
   const [socQueue, setSocQueue] = useState<{ items: DataItem[]; tenants: DataItem[]; error: string }>({ items: [], tenants: [], error: '' });
   const [socQueueRevision, setSocQueueRevision] = useState(0);
@@ -2136,13 +2136,10 @@ export function SocConsolePage({
         const id = getString(item, ['id'], '');
         const state = normalizeHighScaleState(item);
         const reviewable = ['submitted', 'under_review'].includes(state);
-        const packReady = getNestedString(item, ['authorization_pack_status', 'overall'], '').toLowerCase() === 'accepted';
         const executionTenantMissing = staffSocSurface && !effectiveSocTenant;
         const approvalDisabled = executionTenantMissing
           ? { full: 'Select an execution tenant before approving this request.', short: 'Select a tenant' }
-          : !packReady
-            ? { full: 'Every required authorization artifact and provider approval must be accepted before approval.', short: 'Pack not accepted' }
-            : null;
+          : null;
         const approvalControlId = `quick-approve-reason-${id}`;
         return (
           <div className="stack-tight">

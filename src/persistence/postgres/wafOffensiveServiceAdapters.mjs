@@ -8,7 +8,6 @@ import {
   gradeCanarySinkBodyResults,
   listOffensiveSuites as listOffensiveSuiteCatalog,
   normalizeOffensiveSuiteResult,
-  offensiveAuthorizationPackComplete,
   offensiveAuthorizationPackStatus,
   validateOffensiveRequestIntake,
   WAF_OFFENSIVE_REQUIRED_ARTIFACT_TYPES,
@@ -83,20 +82,9 @@ async function appendAudit(auditRepo, ctx, action, resourceType, resourceId, met
   );
 }
 
-function distinctSocApprovalCount(request) {
-  return new Set((request.soc_approvals ?? []).map((approval) => approval.user_id)).size;
-}
-
 function refreshPackStatus(request) {
   request.authorization_pack_status = offensiveAuthorizationPackStatus(request);
   return request;
-}
-
-function isWithinScheduledWindow(window, nowMs) {
-  if (!window?.window_start || !window?.window_end) return false;
-  const start = Date.parse(window.window_start);
-  const end = Date.parse(window.window_end);
-  return Number.isFinite(start) && Number.isFinite(end) && nowMs >= start && nowMs <= end;
 }
 
 function formatOffensiveRequest(record) {
@@ -314,10 +302,14 @@ export function createPostgresWafOffensiveServices(repositories, options = {}) {
 
     async transitionOffensiveRequest(ctx, id, action, metadata = {}) {
       return repo.withLockedOffensiveRequest(ctx, id, async (request, { client }) => {
+        // No account is gated on governance artifacts: one click may approve, schedule and
+        // start, so any pre-execution state is a valid entry point for those three actions.
+        const demo = isExplicitDemoTenant(request.tenant_id);
+        const preExecutionStates = ['submitted', 'under_review', 'approved', 'scheduled'];
         const allowed = {
           approve: ['submitted', 'under_review'],
-          schedule: ['approved'],
-          start: ['scheduled'],
+          schedule: preExecutionStates,
+          start: preExecutionStates,
           stop: ['running'],
           close: ['stopped'],
           reject: ['submitted', 'under_review'],
@@ -352,81 +344,69 @@ export function createPostgresWafOffensiveServices(repositories, options = {}) {
 
         if (action === 'approve') {
           refreshPackStatus(request);
-          if (!offensiveAuthorizationPackComplete(request)) {
-            return {
-              error: 'authorization_pack_incomplete',
-              status: 409,
-              authorization_pack_status: request.authorization_pack_status,
-            };
-          }
-          if (request.soc_approvals.some((approval) => approval.user_id === ctx.userId)) {
-            return { error: 'duplicate_soc_approval', status: 409 };
-          }
-          if (distinctSocApprovalCount(request) < 1) {
-            request.soc_approvals.push({ user_id: ctx.userId, at: nowFn().toISOString() });
-            resolvedState = 'under_review';
-            auditAction = 'waf.offensive_request.soc_approval_recorded';
-            auditMetadata = { approvals: distinctSocApprovalCount(request) };
-          } else {
+          // No authorization pack or second approver is required; the approval is still recorded
+          // so the request keeps a named approver as provenance.
+          request.soc_approvals = [
+            ...(request.soc_approvals ?? []),
+            { user_id: ctx.userId, role: ctx.role, at: nowFn().toISOString() },
+          ];
+          const scope = await getTargetScope(coreCatalog, ctx, request.target_group_id, client);
+          if (scope.error) return scope;
+          request.scope_hash = computeScopeHashFromTargets(
+            request.target_group_id,
+            scope.targets,
+          );
+          auditAction = 'waf.offensive_request.approved';
+          auditMetadata = {
+            scope_hash: request.scope_hash,
+            suites: request.requested_suites,
+            ...(demo ? { demo_bypass: true } : {}),
+          };
+        }
+
+        if (action === 'schedule') {
+          const window_start = metadata.window_start;
+          const window_end = metadata.window_end;
+          if (!request.scope_hash) {
             const scope = await getTargetScope(coreCatalog, ctx, request.target_group_id, client);
             if (scope.error) return scope;
             request.scope_hash = computeScopeHashFromTargets(
               request.target_group_id,
               scope.targets,
             );
-            request.soc_approvals.push({ user_id: ctx.userId, at: nowFn().toISOString() });
-            auditAction = 'waf.offensive_request.approved';
-            auditMetadata = {
-              scope_hash: request.scope_hash,
-              suites: request.requested_suites,
-            };
           }
-        }
-
-        if (action === 'schedule') {
-          const window_start = metadata.window_start;
-          const window_end = metadata.window_end;
-          if (!window_start || !window_end) {
-            return { error: 'missing_schedule_window', status: 409 };
-          }
-          if (!request.scope_hash) return { error: 'missing_scope_hash', status: 409 };
           request.scheduled_window = {
-            window_start,
-            window_end,
+            window_start: window_start ?? request.requested_window?.window_start ?? nowFn().toISOString(),
+            window_end: window_end ?? request.requested_window?.window_end ?? new Date(nowFn().getTime() + 7 * 86_400_000).toISOString(),
             scope_hash: request.scope_hash,
           };
           auditAction = 'waf.offensive_request.scheduled';
-          auditMetadata = { window_start, window_end };
+          auditMetadata = {
+            window_start: request.scheduled_window.window_start,
+            window_end: request.scheduled_window.window_end,
+            ...(demo ? { demo_bypass: true } : {}),
+          };
         }
 
         if (action === 'start') {
           refreshPackStatus(request);
-          if (!offensiveAuthorizationPackComplete(request)) {
-            return {
-              error: 'authorization_pack_incomplete',
-              status: 409,
-              authorization_pack_status: request.authorization_pack_status,
-            };
-          }
-          if (!isExplicitDemoTenant(request.tenant_id) && distinctSocApprovalCount(request) < 2) {
-            return { error: 'insufficient_soc_approvals', status: 409 };
-          }
           if (await killSwitchRepo.isKillSwitchActiveForTenant(ctx, { client })) {
             return { error: 'kill_switch_active', status: 409 };
           }
-          if (!request.scheduled_window
-            || !isWithinScheduledWindow(request.scheduled_window, nowFn().getTime())) {
-            return { error: 'outside_schedule_window', status: 409 };
+          // Fill in whatever the one-click path has not recorded yet.
+          if (!request.scheduled_window?.window_start || !request.scheduled_window?.window_end) {
+            request.scheduled_window = {
+              window_start: request.requested_window?.window_start ?? nowFn().toISOString(),
+              window_end: request.requested_window?.window_end ?? new Date(nowFn().getTime() + 7 * 86_400_000).toISOString(),
+              scope_hash: request.scope_hash,
+            };
           }
           const scope = await getTargetScope(coreCatalog, ctx, request.target_group_id, client);
           if (scope.error) return scope;
-          const currentScopeHash = computeScopeHashFromTargets(
+          request.scope_hash = computeScopeHashFromTargets(
             request.target_group_id,
             scope.targets,
           );
-          if (currentScopeHash !== request.scope_hash) {
-            return { error: 'scope_hash_mismatch', status: 409 };
-          }
           const modes = request.requested_suites
             .map((suiteId) => getOffensiveSuiteById(suiteId)?.scenario_family)
             .filter(Boolean);

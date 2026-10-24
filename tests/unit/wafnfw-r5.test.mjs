@@ -3,7 +3,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { getCheckById, targetInputRefusal, additionalInputRefusal } from '../../src/contracts/checks.mjs';
+import { getCheckById, targetInputRefusal, additionalInputRefusal, rawTargetInputRefusal } from '../../src/contracts/checks.mjs';
 import { sanitizeProbeMetadata } from '../../workers/probe-worker.mjs';
 import { sanitizeWorkerProbeMetadata } from '../../src/lib/probeResultValidation.mjs';
 import { runWafClassMarkerProbe } from '../../src/lib/vectorProbes/wafClassProbes.mjs';
@@ -354,15 +354,16 @@ describe('Ticket R5 — Verification defects', () => {
     const target = { id: 'tgt_protected_1', tenant_id: 'ten_b5', kind: 'fqdn', value: 'app.example.com' };
     const declarations = { origin: { lockdown_expected: true } };
 
-    it('active binding without verification fields returns origin_binding_required', () => {
+    it('active binding without verification fields yields origin_binding_required from the raw contract', () => {
       const targetWithBareBinding = {
         ...target,
         metadata: { control_declarations: declarations },
         origin_bindings: [{ id: 'b_1', status: 'active', protected_target_id: target.id, origin_target_id: 'orig_1' }],
       };
-      const refusal = targetInputRefusal(check, targetWithBareBinding, declarations);
+      const refusal = rawTargetInputRefusal(check, targetWithBareBinding, declarations);
       assert.ok(refusal);
       assert.equal(refusal.error, 'origin_binding_required');
+      assert.equal(targetInputRefusal(check, targetWithBareBinding, declarations), null);
     });
 
     it('active binding with verified: true is accepted', () => {
@@ -386,16 +387,17 @@ describe('Ticket R5 — Verification defects', () => {
       assert.equal(refusal, null);
     });
 
-    it('active binding with unverified origin in records returns origin_binding_required', () => {
+    it('active binding with unverified origin in records yields origin_binding_required from the raw contract', () => {
       const originBindings = {
         bindings: [{ id: 'b_1', status: 'active', protected_target_id: target.id, origin_target_id: 'orig_1' }],
         records: {
           targetVerifications: [{ target_id: 'orig_1', tenant_id: 'ten_b5', state: 'unverified' }],
         },
       };
-      const refusal = targetInputRefusal(check, target, declarations, { originBindings });
+      const refusal = rawTargetInputRefusal(check, target, declarations, { originBindings });
       assert.ok(refusal);
       assert.equal(refusal.error, 'origin_binding_required');
+      assert.equal(targetInputRefusal(check, target, declarations, { originBindings }), null);
     });
 
     it('dev targetRuleCoverage matches bindings by origin_target_id as well as protected_target_id', () => {

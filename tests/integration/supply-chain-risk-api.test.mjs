@@ -82,12 +82,12 @@ describe('supply chain risk API feature flag', () => {
     restoreEnv();
   });
 
-  it('returns waf_feature_disabled when flag is off', async () => {
+  it('serves the route with the deployment flag off', async () => {
     const res = await request(baseUrl, 'GET', '/v1/waf/supply-chain/risks', {
       headers: demoHeaders('admin'),
     });
-    assert.equal(res.status, 404);
-    assert.equal(res.json.error, 'waf_feature_disabled');
+    assert.notEqual(res.status, 404);
+    assert.notEqual(res.json.error, 'waf_feature_disabled');
   });
 });
 

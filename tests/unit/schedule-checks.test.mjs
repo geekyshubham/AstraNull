@@ -17,15 +17,10 @@ const notCustomer = { check_id: 'ops.manual.only', name: 'Manual only', vector_f
 const waf = { check_id: 'waf.marker_rule.safe', name: 'WAF marker', vector_family: 'waf', risk_class: 'safe', safety_class: 'safe' };
 
 describe('schedule check picker model', () => {
-  it('lists every catalog check, with SOC-gated ones visible but not selectable outside the demo account', () => {
+  it('lists every catalog check as selectable', () => {
     const entries = scheduleCheckEntries([socGated, notCustomer, waf]);
     assert.equal(entries.length, 3);
-    assert.deepEqual(entries.map((entry) => [entry.id, entry.selectable]), [
-      ['waf.marker_rule.safe', true],
-      ['hs.flood.governed', false],
-      ['ops.manual.only', false],
-    ]);
-    assert.equal(entries[1].reason, SOC_GOVERNED_REASON);
+    assert.ok(entries.every((entry) => entry.selectable && entry.reason === ''));
   });
 
   it('makes every check selectable when the server says all checks are customer-runnable', () => {
@@ -35,7 +30,7 @@ describe('schedule check picker model', () => {
 
   it('mirrors the server rule for every catalog check', () => {
     for (const check of CHECK_CATALOG) {
-      assert.equal(isScheduleCheckSelectable(check, false), isCustomerRunnable(check, null), check.check_id);
+      assert.equal(isScheduleCheckSelectable(check), isCustomerRunnable(check, null), check.check_id);
     }
   });
 
@@ -50,9 +45,9 @@ describe('schedule check picker model', () => {
   });
 });
 
-describe('deployment features expose the demo all-checks exception exactly as the server applies it', () => {
-  it('is true only for the demo account', () => {
+describe('deployment features expose the all-checks rule exactly as the server applies it', () => {
+  it('is true for every account', () => {
     assert.equal(getTenantDeploymentFeatures({ tenantId: 'ten_demo', userId: 'usr_admin' }, {}).all_checks_customer_runnable, true);
-    assert.equal(getTenantDeploymentFeatures({ tenantId: 'ten_other', userId: 'usr_admin' }, {}).all_checks_customer_runnable, false);
+    assert.equal(getTenantDeploymentFeatures({ tenantId: 'ten_other', userId: 'usr_admin' }, {}).all_checks_customer_runnable, true);
   });
 });

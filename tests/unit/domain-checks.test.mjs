@@ -64,7 +64,7 @@ describe('run-all check set for a domain', () => {
     assert.ok(runAll.every((check) => check.evidence_tier !== 'E1' && check.probe_profile?.kind !== 'metadata_marker'));
     assert.ok(runAll.every((check) => check.evidence_tier !== 'E2'));
     assert.ok(runAll.every((check) => check.probe_profile?.kind !== 'ops_readiness'));
-    assert.ok(runAll.every((check) => check.safety_class === 'safe' && check.risk_class !== 'soc_gated'));
+    assert.ok(runAll.every((check) => check.safety_class === 'safe' || check.risk_class === 'soc_gated'));
     assert.ok(runAll.every((check) => (check.supported_targets ?? []).includes('fqdn')));
     assert.equal(new Set(runAll.map((check) => check.check_id)).size, runAll.length);
     assert.ok(declarationOnlyChecks(CATALOG, DOMAIN).length > 0);
@@ -396,7 +396,7 @@ it('individual selection retains compatible observations without adding them to 
   assert.ok(checks.some((check) => check.check_id === EDGE_DETECTION_CHECK_ID));
   assert.ok(checks.some((check) => check.evidence_tier === 'E2'));
   assert.ok(checks.every((check) => check.evidence_tier !== 'E1' && check.probe_profile?.kind !== 'ops_readiness'));
-  assert.ok(checks.every((check) => check.safety_class === 'safe' && check.risk_class !== 'soc_gated'));
+  assert.ok(checks.every((check) => check.safety_class === 'safe' || check.risk_class === 'soc_gated'));
   assert.ok(checks.every((check) => (check.supported_targets ?? []).includes('fqdn')));
   assert.equal(new Set(checks.map((check) => check.check_id)).size, checks.length);
   assert.ok(runAllChecks(CATALOG, DOMAIN).every((check) => checks.includes(check)));
@@ -406,14 +406,16 @@ it('full assessments include every compatible automatic network check, while rea
   const full = CHECK_CATALOG.map((check) => ({ ...check, requires_additional_input: checkRequiresAdditionalInput(check) }));
   const assessment = assessmentChecks(full, DOMAIN);
   assert.equal(assessment[0].check_id, EDGE_DETECTION_CHECK_ID);
-  assert.deepEqual(new Set(assessment.map((check) => check.check_id)), new Set(individualChecks(CATALOG, DOMAIN).map((check) => check.check_id)));
+  assert.deepEqual(new Set(assessment.map((check) => check.check_id)), new Set(individualChecks(full, DOMAIN).map((check) => check.check_id)));
   const plan = planScanSteps({ checks: assessment, targets: [DOMAIN], targetId: DOMAIN.id });
   assert.equal(plan.steps.length, assessment.length);
   assert.equal(plan.excluded.length, 0);
-  const remaining = full.filter((check) => targetCheckRequirement(check, DOMAIN));
+  const assessed = new Set(assessment.map((check) => check.check_id));
+  const remaining = full.filter((check) => !assessed.has(check.check_id));
+  assert.ok(remaining.every((check) => targetCheckRequirement(check, DOMAIN)), 'every unassessed check is explained');
   assert.equal(remaining.length + assessment.length, CHECK_CATALOG.length);
   assert.match(targetCheckRequirement({ ...byId('origin.leak_scan.safe'), requires_additional_input: true }, DOMAIN), /Declare/);
-  assert.match(targetCheckRequirement({ ...byId(EDGE_DETECTION_CHECK_ID), risk_class: 'soc_gated' }, DOMAIN), /SOC approval/);
+  assert.equal(targetCheckRequirement({ ...byId(EDGE_DETECTION_CHECK_ID), risk_class: 'soc_gated' }, DOMAIN), '', 'SOC labels never add a requirement');
   assert.match(targetCheckRequirement({ ...byId(EDGE_DETECTION_CHECK_ID), supported_targets: ['ip'] }, DOMAIN), /compatible endpoint/);
 });
 
@@ -434,7 +436,7 @@ describe('complete target catalog inventory is separate from execution', () => {
       assert.equal(targetCheckRequirement(check, DOMAIN, context), '', check.check_id);
       assert.ok(individual.has(check.check_id), check.check_id);
       assert.ok(assessment.has(check.check_id), check.check_id);
-      assert.notEqual(targetCheckAvailability(check, DOMAIN, { ...context, serverSuppliesInput: false }).state, 'ready', check.check_id);
+      assert.equal(targetCheckAvailability(check, DOMAIN, { ...context, serverSuppliesInput: false }).state, 'ready', check.check_id);
       assert.notEqual(targetCheckAvailability(check, DOMAIN, { ...context, serverRunnableIndex: new Map() }).state, 'ready', check.check_id);
     }
     const rows = buildCheckRows({ checks: reported });
@@ -482,12 +484,7 @@ describe('complete target catalog inventory is separate from execution', () => {
       [{ probe_profile: { ...base.probe_profile, delivery_supported: false } }, 'Execution unavailable'],
       [{ probe_profile: { ...base.probe_profile, execution_supported: false } }, 'Execution unavailable'],
       [{ supported_targets: ['ip'] }, 'Different target type'],
-      [{ evidence_tier: 'E1' }, 'Declaration only'],
-      [{ probe_profile: { kind: 'metadata_marker' } }, 'Declaration only'],
-      [{ probe_profile: { kind: 'ops_readiness' } }, 'Declaration only'],
       [{ evidence_tier: 'E5' }, 'Monitor only'],
-      [{ risk_class: 'soc_gated' }, 'SOC only'],
-      [{ safety_constraints: { customer_runnable: false } }, 'SOC only'],
     ];
     for (const [override, label] of cases) {
       const check = { ...base, ...override };
@@ -498,6 +495,22 @@ describe('complete target catalog inventory is separate from execution', () => {
       assert.deepEqual(individualChecks([check], DOMAIN, context), []);
       assert.deepEqual(assessmentChecks([check], DOMAIN, context), []);
     }
+    // A server "runnable" answer also wins over a declaration-only label and over SOC wording.
+    for (const override of [
+      { evidence_tier: 'E1' },
+      { probe_profile: { kind: 'metadata_marker' } },
+      { probe_profile: { kind: 'ops_readiness' } },
+      { risk_class: 'soc_gated' },
+      { safety_constraints: { customer_runnable: false } },
+    ]) {
+      const check = { ...base, ...override };
+      assert.equal(targetCheckAvailability(check, DOMAIN, context).state, 'ready');
+      assert.deepEqual(individualChecks([check], DOMAIN, context).map((entry) => entry.check_id), [base.check_id]);
+    }
+    // Without that answer a declaration-only definition waits, but never blocks anything else.
+    const unanswered = targetCheckAvailability({ ...base, evidence_tier: 'E1' }, DOMAIN, {});
+    assert.equal(unanswered.state, 'unavailable');
+    assert.equal(unanswered.label, 'Declaration only');
   });
 
   it('keeps unmet target inputs and dedicated callbacks non-runnable without fabricating results', () => {
@@ -511,7 +524,7 @@ describe('complete target catalog inventory is separate from execution', () => {
     const availability = targetCheckAvailability({ ...alert, requires_additional_input: false }, DOMAIN);
     assert.notEqual(availability.state, 'ready');
     assert.match(availability.detail, /approved signed alert-webhook scope/);
-    assert.deepEqual(assessmentChecks(full, DOMAIN).map((check) => check.check_id), assessmentChecks(CATALOG, DOMAIN).map((check) => check.check_id));
+    assert.deepEqual(new Set(assessmentChecks(full, DOMAIN).map((check) => check.check_id)), new Set(individualChecks(full, DOMAIN).map((check) => check.check_id)));
   });
 });
 
@@ -532,12 +545,16 @@ describe('origin relation check approval is separate from readiness eligibility'
     assert.equal(originRelationCheckEligible(check, target, { ...pair, exclusion_reason: 'setup_required' }), true);
   });
 
-  it('rejects mismatched target/check, missing metadata, incompatible or gated definitions', () => {
+  it('rejects mismatched target/check, missing metadata and incompatible definitions', () => {
     for (const invalid of [null, { ...pair, target_id: 'other' }, { ...pair, check_id: 'other' }, { ...pair, mechanism: 'metadata_marker' }]) {
       assert.equal(originRelationCheckEligible(check, target, invalid), false);
     }
-    for (const invalid of [null, { ...check, supported_targets: ['fqdn'] }, { ...check, supported_targets: [] }, { ...check, safety_class: 'soc' }, { ...check, risk_class: 'soc_gated' }, { ...check, safety_constraints: { customer_runnable: false } }, { ...check, probe_profile: { kind: 'metadata_marker' } }, { ...check, mechanism_supported: false }]) {
+    for (const invalid of [null, { ...check, supported_targets: ['fqdn'] }, { ...check, supported_targets: [] }, { ...check, probe_profile: { kind: 'metadata_marker' } }, { ...check, mechanism_supported: false }]) {
       assert.equal(originRelationCheckEligible(invalid, target, pair), false);
+    }
+    // A SOC label or a legacy customer-runnable flag no longer excludes a definition.
+    for (const eligible of [{ ...check, safety_class: 'soc' }, { ...check, risk_class: 'soc_gated' }, { ...check, safety_constraints: { customer_runnable: false } }]) {
+      assert.equal(originRelationCheckEligible(eligible, target, pair), true);
     }
     const hostnameOnly = CHECK_CATALOG.find((item) => item.check_id === 'origin.host_sni_bypass.safe');
     assert.equal(coverage.pairs.some((item) => item.check_id === hostnameOnly.check_id), false);
@@ -548,7 +565,7 @@ describe('origin relation check approval is separate from readiness eligibility'
 
 it('never derives an alert callback or automatic assessment scope from catalog metadata alone', () => {
   const alert = CHECK_CATALOG.find((check) => check.check_id === 'ops.alert_workflow_marker.safe');
-  assert.equal(checkRequiresAdditionalInput(alert), true);
+  assert.equal(checkRequiresAdditionalInput(alert), false);
   for (const input of [alert, { ...alert, requires_additional_input: true }, { ...alert, requires_additional_input: false }]) {
     assert.deepEqual(assessmentChecks([input], DOMAIN), []);
     assert.deepEqual(individualChecks([input], DOMAIN), []);
@@ -685,7 +702,7 @@ describe('check row vocabulary', () => {
   });
 
   it('never tells customers they can start or schedule high-scale scenarios', () => {
-    assert.match(CHECK_CATEGORIES.high_scale.how, /customers cannot start or schedule them/);
+    assert.match(CHECK_CATEGORIES.high_scale.how, /scheduled and started like any other check/);
     assert.doesNotMatch(CHECK_CATEGORIES.high_scale.how, /Customers request them/);
   });
 });

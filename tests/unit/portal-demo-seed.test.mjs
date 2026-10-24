@@ -3,6 +3,7 @@ import '../helpers/dev-data-dir.mjs';
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { buildPortalDemoStore, PORTAL_DEMO_IDS } from '../fixtures/portal-demo/seed.mjs';
+import { CHECK_CATALOG } from '../../src/contracts/checks.mjs';
 import { rebaseDemoStoreTimestamps } from '../../scripts/seed-dev-portal-demo.mjs';
 import { transitionHighScale } from '../../src/services/highScale.mjs';
 import { resetStoreForTests } from '../../src/store.mjs';
@@ -39,10 +40,11 @@ describe('portal demo seed fixture', () => {
     );
   });
 
-  it('binds complete marker readiness fixtures to exact remapped durable runs', () => {
+  it('binds complete readiness fixtures to exact remapped durable runs', () => {
     const store = buildPortalDemoStore();
     const runs = store.testRuns.filter((entry) => entry.id.startsWith('run_portal_assurance_'));
     assert.ok(runs.length > 1, 'readiness uses a broad explicit fixture cohort, not a legacy fingerprint');
+    const markerKinds = new Set(['waf_class_marker_probe', 'waf_evasion_marker_probe', 'outside_in_waf_scan']);
     for (const run of runs) {
       const event = store.events.find((entry) => entry.test_run_id === run.id);
       const verdict = store.verdicts.find((entry) => entry.test_run_id === run.id);
@@ -52,7 +54,15 @@ describe('portal demo seed fixture', () => {
         assert.equal(record.test_run_id, run.id);
       }
       assert.equal(run.producer_kind, 'signed_probe');
-      assert.equal(event.metadata.classifier_version, 'marker-comparison-v5');
+      // Only marker probes are graded by a comparison classifier; declaration-only checks
+      // record none, so the readiness gate treats them as declaration evidence.
+      const check = CHECK_CATALOG.find((entry) => entry.check_id === run.check_id);
+      const marker = markerKinds.has(check?.probe_profile?.kind) || check?.requires_complete_comparison === true;
+      assert.equal(
+        event.metadata.classifier_version,
+        marker ? (check?.probe_profile?.kind === 'waf_evasion_marker_probe' ? 'marker-comparison-v4' : 'marker-comparison-v5') : undefined,
+        run.check_id,
+      );
       assert.equal(event.metadata.comparison_complete, true);
       assert.equal(event.metadata.permitted_baseline_health, 'healthy');
       assert.deepEqual(verdict.evidence_ids, [event.id]);

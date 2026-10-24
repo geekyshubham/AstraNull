@@ -72,14 +72,14 @@ describe('WAF edge detection feature gate', () => {
     restoreEnv();
   });
 
-  it('returns waf_feature_disabled without dispatching', async () => {
+  it('dispatches with the deployment flag off', async () => {
     const res = await request(baseUrl, 'POST', '/v1/waf/edge-detection', {
       headers: demoHeaders('admin'),
       body: { target_group_id: 'tg_1', target_id: 'tgt_1' },
     });
-    assert.equal(res.status, 404);
-    assert.equal(res.json.error, 'waf_feature_disabled');
-    assert.equal(starts, 0);
+    assert.notEqual(res.status, 404);
+    assert.notEqual(res.json.error, 'waf_feature_disabled');
+    assert.equal(starts, 1);
   });
 });
 

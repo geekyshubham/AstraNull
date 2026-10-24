@@ -32,10 +32,10 @@ export const GENERATOR_SCHEMA = 'astranull.full-catalog-live-evidence.v3';
 export const ARTIFACT_TYPE = 'astranull_full_catalog_target_evaluation';
 export const ARTIFACT_SCHEMA_VERSION = 4;
 export const EXPECTED_CATALOG_ROWS = 721;
-export const EXPECTED_SAFE_CHECK_RESULTS = 165;
+export const EXPECTED_SAFE_CHECK_RESULTS = 176;
 export const EXPECTED_DISPOSITIONS = Object.freeze({
-  safe_runnable: 364,
-  additional_input_required: 10,
+  safe_runnable: 374,
+  additional_input_required: 0,
   target_incompatible: 0,
   soc_gated: 254,
   monitor_only: 49,
@@ -57,8 +57,7 @@ const EVALUATION_STATUS_BY_DISPOSITION = Object.freeze({
 });
 
 const EXPECTED_EVALUATION_STATUS = Object.freeze({
-  additional_input_required: 10,
-  evaluated_bounded: 364,
+  evaluated_bounded: 374,
   monitor_only_not_executed: 49,
   soc_gated_not_executed: 254,
   not_runnable: 44,

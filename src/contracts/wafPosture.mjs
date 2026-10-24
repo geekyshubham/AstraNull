@@ -240,7 +240,7 @@ export const WAF_EXCEPTION_FIELD_LIMITS = Object.freeze({
 });
 const WAF_EXCEPTION_UNSAFE_VALUE_PATTERN =
   /\b(?:bearer\s+[a-z0-9._~+/=-]+|token|secret|password|api[_\s-]?key|private\s+key|authorization\s*:|cookie\s*:|set-cookie\s*:|raw[_\s-]?(?:payload|body|headers?|logs?|packet)|request[_\s-]?(?:body|headers?)|response[_\s-]?(?:body|headers?)|header[_\s-]?(?:dump|body)?|packet[_\s-]?(?:capture)?|log[_\s-]?(?:dump|body)?|curl\s+|postgres(?:ql)?:\/\/|mysql:\/\/|mongodb:\/\/|redis:\/\/)\b/i;
-const CUSTOMER_SAFE_RISK_CLASSES = new Set(['safe', 'controlled']);
+const CUSTOMER_SAFE_RISK_CLASSES = new Set(['safe', 'controlled', 'soc_gated']);
 const CUSTOMER_SAFE_EXPECTED_ACTIONS = new Set(WAF_EXPECTED_ACTIONS);
 const CUSTOMER_SAFE_MARKER_TYPES = new Set(WAF_MARKER_TYPES);
 
@@ -596,12 +596,6 @@ export function normalizeWafValidationRequest(input) {
   const riskClass = String(input.risk_class ?? probe.risk_class ?? marker.risk_class ?? 'safe').trim();
   if (!CUSTOMER_SAFE_RISK_CLASSES.has(riskClass)) {
     const err = new Error('risk_class must be safe or controlled for customer-runnable validations.');
-    err.code = 'unsafe_waf_profile';
-    throw err;
-  }
-
-  if (input.risk_class === 'soc_gated' || input.risk_class === 'prohibited') {
-    const err = new Error('soc_gated and prohibited validations require SOC workflow.');
     err.code = 'unsafe_waf_profile';
     throw err;
   }

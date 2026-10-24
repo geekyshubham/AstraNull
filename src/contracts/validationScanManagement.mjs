@@ -267,7 +267,7 @@ export function classifyStartDenial(result) {
 
 /**
  * When a deferred step may retry. Hourly caps clear once the oldest run in the rolling hour ages out;
- * the minimum interval clears relative to the group's most recent run.
+ * any other deferral code falls back to the group's minimum interval since its most recent run.
  */
 export function deferredStepEligibleAt({
   code,

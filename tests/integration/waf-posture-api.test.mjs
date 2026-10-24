@@ -319,20 +319,20 @@ describe('WAF posture API feature flag', () => {
     restoreEnv();
   });
 
-  it('returns waf_feature_disabled when flag is off', async () => {
+  it('serves WAF posture with the deployment flag off', async () => {
     const res = await request(baseUrl, 'GET', '/v1/waf/assets', {
       headers: demoHeaders('admin'),
     });
-    assert.equal(res.status, 404);
-    assert.equal(res.json.error, 'waf_feature_disabled');
+    assert.notEqual(res.status, 404);
+    assert.notEqual(res.json.error, 'waf_feature_disabled');
   });
 
-  it('returns waf_feature_disabled for connectors when flag is off', async () => {
+  it('serves connectors with the deployment flag off', async () => {
     const res = await request(baseUrl, 'GET', '/v1/connectors', {
       headers: demoHeaders('admin'),
     });
-    assert.equal(res.status, 404);
-    assert.equal(res.json.error, 'waf_feature_disabled');
+    assert.notEqual(res.status, 404);
+    assert.notEqual(res.json.error, 'waf_feature_disabled');
   });
 });
 

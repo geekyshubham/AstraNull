@@ -256,7 +256,8 @@ export function VectorLibraryPage({
   const selectedTarget = targets.find((target) => getString(target, ['id']) === targetId) ?? null;
   const missingDeepLinkTarget = Boolean(targetId) && targetsStatus === 'loaded' && !selectedTarget;
 
-  const runnableChecks = data.checks.filter((check) => !isDeclarationOnlyCheck(check) && getString(check, ['safety_class']) === 'safe');
+  const runnableChecks = data.checks.filter((check) => !isDeclarationOnlyCheck(check)
+    && ['safe', 'soc_gated'].includes(getString(check, ['safety_class'])));
   const [serverFit, setServerFit] = useState<{ targetId: string; status: 'loading' | 'loaded' | 'error'; checks: DataItem[] }>({ targetId: '', status: 'loading', checks: [] });
   const fitTargetId = selectedTarget ? getString(selectedTarget, ['id']) : '';
   useEffect(() => {
@@ -402,7 +403,7 @@ export function VectorLibraryPage({
     const availability = vectorTargetAvailability(selectedVector, data.checks, selectedTarget);
     const check = availability.runnableChecks.find((candidate) => getString(candidate, ['check_id']) === selectedCheckId);
     if (!check) {
-      setError('Select one mapped customer-safe check before continuing.');
+      setError('Select one mapped check before continuing.');
       return;
     }
     setPendingRun({ vector: selectedVector, check, availability });
@@ -467,6 +468,7 @@ export function VectorLibraryPage({
   };
 
   const detailAvailability = selectedVector ? vectorTargetAvailability(selectedVector, data.checks, selectedTarget) : null;
+  const detailRunnable = (detailAvailability?.runnableChecks ?? []).length > 0;
   const detailEvidence = selectedVector ? evidenceCapabilityCopy(selectedVector.evidence_capability) : null;
   const recommended = selectedVector && detailAvailability ? preferredRunnableCheck(selectedVector, detailAvailability) : null;
   const mappedCheckIds = selectedVector ? [...new Set([
@@ -714,19 +716,19 @@ export function VectorLibraryPage({
           <div className="vector-detail">
             <div className="vector-detail-rail" role="group" aria-label="Target fit and launch">
               <div className="vector-target-note" role="note">
-                {detailAvailability.id === 'safe_runnable' ? <ShieldCheck size={18} aria-hidden="true" /> : <TriangleAlert size={18} aria-hidden="true" />}
+                {detailRunnable ? <ShieldCheck size={18} aria-hidden="true" /> : <TriangleAlert size={18} aria-hidden="true" />}
                 <div>
                   <strong>{selectedTarget ? targetLabel(selectedTarget) : 'Browsing without a target'}</strong>
                   <Badge tone={detailAvailability.tone as Tone}>{detailAvailability.label}</Badge>
                   <p className="muted">{detailAvailability.detail}</p>
                 </div>
               </div>
-              {detailAvailability.id === 'safe_runnable' && canStartBoundedRun ? <Select label="Mapped bounded check" value={selectedCheckId} options={checkOptions} onChange={setSelectedCheckId} /> : null}
-              {detailAvailability.id === 'safe_runnable' && !canStartBoundedRun ? <div className="form-banner neutral" role="note">Your role can review fit, but only owners, admins, and engineers can start bounded checks.</div> : null}
+              {detailRunnable && canStartBoundedRun ? <Select label="Mapped bounded check" value={selectedCheckId} options={checkOptions} onChange={setSelectedCheckId} /> : null}
+              {detailRunnable && !canStartBoundedRun ? <div className="form-banner neutral" role="note">Your role can review fit, but only owners, admins, and engineers can start bounded checks.</div> : null}
               <div className="vector-detail-actions">
                 {detailAvailability.id === 'monitor_only' ? <AnchorButton href="#integrations" variant="secondary" size="sm">Open telemetry integrations</AnchorButton> : null}
                 <Button variant="ghost" size="sm" onClick={() => setSelectedVector(null)}>Close</Button>
-                {detailAvailability.id === 'safe_runnable' && canStartBoundedRun ? <Button size="sm" disabled={!selectedCheckId || busy !== ''} onClick={prepareRun}>Review run</Button> : null}
+                {detailRunnable && canStartBoundedRun ? <Button size="sm" disabled={!selectedCheckId || busy !== ''} onClick={prepareRun}>Review run</Button> : null}
               </div>
             </div>
             <div className="vector-detail-grid">

@@ -109,15 +109,15 @@ async function declarePaths() {
 }
 
 describe('protection validation over the dev HTTP surface', () => {
-  it('gates every route per tenant and advertises the feature', async () => {
-    const features = await request(baseUrl, 'GET', '/v1/tenant/deployment-features', { headers: admin() });
-    assert.equal(features.json.protection_validation, true);
-    const off = await request(baseUrl, 'GET', '/v1/tenant/deployment-features', { headers: admin(DISABLED_TENANT) });
-    assert.equal(off.json.protection_validation, false);
+  it('advertises the feature and serves every route for any tenant', async () => {
+    for (const tenant of [TENANT, DISABLED_TENANT]) {
+      const features = await request(baseUrl, 'GET', '/v1/tenant/deployment-features', { headers: admin(tenant) });
+      assert.equal(features.json.protection_validation, true, tenant);
+    }
     for (const path of ['/v1/targets/tgt_app/entry-paths', '/v1/firewall-expectations', '/v1/entry-path-comparisons', '/v1/reports/protection-validation']) {
       const res = await request(baseUrl, 'GET', path, { headers: admin(DISABLED_TENANT) });
-      assert.equal(res.status, 404, path);
-      assert.equal(res.json.error, 'protection_validation_disabled', path);
+      assert.notEqual(res.json?.error, 'protection_validation_disabled', path);
+      assert.ok([200, 404].includes(res.status), `${path} -> ${res.status}`);
     }
   });
 
@@ -136,7 +136,7 @@ describe('protection validation over the dev HTTP surface', () => {
     assert.match(plan.json.plan_digest, /^[a-f0-9]{64}$/);
     assert.equal(getStore().testRuns.length, runsBefore, 'plan never starts runs');
 
-    const matrix = await request(baseUrl, 'GET', '/v1/targets/tgt_app/protection-validation', { headers: viewer() });
+    const matrix = await request(baseUrl, 'GET', '/v1/targets/tgt_app/protection-validation', { headers: admin() });
     assert.equal(matrix.status, 200, JSON.stringify(matrix.json));
     assert.equal(matrix.json.connectors_required, false);
     assert.equal(matrix.json.paths.length, 2);

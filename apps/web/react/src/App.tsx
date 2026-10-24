@@ -72,8 +72,13 @@ function fallbackRouteForSession(session: Pick<Session, 'principal' | 'staff_rol
   return session.principal === 'staff' ? staffHomeRoute(session) : 'dashboard';
 }
 
-function routeAllowedFor(session: Pick<Session, 'principal' | 'role' | 'staff_role'> | null | undefined, route: RouteId) {
-  return canAccessRoute(session?.role, route, { principal: session?.principal, staffRole: session?.staff_role });
+function routeAllowedFor(session: Pick<Session, 'principal' | 'role' | 'staff_role' | 'tenant_id' | 'user_id'> | null | undefined, route: RouteId) {
+  return canAccessRoute(session?.role, route, {
+    principal: session?.principal,
+    staffRole: session?.staff_role,
+    tenantId: session?.tenant_id,
+    userId: session?.user_id,
+  });
 }
 
 /**

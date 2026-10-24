@@ -75,7 +75,7 @@ Production API and UI traffic must sit behind a provider-neutral edge control: W
 | Leaked bootstrap token | Short expiry, max registrations, optional CIDR, revocation, audit. |
 | Fake agent registration | Token validation, identity issuance, tenant binding. |
 | Cross-tenant event injection | Authenticated agent identity, production gateway-mTLS fingerprint binding, and tenant validation. |
-| Customer starts high-scale test directly | API separation and SOC-only internal execution. |
+| Customer starts high-scale test directly | API separation; SOC internal routes remain for recorded governance. |
 | Unsafe target testing | Declared targets only, ownership/authorization for high-scale. |
 | Evidence tampering | Immutable event log, signed reports, audit trail. |
 | Tampered agent update packages | Control-plane rejects unsigned or signature-invalid manifests; safe artifact basenames and SHA-256/size checks; manifest signing key must match active tenant trust key; required HTTPS `distribution` URLs with `artifact_url` basename match; agent-side verifier, `--apply-update-manifest`, and `--download-and-apply-update` reject key/signature/artifact mismatch, unsafe paths, symlinks, oversized downloads, and redirect-based fetch tricks. **Remaining:** production trust-key lifecycle operations, installer enforcement on hosts, hosted artifact custody/CDN ops evidence, unattended daemon restart and staging fleet rollout drills. |

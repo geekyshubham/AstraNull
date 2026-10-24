@@ -208,7 +208,7 @@ describe('postgres waf drift service adapter', () => {
     assert.equal(/from\s+['"].*\/services\/wafDriftWorker/.test(ADAPTER_SOURCE), false);
   });
 
-  it('skips scans when WAF feature is disabled', async () => {
+  it('runs scans even when the WAF feature flag is off', async () => {
     Object.assign(process.env, {
       ...process.env,
       ASTRANULL_WAF_POSTURE_ENABLED: '0',
@@ -217,9 +217,8 @@ describe('postgres waf drift service adapter', () => {
     const service = createPostgresWafDriftServices(repositories, { now: () => FIXED_NOW });
 
     const outcome = await service.runDriftScan(demoCtx());
-    assert.equal(outcome.skipped, true);
-    assert.equal(outcome.reason, 'waf_feature_disabled');
-    assert.equal(repositories.state.scanResults.length, 0);
+    assert.equal(outcome.skipped, undefined);
+    assert.equal(repositories.state.scanResults.length, 1);
   });
 
   it('runs tenant drift scan, persists metadata-only scan result, and audits completion', async () => {

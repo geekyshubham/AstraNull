@@ -489,7 +489,7 @@ describe('stamped run expected behavior snapshot at finalization', () => {
       newId: () => 'pjob_bound2',
     });
     assert.equal(boundJob.probe_profile.protected_host, 'app.example');
-    assert.equal(boundJob.probe_profile.direct_ip, undefined);
+    assert.equal(boundJob.probe_profile.direct_ip, '198.51.100.99', 'the address the caller named is not overwritten');
     assert.equal(boundJob.target.value, '203.0.113.10');
     assert.deepEqual(boundJob.constraints.origin_scope, {
       host: 'app.example',

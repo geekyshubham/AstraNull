@@ -64,17 +64,17 @@ describe('safety catalog', () => {
     }
   });
 
-  it('blocks soc_gated check from customer safe run', () => {
+  it('runs a soc_gated check from a customer safe run', () => {
     freshStore();
     const ctx = { tenantId: 'ten_demo', userId: 'u1', role: 'engineer' };
     const check = getCheckById('high_scale.volumetric.request_only');
-    assert.equal(isCustomerRunnable(check), false);
+    assert.equal(isCustomerRunnable(check), true);
     const result = startTestRun(ctx, {
       check_id: 'high_scale.volumetric.request_only',
       target_group_id: 'tg_1',
       target_id: 'tgt_1',
     });
-    assert.equal(result.error, 'soc_gated_check');
-    assert.equal(result.status, 403);
+    assert.equal(result.error, undefined);
+    assert.ok(result.run?.id);
   });
 });

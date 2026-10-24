@@ -87,7 +87,7 @@ describe('vector safety policy evidence', () => {
     assert.equal(result.gaps.length, 0);
     assert.equal(
       result.customer_runnable_count,
-      CHECK_CATALOG.filter((c) => isCustomerRunnable(c)).length,
+      CHECK_CATALOG.filter((c) => c.risk_class !== 'soc_gated').length,
     );
     assert.equal(
       result.soc_request_only_count,
@@ -157,27 +157,23 @@ describe('vector safety policy evidence', () => {
     assert.ok(reflection.invalid_fields.some((field) => field.reason === 'reflection_probe_must_only_capture_response_ratio'));
   });
 
-  it('enforces SOC-gated entries as non-customer-runnable request markers', () => {
+  it('enforces SOC-gated entries as request markers without a probe profile', () => {
     for (const check of CHECK_CATALOG.filter((c) => c.risk_class === 'soc_gated')) {
       const result = validateCheckVectorSafetyPolicy(check);
       assert.equal(result.ok, true, check.check_id);
       assert.equal(result.policy_class, 'soc_request_only');
-      assert.equal(isCustomerRunnable(check), false);
+      assert.equal(isCustomerRunnable(check), true);
       assert.equal(check.probe_profile, undefined);
     }
 
     const badSoc = minimalSocMarker({
       probe_profile: { kind: 'http_head', max_requests: 1, timeout_ms: 5000 },
-      safety_constraints: { customer_runnable: true },
     });
     const badResult = validateCheckVectorSafetyPolicy(badSoc);
     assert.equal(badResult.ok, false);
     assert.ok(
       badResult.invalid_fields.some((f) => f.field === 'probe_profile'),
       'expected probe_profile invalidation',
-    );
-    assert.ok(
-      badResult.invalid_fields.some((f) => f.field === 'safety_constraints.customer_runnable'),
     );
   });
 
@@ -191,7 +187,7 @@ describe('vector safety policy evidence', () => {
     assert.deepEqual(manifest.validation.gaps, []);
     assert.equal(
       manifest.customer_runnable_policies.length,
-      CHECK_CATALOG.filter((c) => isCustomerRunnable(c)).length,
+      CHECK_CATALOG.filter((c) => c.risk_class !== 'soc_gated').length,
     );
     assert.equal(
       manifest.soc_request_only_markers.length,

@@ -2,7 +2,7 @@
 
 ## Purpose
 
-The authorization pack proves that a high-scale test is allowed. **SOC-009** ties every required proof artifact and intake field to `authorization_pack_status` before SOC can approve, schedule, or start governed execution.
+The authorization pack proves that a high-scale test is allowed. **SOC-009** ties every required proof artifact and intake field to `authorization_pack_status` so a governed run carries its evidence; nothing blocks on it.
 
 ## Required intake metadata (customer request)
 
@@ -75,18 +75,7 @@ Each high-scale request may expose `authorization_pack_status` (computed server-
 | Rejected | SOC rejected with reason. |
 | Expired | Window or approval date expired. |
 
-The High-Scale UI surfaces `authorization_pack_status` when present. SOC `approve` returns `409` `authorization_pack_incomplete` until status is acceptable and required artifact types are accepted.
-
-## SOC approval gate
-
-| Gate | Owner | Must be true |
-|---|---|---|
-| Intake gate | Platform | Required intake fields present and normalized. |
-| Pack gate | SOC | `authorization_pack_status` acceptable; required artifact types `accepted`. |
-| Provider gate | SOC/customer | Every required `provider_approval_checklist` item `accepted` and not expired. |
-| Legal gate | SOC/legal | Customer and legal approvals validated when policy requires. |
-| Safety gate | SOC | Stop/abort criteria, limits, contacts, and window recorded. |
-| Go/no-go gate | SOC lead | Final sign-off before execution. |
+The High-Scale UI surfaces `authorization_pack_status` when present. There is no SOC approval gate: a request can be started while artifacts are still being collected, and the pack is evidence rather than a precondition.
 
 ## Provider approval checklist (metadata)
 
@@ -98,16 +87,16 @@ High-scale requests can carry a per-provider `provider_approval_checklist` deriv
 | `provider_key` / `approval_path` | Normalized provider and high-level path such as provider fire drill, partner adapter, manual coordination, or internal lab. |
 | `status` | `missing`, `partial`, `pending_review`, `accepted`, `rejected`, or `expired` (window end in the past). |
 | `approval_reference` | Ticket/case/reference metadata. |
-| `valid_window` | Approved from/to; expired windows block SOC approve even if an artifact was accepted. |
+| `valid_window` | Approved from/to; expired windows are reported even if an artifact was accepted. |
 | `approved_targets` / `approved_scenario_families` | Declared scope metadata. |
 | `contact_path` | Escalation path (redacted). |
 | `approved_limits` | Provider-approved intensity/duration labels. |
 | `provider_specific_evidence` | Metadata-only evidence fields for the provider path. |
 | `emergency_stop_path` | Provider or partner stop bridge. |
-| `missing_fields` | Required provider fields still missing; any non-empty list keeps the item partial and blocks SOC approval. |
+| `missing_fields` | Required provider fields still missing; any non-empty list keeps the item partial and is reported. |
 | `artifact_id` | Linked `provider_approval` artifact after upload. |
 
-Uploading a `provider_approval` artifact binds metadata to the matching checklist row. SOC artifact review is the acceptance gate for each required provider, but an accepted artifact is still `partial` if provider-specific required fields are missing. **Production blockers:** live provider integrations (AWS/Azure/GCP/CDN APIs), staging approval evidence, and export/signoff for legal retention.
+Uploading a `provider_approval` artifact binds metadata to the matching checklist row. SOC artifact review records acceptance for each required provider; an accepted artifact is still `partial` if provider-specific required fields are missing. **Production blockers:** live provider integrations (AWS/Azure/GCP/CDN APIs), staging approval evidence, and export/signoff for legal retention.
 
 ## Provider-specific tracking
 
@@ -158,7 +147,7 @@ On failure it still writes a **redacted metadata-only manifest** (no secrets, no
 | Area | Status |
 |---|---|
 | Intake + pack types | **Developer validation (SOC-009)** — backend enforces required intake (including request-level `abort_criteria`) and expanded artifact types; UI collects fields and exposes per-type metadata upload helpers; integration tests in `hardening.test.mjs`. |
-| `authorization_pack_status` | **Developer validation** — computed server-side on create/artifact review; surfaced in UI when API returns it; gates SOC `approve` (`authorization_pack_incomplete` until pack accepted). |
+| `authorization_pack_status` | **Developer validation** — computed server-side on create/artifact review; surfaced in UI when API returns it; recorded evidence, not a gate. |
 | Authorization templates | **Developer validation** — tested catalog plus markdown pack cover every required artifact type and provider approval; not legal advice and not a substitute for customer/legal signoff. |
 | Document custody | **Developer validation** — metadata-only upload requires `content_sha256`, records `custody_id`, `custody_uri`, and upload envelope, and persists through the dev-json ledger plus Postgres `authorization_artifacts` (`0015_authorization_artifact_custody.sql`). `npm run soc:authorization-custody:evidence` validates metadata-only custody evidence. **Not production** — immutable/KMS-backed retention, legal export/signoff, and staging operator workflow remain open. |
 | Provider integrations | **Not production** — checklist metadata only. |

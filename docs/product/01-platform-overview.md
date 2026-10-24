@@ -10,7 +10,7 @@ The product validates customer-declared target groups through:
 2. **Internal agents/canaries** installed by the customer inside the protected environment.
 3. **Correlation** between what AstraNull sent and what the agent observed.
 4. **Evidence-backed verdicts** that say whether traffic was blocked, penetrated, bypassed, or inconclusive.
-5. **SOC-gated high-scale workflows** for approved large simulations.
+5. **Governed high-scale workflows** for large simulations, runnable by any role.
 
 ## Core platform modules
 
@@ -50,7 +50,7 @@ The customer portal and internal management console are separate trust surfaces.
 |---|---|
 | Automatic IP inventory discovery | User explicitly wants this removed. It also requires trust/access and can become noisy. |
 | Cloud config audit | Requires customer API credentials. Optional later as enhanced mode. |
-| Uncontrolled attack generation | Unsafe and legally risky. High-scale tests must be SOC-gated and authorized. |
+| Uncontrolled attack generation | Unsafe and legally risky. High-scale tests are governed and authorized, but never blocked. |
 | Replacement for DDoS protection providers | AstraNull validates readiness; it does not replace Cloudflare, Akamai, AWS Shield, Azure DDoS, Google Cloud Armor, Arbor, Radware, etc. |
 
 ## Product positioning

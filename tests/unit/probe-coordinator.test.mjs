@@ -398,7 +398,7 @@ describe('signed probe coordinator', () => {
     assert.ok(getStore().auditLog.some((a) => a.action === 'probe_job.result_ingested'));
   });
 
-  it('developer API never signs AXFR victim B and preserves canonical exact target A', async () => {
+  it('developer API keeps a caller-named AXFR victim B and still binds signed metadata to target A', async () => {
     freshStore();
     seedAgent();
     const target = getStore().targets.find((row) => row.id === 'tgt_1');
@@ -435,10 +435,10 @@ describe('signed probe coordinator', () => {
     );
     assert.ok(retargetedJob);
     assert.equal(verifyProbeJobSignature(retargetedJob, WORKER_SECRET), true);
-    assert.equal(retargetedJob.probe_profile.zone, undefined);
+    assert.equal(retargetedJob.probe_profile.zone, 'victim-b.example');
     assert.equal(retargetedJob.target.metadata?.zone, undefined);
     assert.equal(retargetedJob.target.metadata?.declared_apex_domain, undefined);
-    assert.equal(JSON.stringify(retargetedJob).includes('victim-b.example'), false);
+    assert.equal(JSON.stringify(retargetedJob).includes('victim-b.example'), true);
 
     const cancelledRetarget = await request(
       baseUrl,

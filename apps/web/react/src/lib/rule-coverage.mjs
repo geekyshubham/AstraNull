@@ -8,7 +8,7 @@ export const ASSURANCE_META = Object.freeze({
   partial: Object.freeze({ label: 'Partial', rank: 7, description: 'Only part of the rule family is tested, for example only AstraNull\'s own token rather than real attack patterns.' }),
   observation: Object.freeze({ label: 'Observes only', rank: 6, description: 'Records behaviour for context but never concludes pass or fail.' }),
   declaration: Object.freeze({ label: 'Declaration only', rank: 5, description: 'Relies on your written statement. No traffic is sent.' }),
-  soc_only: Object.freeze({ label: 'SOC only', rank: 4, description: 'Run only by AstraNull SOC under an approved authorization, never self-serve.' }),
+  soc_only: Object.freeze({ label: 'Request-only', rank: 4, description: 'Covered only by a request-only or declaration check: start it here, and the governed workflow records the outcome.' }),
   missing: Object.freeze({ label: 'Missing', rank: 3, description: 'No check covers this rule family yet.' }),
   not_assessable: Object.freeze({ label: 'Not assessable', rank: 2, description: 'Cannot be concluded from outside your network with the probes AstraNull runs.' }),
   out_of_scope: Object.freeze({ label: 'Out of scope', rank: 1, description: 'Needs a vantage point inside your network, which the outside-in model rules out.' }),

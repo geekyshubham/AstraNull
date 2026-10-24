@@ -490,7 +490,7 @@ describe('postgres state service adapter', () => {
     const soc = payload.readiness.factors.find((f) => f.key === 'soc_readiness');
     assert.equal(soc.score, 0);
     assert.match(soc.detail, /Kill switch state recorded/);
-    assert.match(soc.detail, /Pending gates remain on 1 high-scale request: \d+ missing accepted artifacts, SOC approvals 0\/2\./);
+    assert.match(soc.detail, /Pending gates remain on 1 high-scale request: \d+ missing accepted artifacts, SOC approval not recorded\./);
     assert.doesNotMatch(soc.detail, /hs_1/, 'the governance detail never leaks a raw request ID');
     assert.equal(payload.readiness.governance.pending_gates[0].requestId, 'hs_1');
     assert.equal(payload.readiness.governance.pending_gates[0].label, 'High-scale request');
@@ -683,7 +683,7 @@ describe('postgres state service adapter', () => {
     assert.equal(payload.high_scale_status, 'pending');
     assert.equal(soc.score, 0);
     assert.match(soc.detail, /Pending gates remain on high-scale request "Checkout launch surge rehearsal"/);
-    assert.match(soc.detail, /SOC approvals 1\/2/);
+    assert.match(soc.detail, /1 SOC approval recorded/);
     assert.match(soc.detail, /\d+ missing accepted artifacts/);
     assert.doesNotMatch(soc.detail, /hs_pending/, 'the governance detail never leaks a raw request ID');
     assert.doesNotMatch(soc.detail, /customer_authorization_letter|emergency_contacts/, 'artifact types are counted, not listed');
@@ -715,7 +715,7 @@ describe('postgres state service adapter', () => {
     assert.deepEqual(gate.missing_artifacts, []);
     assert.equal(gate.pack_complete, false, 'accepted but expired artifacts leave the pack incomplete');
     assert.equal(gate.approvals, 1);
-    assert.match(soc.detail, /authorization artifact validity or scope incomplete, SOC approvals 1\/2\./);
+    assert.match(soc.detail, /authorization artifact validity or scope incomplete, 1 SOC approval recorded\./);
     assert.doesNotMatch(soc.detail, /hs_expired/);
   });
 

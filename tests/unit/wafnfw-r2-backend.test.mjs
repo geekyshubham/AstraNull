@@ -70,40 +70,37 @@ describe('R2 item 2: target-dependent port requirements', () => {
   const portCheck = getCheckById('l3.tcp_flag_anomaly.readiness');
   const denyCheck = getCheckById('l3.basic_deny_rule.safe');
 
-  it('refuses a port-less target and allows a declared tcp/22 rule or a host:port target', () => {
+  it('never refuses a target and dispatches any declared deny or host:port target', () => {
     assert.deepEqual(portCheck.runnable_requires, ['port']);
-    assert.equal(additionalInputRefusal(portCheck, {}, { target: fqdn() }).error, 'port_required');
-    assert.equal(additionalInputRefusal(denyCheck, {}, { target: fqdn() }).error, 'port_or_declared_deny_required');
+    assert.equal(additionalInputRefusal(portCheck, {}, { target: fqdn() }), null);
+    assert.equal(additionalInputRefusal(denyCheck, {}, { target: fqdn() }), null);
     assert.equal(additionalInputRefusal(portCheck, {}, { target: fqdn({ control_declarations: DENY_22 }) }), null);
     assert.equal(additionalInputRefusal(denyCheck, {}, { target: fqdn({ control_declarations: DENY_22 }) }), null);
     assert.equal(additionalInputRefusal(portCheck, {}, { target: fqdn(), declarations: DENY_22 }), null);
     assert.equal(additionalInputRefusal(portCheck, {}, { target: { kind: 'tcp', value: '192.0.2.10:22' } }), null);
     assert.equal(additionalInputRefusal(denyCheck, {}, { target: { kind: 'tcp', value: '192.0.2.10:22' } }), null);
     const udpOnly = { version: 1, network_policy: [{ protocol: 'udp', port: 53, action: 'deny', address_family: 'any' }] };
-    assert.equal(targetInputRefusal(portCheck, fqdn(), udpOnly).error, 'port_required');
+    assert.equal(targetInputRefusal(portCheck, fqdn(), udpOnly), null);
   });
 
-  it('keeps the no-target catalog view unchanged and lists the check for a satisfying target', () => {
-    assert.equal(checkRequiresAdditionalInput(portCheck), true);
-    assert.match(portCheck.description, /Not runnable until a TCP\/UDP port is declared/);
+  it('lists every check for every target, with or without additional input', () => {
+    assert.equal(checkRequiresAdditionalInput(portCheck), false);
     const withoutTarget = customerSelectableChecks(CHECK_CATALOG).map((check) => check.check_id);
     const declared = customerSelectableChecks(CHECK_CATALOG, { target: fqdn(), declarations: DENY_22 }).map((check) => check.check_id);
     const bare = customerSelectableChecks(CHECK_CATALOG, { target: fqdn() }).map((check) => check.check_id);
-    assert.equal(withoutTarget.includes(portCheck.check_id), false);
-    assert.equal(bare.includes(portCheck.check_id), false);
+    assert.equal(withoutTarget.includes(portCheck.check_id), true);
+    assert.equal(bare.includes(portCheck.check_id), true);
     assert.equal(declared.includes(portCheck.check_id), true);
     assert.equal(declared.includes(denyCheck.check_id), true);
     assert.equal(customerSelectableChecks(CHECK_CATALOG, { deferTargetRequirements: true }).some((check) => check.check_id === denyCheck.check_id), true);
   });
 
-  it('excludes scan steps per target with the requirement code', () => {
+  it('plans a step for every compatible target and only excludes an incompatible target kind', () => {
     const declaredTarget = { ...fqdn({ control_declarations: DENY_22 }), id: 'tgt_declared' };
     const bareTarget = { ...fqdn(), id: 'tgt_bare' };
     const plan = planScanSteps({ checks: [portCheck], targets: [declaredTarget, bareTarget], targetInputRefusal });
-    assert.deepEqual(plan.steps.map((step) => step.target_id), ['tgt_declared']);
-    assert.equal(plan.excluded.length, 1);
-    assert.equal(plan.excluded[0].target_id, 'tgt_bare');
-    assert.equal(plan.excluded[0].reason, 'port_required');
+    assert.deepEqual(plan.steps.map((step) => step.target_id), ['tgt_declared', 'tgt_bare']);
+    assert.equal(plan.excluded.length, 0);
   });
 });
 

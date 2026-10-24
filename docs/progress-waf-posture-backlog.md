@@ -35,7 +35,7 @@ Enterprise WAF posture **product scaffolding is doc-complete** as of 2026-07-03.
 
 | Task | Done when |
 |---|---|
-| Add feature flag | Done: `ASTRANULL_WAF_POSTURE_ENABLED` and `ASTRANULL_EXTERNAL_DISCOVERY_ENABLED` default off; disabled WAF API/UI fails closed. |
+| Add feature flag | Done, then made decorative: `ASTRANULL_WAF_POSTURE_ENABLED` and `ASTRANULL_EXTERNAL_DISCOVERY_ENABLED` are still read but the helpers always return true, so the WAF API/UI is always available. |
 | Add WAF asset metadata | Done for dev-json/API/schema/Postgres runtime: declared WAF assets link to tenant target groups and can be marked WAF-required. |
 | Add WAF check catalog entries | Done for safe slice: `waf.fingerprint.safe`, `waf.marker_rule.safe`, `waf.origin_bypass.safe`, `waf.low_rate_limit.safe` plus enriched `l7.waf_marker_rule.safe` with signed WAF probe metadata. |
 | Add probe worker WAF profiles | Done for safe slice: signed jobs preserve only allowlisted WAF scenario metadata and enforce max requests/timeouts. |

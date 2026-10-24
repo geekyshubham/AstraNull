@@ -217,7 +217,7 @@ Phase C classification (2026-07-05). Surfaces: `PostureSurfacePage`, `DetailRout
 
 | Feature | Classification | Customer UI | API / notes |
 |---------|----------------|-------------|-------------|
-| WAF feature gate | **Visible** | `#waf-posture` disabled state | `ASTRANULL_WAF_POSTURE_ENABLED=1`; `/v1/waf/*` → `404 waf_feature_disabled` when off |
+| WAF feature flag | **Decorative** | `#waf-posture` always available | `ASTRANULL_WAF_POSTURE_ENABLED` is read but `wafPostureEnabledFor()` always returns true, so `waf_feature_disabled` is unreachable |
 | Asset declare/create | **Visible** | `#waf-posture` create form, Assets tab | `POST /v1/waf/assets` |
 | Asset detail + effectiveness | **Visible** | `#waf-asset-detail` | `GET /v1/waf/assets/:id` |
 | Coverage summary | **Visible** | `#waf-posture` Overview | `GET /v1/waf/coverage` |
@@ -247,7 +247,7 @@ Phase C classification (2026-07-05). Surfaces: `PostureSurfacePage` (`discovery`
 
 | Feature | Classification | Customer UI | API / notes |
 |---------|----------------|-------------|-------------|
-| Discovery feature gate | **Visible** | `#discovery` disabled state | `ASTRANULL_EXTERNAL_DISCOVERY_ENABLED=1` |
+| Discovery feature flag | **Decorative** | `#discovery` always available | `ASTRANULL_EXTERNAL_DISCOVERY_ENABLED` is read but `externalDiscoveryEnabledFor()` always returns true |
 | Entity declare | **Visible** | `#discovery` create form | `POST /v1/discovery/entities` |
 | Candidate inbox list | **Visible** | `#discovery` table + metrics | `GET /v1/discovery/candidates`, `GET /v1/discovery/inbox` |
 | Candidate approve/reject | **Visible** | `#discovery` row actions | `POST /v1/discovery/candidates/:id/approve`, `…/reject` |
@@ -292,7 +292,7 @@ Phase C classification (2026-07-05). Surfaces: `HighScalePage` (customer), `SocC
 | Kill switch | **Staff-only** | `#soc`, `#internal-soc` | `POST /internal/soc/kill-switch` |
 | Governed adapter execution | **By design hidden** | SOC console metadata only | Production `governed-adapter`; dev `dry-run` |
 
-**FM-HIGHSCALE verdict:** **PASS (T1)** — customer intake, artifact metadata upload, authorization pack visibility, and SOC handoff links use real APIs; execution stays SOC-gated. **Remaining gaps (T2/T3, documented):** production governed adapter (external ops), cross-tenant SOC staff queue.
+**FM-HIGHSCALE verdict:** **PASS (T1)** — customer intake, artifact metadata upload, authorization pack visibility, and SOC handoff links use real APIs; execution is governed but not gated. **Remaining gaps (T2/T3, documented):** production governed adapter (external ops), cross-tenant SOC staff queue.
 
 ## FM-GOV — Notifications, audit, release evidence
 

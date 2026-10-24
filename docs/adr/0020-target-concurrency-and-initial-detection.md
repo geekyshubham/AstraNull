@@ -13,8 +13,9 @@ fingerprints required a separate manual request or a client-driven action.
 ## Decision
 
 - A target has one active safe test-run slot. Different target IDs may execute concurrently while
-  retaining the same policy settings. Same-target cooldown applies independently; hourly policy
-  and tenant subscription allowances stay aggregate and unchanged. Admission is briefly serialized
+  retaining the same policy settings. Same-target cooldown is recorded independently; hourly policy
+  and tenant subscription allowances stay aggregate and unchanged. Only the subscription allowance
+  can still defer a start; cooldowns and safe windows are advisory. Admission is briefly serialized
   per tenant in Postgres so concurrent starts cannot race aggregate budget reads. This lock is
   released after dispatch and is not held during probe execution.
 - Active scans reserve their exact selected target sets. A tenant-scoped slot table plus database
@@ -26,9 +27,9 @@ fingerprints required a separate manual request or a client-driven action.
   declarations. Postgres queues via an AFTER INSERT trigger in the target transaction; dev-json
   queues at each shared creation path. Dedupe key is `(tenant_id, target_id)`.
 - The normal scheduler dispatches queued observations through `startTestRun`. No new egress path
-  exists. Ownership, valid parent inheritance, feature configuration, suspension, subscription,
-  safe window, cooldown, concurrency, hourly allowance and kill switch remain enforced. Missing
-  prerequisites leave the request queued with a reason and a due retry time. An active validation
+  exists. Ownership, valid parent inheritance, suspension, subscription, concurrency and kill
+  switch remain enforced; safe windows, cooldowns and hourly policy are recorded but never refuse.
+  Missing prerequisites leave the request queued with a reason and a due retry time. An active validation
   scan has priority on that exact target. No page visit is needed to create or dispatch the request.
 - Claims have bounded leases and conditional completion. A recovered lease reconciles a newer
   accepted run before retrying so an already-dispatched initial observation is not duplicated.

@@ -135,14 +135,13 @@ describe('demo tenant check list: the UI follows requires_additional_input only'
     assert.ok(runnable.every((check) => check.requires_additional_input === false && check.additional_input_reason === null));
   });
 
-  it('marks every customer-runnable check ready in the picker with no declarations, and the same checks wait outside demo', () => {
-    const demoIndex = targetRunnableIndex(demo);
-    for (const check of runnable) {
-      assert.equal(checkPrerequisite(check, { serverRunnableIndex: demoIndex }).state, 'ready', check.check_id);
+  it('marks every customer-runnable check ready in the picker with no declarations, demo or not', () => {
+    for (const catalog of [demo, standard]) {
+      const index = targetRunnableIndex(catalog);
+      for (const check of runnable) {
+        assert.equal(checkPrerequisite(check, { serverRunnableIndex: index }).state, 'ready', check.check_id);
+      }
     }
-    const standardIndex = targetRunnableIndex(standard);
-    const gated = targetDependent.filter((check) => checkPrerequisite(check, { serverRunnableIndex: standardIndex }).state !== 'ready');
-    assert.ok(gated.length > 0, 'without the server flag the same checks name what is missing');
   });
 
   it('adds target-dependent checks to the launcher list and the target run set when the server says runnable', () => {

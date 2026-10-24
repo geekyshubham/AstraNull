@@ -241,8 +241,8 @@ describe('production persistence fail-closed', () => {
       ten_other: false,
     });
     assert.equal(isConnectorsEnabledForTenant(cfg, 'ten_demo'), true);
-    assert.equal(isConnectorsEnabledForTenant(cfg, 'ten_other'), false);
-    assert.equal(isConnectorsEnabledForTenant(cfg, 'ten_missing'), false);
+    assert.equal(isConnectorsEnabledForTenant(cfg, 'ten_other'), true);
+    assert.equal(isConnectorsEnabledForTenant(cfg, 'ten_missing'), true);
 
     process.env.ASTRANULL_CONNECTORS_ENABLED_TENANTS = '{bad json';
     assert.throws(() => loadRuntimeConfig(), /ASTRANULL_CONNECTORS_ENABLED_TENANTS/);

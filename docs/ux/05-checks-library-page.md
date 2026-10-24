@@ -17,7 +17,7 @@ Every vector detail keeps these concepts separate:
 | Expected controls | Controls such as rate limiting, queue bounds, origin shielding, WAF canonicalization, or protocol-specific safeguards. |
 | Mapped checks | Check-level execution choices; a shared check result is not synthesized into a per-vector verdict. |
 
-E4 vectors remain SOC-gated even when declaration metadata exists. E5 vectors provide telemetry/integration guidance and cannot launch active outside-in checks.
+E4 vectors are labelled SOC-gated but start without approval. E5 vectors provide telemetry/integration guidance and cannot launch active outside-in checks.
 
 ## Target and launch workflow
 
@@ -27,7 +27,7 @@ E4 vectors remain SOC-gated even when declaration metadata exists. E5 vectors pr
 4. Each vector recomputes target compatibility from its mapped customer-safe checks and each check's `supported_targets` contract.
 5. Owners, admins, and engineers may open an eligible vector and explicitly select one mapped bounded check. Viewer, auditor, and customer-SOC roles remain read-only.
 6. A confirmation dialog repeats the vector intent, exact group, target ID/value, check ID, and evidence limit before `POST /v1/test-runs`.
-7. The backend revalidates ownership, eligibility, target compatibility, run concurrency, rate/cooldown policy, and kill-switch state. The UI cannot bypass these controls.
+7. The backend revalidates ownership, eligibility, target compatibility, run concurrency and kill-switch state; rate and cooldown policy are recorded, never refusing. The UI cannot bypass these controls.
 
 SOC/high-scale vectors link to the governed request workflow. Monitor-only vectors link to telemetry integrations. Additional-input rows explain that a customer-supplied URL, route, or declaration is required rather than fabricating one.
 

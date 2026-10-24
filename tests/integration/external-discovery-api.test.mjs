@@ -93,7 +93,7 @@ function seedOtherTenant() {
   store.tenants.push({ id: 'ten_other', name: 'Other' });
 }
 
-describe('external discovery API feature flag', () => {
+describe('external discovery API is not flag-gated', () => {
   let server;
   let baseUrl;
 
@@ -109,12 +109,12 @@ describe('external discovery API feature flag', () => {
     restoreEnv();
   });
 
-  it('returns discovery_feature_disabled when flag is off', async () => {
+  it('serves discovery even with the deployment flag unset', async () => {
     const res = await request(baseUrl, 'GET', '/v1/discovery/entities', {
       headers: demoHeaders('admin'),
     });
-    assert.equal(res.status, 404);
-    assert.equal(res.json.error, 'discovery_feature_disabled');
+    assert.equal(res.status, 200);
+    assert.ok(Array.isArray(res.json.items));
   });
 });
 

@@ -50,26 +50,25 @@ const monitorOnly = { check_id: 'mon.only', name: 'Monitor', safety_class: 'safe
 const notRunnable = { check_id: 'hidden.safe', name: 'Hidden', safety_class: 'safe', evidence_tier: 'E3', safety_constraints: { customer_runnable: false } };
 
 describe('check picker selection rules', () => {
-  it('excludes SOC-gated, monitor-only, and non-runnable checks with counts', () => {
+  it('excludes monitor-only and unsupported checks with counts', () => {
     const result = selectableChecks([safeFqdn, safeAny, socGated, monitorOnly, notRunnable, noSection]);
-    assert.deepEqual(result.checks.map((check) => check.check_id), ['dns.safe', 'l7.safe', 'misc.safe']);
-    assert.deepEqual(result.excluded, { soc_gated: 1, monitor_only: 1, not_customer_runnable: 1, unsupported_delivery: 0, total: 3 });
-    assert.equal(checkExclusionReason(socGated), 'soc_gated');
+    assert.deepEqual(result.checks.map((check) => check.check_id), ['dns.safe', 'l7.safe', 'waf.soc', 'hidden.safe', 'misc.safe']);
+    assert.deepEqual(result.excluded, { soc_gated: 0, monitor_only: 1, not_customer_runnable: 0, unsupported_delivery: 0, total: 1 });
+    assert.equal(checkExclusionReason(socGated), null);
     assert.equal(checkExclusionReason(monitorOnly), 'monitor_only');
-    assert.equal(checkExclusionReason(notRunnable), 'not_customer_runnable');
+    assert.equal(checkExclusionReason(notRunnable), null);
     assert.equal(checkExclusionReason(safeAny), null);
   });
 
-  it('never exposes a catalog check the backend would refuse as SOC-gated', () => {
+  it('exposes every catalog check the backend can run', () => {
     const catalog = customerSelectableChecks(CHECK_CATALOG).map(withCheckSection);
     const { checks } = selectableChecks(catalog);
     assert.ok(checks.length > 0);
     for (const check of checks) {
       assert.equal(isCustomerRunnable(check), true, check.check_id);
-      assert.equal(check.safety_class, 'safe', check.check_id);
       assert.notEqual(check.evidence_tier, 'E5', check.check_id);
     }
-    assert.ok(catalog.some((check) => !isCustomerRunnable(check)), 'catalog fixture should contain a SOC-gated check');
+    assert.ok(checks.some((check) => check.risk_class === 'soc_gated'), 'catalog should expose SOC-gated checks');
   });
 
   it('groups by taxonomy section, falls back to vector family, and keeps Other last', () => {

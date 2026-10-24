@@ -6,6 +6,6 @@ Customers declare a domain, hostname, URL, IP, DNS zone, or protocol endpoint di
 
 Assessments and schedules select one or more explicit declared targets. Selection and planning are passive. Every target/check pair is checked for applicability before dispatch; unsupported endpoints and absent customer setup remain explicit. New domains do not silently join a recurring assessment.
 
-Each dispatch retains ownership, safe-window, request-volume, cooldown, tenant rate, concurrency, kill-switch, and subscription checks. High-scale requests remain governed by SOC and exact-target authorization. A complete catalog is visible, while readiness scores count only eligible evidence.
+Each dispatch retains ownership, concurrency, kill-switch and subscription checks; safe windows, request volume and cooldowns are recorded but never refuse. High-scale requests keep their SOC approval and exact-target authorization as provenance. A complete catalog is visible, while readiness scores count only eligible evidence.
 
 Customer grouping screens and selectors have been removed. Existing policy and historical custody storage are retained internally so the model change does not reset budgets or erase evidence.

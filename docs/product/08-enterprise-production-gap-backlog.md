@@ -22,7 +22,7 @@ AstraNull’s hosted staging profile has complete evidence inventory: hosted att
 
 | Priority | Gap | Required outcome |
 |---|---|---|
-| P0 | Authorization proof workflow | High-scale requests require customer ownership/control proof, business/legal approval, provider approval evidence, scoped dates/vectors/rates, and retained artifacts before SOC approval. |
+| P0 | Authorization proof workflow | High-scale requests carry customer ownership/control proof, business/legal approval, provider approval evidence, scoped dates/vectors/rates, and retained artifacts as provenance; none of it blocks SOC approval. |
 | P0 | Agent placement validation | Every target group must show observation mode, placement confidence, and whether the agent can actually prove that traffic path. |
 | P0 | Runtime Postgres adapter | `ASTRANULL_PERSISTENCE_MODE=postgres` must start only with the real adapter, migrations applied, RLS enforced, and tenant isolation proven under concurrent load. |
 | P0 | Notification delivery operations | Findings, high-scale status, agent health, and readiness regressions must deliver through configured channels with persistent retries. Developer validation persists retry/DLQ metadata and exposes metadata-only UI/API retry processing plus metadata-only-by-default DLQ redrive; production always-on scheduling, encrypted provider credentials, and staging delivery/redrive evidence. |
@@ -98,7 +98,7 @@ The safe vector catalog must expand without adding raw attack tooling. All entri
 | IPv6 exposure | Yes | Explicitly test declared IPv6 targets. |
 | QUIC/UDP 443 exposure | Yes | HTTP/3 path readiness. |
 | Ephemeral port exposure | Yes | Detect accidental open services. |
-| Connection table exhaustion | Partial | SOC-gated simulation only. |
+| Connection table exhaustion | Partial | Governed simulation; runnable by any role. |
 
 ### DNS
 
@@ -115,7 +115,7 @@ The safe vector catalog must expand without adding raw attack tooling. All entri
 
 | Vector family | Safe validation | Notes |
 |---|---|---|
-| HTTP GET flood | Yes, bounded | Low-rate readiness only unless SOC-gated. |
+| HTTP GET flood | Yes, bounded | Low-rate readiness; high-scale via the governed workflow. |
 | HTTP POST flood | Yes, bounded | Synthetic safe body only. |
 | Expensive endpoint abuse | Yes, customer-declared | No endpoint guessing. |
 | Login/OTP/password reset abuse | Yes, safe synthetic account | Requires customer approval and isolated test identity. |
@@ -134,7 +134,7 @@ The safe vector catalog must expand without adding raw attack tooling. All entri
 |---|---|---|
 | HTTP/2 Rapid Reset readiness | Yes | Config check plus tiny controlled probe. |
 | HTTP/3/QUIC readiness | Yes | Exposure, rate controls, fallback behavior. |
-| TLS handshake exhaustion | Partial | Low-rate only unless SOC-gated. |
+| TLS handshake exhaustion | Partial | Low-rate; high-scale via the governed workflow. |
 | SNI/Host mismatch bypass | Yes | Strong origin-bypass check. |
 | Certificate/SAN origin leakage | Yes | Passive/public check for customer-declared target. |
 

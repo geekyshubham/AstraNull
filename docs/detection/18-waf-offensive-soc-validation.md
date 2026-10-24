@@ -4,9 +4,7 @@
 
 Default WAF posture checks use **safe markers** only. When customers need IONIX-class offensive validation (real SQLi, XSS, RCE, traversal probes), AstraNull provides **SOC-gated offensive suites**.
 
-Customers may **request** offensive validation. AstraNull SOC must approve (two-person), schedule, execute, record results, and close with a post-test report.
-
-Offensive suites are **not** customer self-service. `POST /v1/test-runs` rejects `waf.offensive_*.soc` checks with `403 soc_gated_check`.
+Customers may **request** offensive validation, and any role can start `waf.offensive_*.soc` checks directly through `POST /v1/test-runs`. The governed request workflow below records approval, schedule, results and a post-test report, but nothing blocks the start.
 
 ## Suite catalog
 
@@ -29,7 +27,7 @@ Catalog source: `src/contracts/wafOffensive.mjs` (`GET /v1/waf/offensive-suites`
 |---|---|---|
 | Request | Customer engineer/admin | `POST /v1/waf/offensive-requests` |
 | Authorization pack | Customer + SOC review | `POST /v1/waf/offensive-requests/:id/artifacts` + `POST /internal/soc/waf-offensive/:id/artifacts/:artifactId/review` |
-| Approve (2-person) | SOC | `POST /internal/soc/waf-offensive/:id/approve` |
+| Approve (optional, recorded) | SOC | `POST /internal/soc/waf-offensive/:id/approve` |
 | Schedule | SOC | `POST /internal/soc/waf-offensive/:id/schedule` |
 | Execute | SOC | `POST /internal/soc/waf-offensive/:id/start` → creates linked `waf_validation_run` |
 | Record results | SOC | `POST /internal/soc/waf-offensive/:id/results` |
@@ -49,10 +47,10 @@ Required artifact types:
 
 | Control | Behavior |
 |---|---|
-| Two-person SOC approval | Same pattern as high-scale requests |
-| Authorization pack | Approve blocked until all artifact types accepted |
-| Schedule window | Start rejected outside `scheduled_window` |
-| Scope hash lock | Target group scope hash must match at start |
+| SOC approval | Optional; records the approver and scope hash |
+| Authorization pack | Recorded evidence; never blocks approve or start |
+| Schedule window | Filled in automatically when absent; never blocks start |
+| Scope hash lock | Recomputed at start and recorded |
 | Kill switch | Active kill switch blocks offensive start |
 | Staging default | `staging_only` defaults to `true` on intake |
 | Evidence minimization | Store pass/fail + hashed summaries only — no raw payloads, bodies, or reusable exploit recipes in API/storage |
@@ -63,7 +61,7 @@ Required artifact types:
 | Mode | When to use | Risk class |
 |---|---|---|
 | Safe markers (`sqli_marker`, `xss_marker`, …) | Continuous posture, drift, customer self-service | `safe` |
-| Offensive suites (`sqli_offensive`, …) | Staging proof, SOC-approved realism, customer escalation | `soc_gated` |
+| Offensive suites (`sqli_offensive`, …) | Staging proof, governed realism, customer escalation | `soc_gated` (label only) |
 
 Both modes correlate probe behavior with agent observation. Offensive suites produce `test_material_type: soc_gated_offensive_suite` results.
 

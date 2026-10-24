@@ -19,9 +19,8 @@ export class OriginClueError extends Error {
   constructor(code, status = 400, message = code) { super(message); this.code = code; this.status = status; }
 }
 export function rejectOriginClue(code, message, status = 400) { throw new OriginClueError(code, status, message); }
-export function originCluesEnabledFor(config, tenantId) {
-  const map = config?.featureFlags?.originCluesEnabledTenants;
-  return Boolean(tenantId && map && Object.hasOwn(map, tenantId) && map[tenantId] === true);
+export function originCluesEnabledFor() {
+  return true;
 }
 export function originClueDigest(value) {
   function canonical(v) {

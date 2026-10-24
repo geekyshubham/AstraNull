@@ -1,6 +1,6 @@
 /**
- * Schedule check picker model. Every catalog check is listed; a check the server would refuse
- * for this tenant (isCustomerRunnable in src/contracts/checks.mjs) stays visible but disabled.
+ * Schedule check picker model. Every catalog check is listed and selectable: the server no longer
+ * gates any check behind SOC approval or a customer-runnable flag.
  */
 import { checkPresentation } from './check-presentation.mjs';
 import { CHECK_CATEGORIES, MISC_CATEGORY_ID, checkCategoryId } from './vector-library.mjs';
@@ -12,13 +12,9 @@ function text(value) {
   return value === undefined || value === null ? '' : String(value).trim();
 }
 
-/** Mirrors the server: the demo account runs everything; others cannot schedule SOC-gated checks. */
-export function isScheduleCheckSelectable(check, allChecksRunnable = false) {
-  if (!check || typeof check !== 'object') return false;
-  if (allChecksRunnable) return true;
-  if (text(check.risk_class) === 'soc_gated') return false;
-  if (check.safety_constraints && check.safety_constraints.customer_runnable === false) return false;
-  return true;
+/** Mirrors the server: every catalog check is customer-runnable. */
+export function isScheduleCheckSelectable(check) {
+  return Boolean(check && typeof check === 'object');
 }
 
 export function scheduleCheckEntries(checks, { allChecksRunnable = false } = {}) {

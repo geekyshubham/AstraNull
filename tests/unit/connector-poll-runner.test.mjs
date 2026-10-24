@@ -614,7 +614,7 @@ describe('connector poll runner postgres tenant scope', () => {
               listTenants.push(ctx.tenantId);
               assert.deepEqual(options, { limit: 2 });
               return Array.from({ length: 40 }, (_entry, index) => ({
-                connector_id: `conn_queue_${index}`,
+                connector_id: `conn_queue_${ctx.tenantId}_${index}`,
                 provider: 'cloudflare',
               }));
             },
@@ -630,22 +630,27 @@ describe('connector poll runner postgres tenant scope', () => {
       },
     });
 
+    // Connector feature flags are advisory: every scoped tenant is polled and mirrored as enabled.
     assert.deepEqual(featureStates, [
-      { tenantId: 'ten_disabled', enabled: false },
+      { tenantId: 'ten_disabled', enabled: true },
       { tenantId: 'ten_enabled', enabled: true },
     ]);
-    assert.deepEqual(listTenants, ['ten_enabled']);
-    assert.deepEqual(pollCalls, ['conn_queue_0', 'conn_queue_1']);
+    assert.deepEqual([...listTenants].sort(), ['ten_disabled', 'ten_enabled']);
+    assert.deepEqual(pollCalls.map((call) => call.replace(/_\d+$/, '')).sort(), [
+      'conn_queue_ten_disabled',
+      'conn_queue_ten_enabled',
+    ]);
     assert.equal(connectorResults.length, 2);
     assert.equal(connectorResults[0].poll_result.poll_status, 'pending');
   });
 
-  it('returns no work without creating a runtime when all scoped tenants disable connectors', async () => {
+  it('still creates a runtime and returns no work when the tenant flag is off and nothing is queued', async () => {
     let runtimeCreated = false;
     const connectorResults = await runPostgresConnectorPolls({
       env: { ASTRANULL_DATABASE_URL: 'postgresql://db.example.invalid/astranull' },
       tenantIds: ['ten_disabled'],
       dryRun: false,
+      queueOnly: true,
       concurrency: 2,
       maxAttempts: 1,
       runtimeConfig: {
@@ -656,12 +661,21 @@ describe('connector poll runner postgres tenant scope', () => {
       },
       createPostgresRuntimeFn: async () => {
         runtimeCreated = true;
-        throw new Error('disabled tenants must not access the runtime');
+        return {
+          services: {
+            wafPosture: {
+              setConnectorFeatureState: async () => {},
+              listConnectorPollScheduleCandidates: async () => [],
+              pollConnector: async () => ({}),
+            },
+          },
+          close: async () => {},
+        };
       },
     });
 
     assert.deepEqual(connectorResults, []);
-    assert.equal(runtimeCreated, false);
+    assert.equal(runtimeCreated, true);
   });
 
   it('caps a multi-tenant worker inventory at configured concurrency', async () => {

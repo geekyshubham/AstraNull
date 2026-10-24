@@ -104,7 +104,7 @@ export function createPostgresEntryPathComparisonBackend(deps) {
 
   async function deferUntil(comparison, scopeItem, result, at) {
     const execCtx = { tenantId: comparison.tenant_id, userId: 'system', role: 'system' };
-    const code = result?.error ?? 'safe_min_interval_active';
+    const code = result?.error ?? 'entitlement_limit_exceeded';
     const group = await coreCatalog.getTargetGroup(execCtx, scopeItem.target_group_id, LEAN_GROUP_LOOKUP);
     const runs = await validationEvidence.listTestRuns(
       execCtx,

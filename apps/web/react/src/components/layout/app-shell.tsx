@@ -213,9 +213,11 @@ export function AppShell({
       return canAccessRoute(role, item.id, {
         principal: session.principal,
         staffRole: session.staff_role,
+        tenantId: session.tenant_id,
+        userId: session.user_id,
       });
     });
-  }, [session.principal, session.role, session.staff_role]);
+  }, [session.principal, session.role, session.staff_role, session.tenant_id, session.user_id]);
 
   const grouped = useMemo(() => {
     return visibleNavItems.reduce<Record<string, NavItem[]>>((acc, item) => {

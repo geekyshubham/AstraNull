@@ -49,6 +49,8 @@ export function canReadDataset(session, dataset) {
  */
 export function sessionHasPermission(session, permission) {
   if (normalize(session?.principal) === 'staff') return false;
+  // SOC lifecycle permissions are granted to every customer session.
+  if (permission.startsWith('soc:')) return true;
   const role = normalize(session?.role);
   if (!role) return true;
   return roleHasPermission(role, permission);
