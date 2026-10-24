@@ -105,9 +105,10 @@ test('a shared primitive forwarding a prop is delegated only when every mounted 
   assert.equal(states.success.applicable, true);
   for (const state of ['busy', 'invalid', 'cancel', 'error-retry', 'denial', 'reload']) {
     assert.equal(states[state].applicable, false, state);
-    assert.match(states[state].reason, /all 2 mounted callers.*owns the/);
+    assert.match(states[state].reason, /all 2 supplying mounted callers.*owns the/);
   }
   const opaque = mount({
+    router: "import {Page} from './page'; export function RouteView({route,handlers}){if(route==='settings') return <Page onOpaque={handlers.open}/>;}",
     files: {
       'components/ui/button.tsx': primitive,
       'pages/page.tsx': `import {Button} from '../components/ui/button';
@@ -231,4 +232,123 @@ test('a control gated on a published store appears only on routes whose componen
   assert.deepEqual(next.storeBinding, { store: 'Sequence', publishingRoutes: ['settings'] });
   assert.deepEqual(byLabel(inventory, 'Always').routes.sort(), ['settings', 'targets']);
   fs.rmSync(path.join(fixtureRoot, 'apps/web/react/src/App.tsx'));
+});
+
+const forwardedStates = (inventory, owner) => actionStateApplicability(inventory.actions.find((action) => action.owner === owner));
+
+test('a prop invoked inside a primitive helper delegates through every caller, including forwarding wrappers and setters', () => {
+  const select = "export function Select({onChange}){ function choose(next){ onChange(next); } return <button onClick={() => choose('a')}>Choose</button>; }";
+  const resolved = mount({
+    files: {
+      'components/ui/select.tsx': select,
+      'pages/page.tsx': `import {Select} from '../components/ui/select';
+        function Filter({onPick}){ return <Select onChange={onPick}/>; }
+        export function Page(){ const [v,setV]=useState(''); return <><Select onChange={setV}/><Filter onPick={(x)=>setV(x)}/></>; }`,
+    },
+  });
+  const action = resolved.actions.find((item) => item.owner === 'Select');
+  assert.deepEqual(action.traits.callerBindings, { onChange: { callers: 2, resolved: 2 } });
+  assert.equal(forwardedStates(resolved, 'Select').reload.applicable, false);
+  const opaque = mount({
+    router: "import {Page} from './page'; export function RouteView({route,handlers}){if(route==='settings') return <Page onPick={handlers.pick}/>;}",
+    files: {
+      'components/ui/select.tsx': select,
+      'pages/page.tsx': "import {Select} from '../components/ui/select'; export function Page({onPick}){ return <Select onChange={onPick}/>; }",
+    },
+  });
+  assert.equal(forwardedStates(opaque, 'Select').reload.applicable, null);
+});
+
+test('an omitted optional callback is inert only when every read leaves no handler', () => {
+  const empty = `function EmptyStateAction({onAction}){ if (onAction) return <button onClick={onAction}>Act</button>; return null; }
+    export function EmptyState({title,onAction}){ return <div>{title}<EmptyStateAction onAction={onAction}/></div>; }`;
+  const inert = mount({
+    files: {
+      'components/ui/empty-state.tsx': empty,
+      'pages/page.tsx': "import {EmptyState} from '../components/ui/empty-state'; export function Page(){ return <><EmptyState title='a'/><EmptyState title='b' onAction={() => {}}/></>; }",
+    },
+  });
+  const action = inert.actions.find((item) => item.owner === 'EmptyStateAction');
+  assert.deepEqual(action.traits.callerBindings, { onAction: { callers: 2, resolved: 1, omitted: 1 } });
+  assert.equal(forwardedStates(inert, 'EmptyStateAction').reload.applicable, false);
+  assert.match(forwardedStates(inert, 'EmptyStateAction').reload.reason, /1 omit it, which leaves no handler/);
+  const invoked = mount({
+    files: {
+      'components/ui/empty-state.tsx': "function EmptyStateAction({onAction}){ return <button onClick={() => onAction()}>Act</button>; } export function EmptyState({onAction}){ return <EmptyStateAction onAction={onAction}/>; }",
+      'pages/page.tsx': "import {EmptyState} from '../components/ui/empty-state'; export function Page(){ return <><EmptyState/><EmptyState onAction={() => {}}/></>; }",
+    },
+  });
+  assert.equal(forwardedStates(invoked, 'EmptyStateAction').reload.applicable, null, 'An unguarded call of an omitted prop is not inert');
+});
+
+test('hook-returned members and hook tuples resolve to their exact declarations; a later spread blocks', () => {
+  const inventory = mount({
+    files: {
+      'lib/hooks.ts': `import {useCallback,useState} from 'react';
+        export function useThing(id){ const [state,setState]=useState({}); const load=useCallback(() => requestJson(config,session,'/v1/things/'+id), [id]); return { ...state, reload: () => load() }; }
+        export function useLate(id){ const reload=() => requestJson(config,session,'/v1/late'); return { reload, ...extra(id) }; }
+        export function usePair(){ const [v,setVState]=useState(''); const setV=useCallback((next) => setVState(next), []); return [v, setV]; }`,
+      'pages/page.tsx': `import {useThing,useLate,usePair} from '../lib/hooks';
+        export function Page({id}){ const thing=useThing(id); const late=useLate(id); const [v,setV]=usePair();
+          return <><button onClick={thing.reload}>Reload thing</button><button onClick={late.reload}>Reload late</button><button onClick={() => setV('x')}>Pick</button></>; }`,
+    },
+  });
+  const thing = byLabel(inventory, 'Reload thing');
+  assert.deepEqual(thing.traits.unresolvedCallbacks, []);
+  assert.equal(thing.traits.requests[0].method, 'GET');
+  assert.deepEqual(byLabel(inventory, 'Reload late').traits.unresolvedCallbacks, ['late.reload']);
+  assert.deepEqual(byLabel(inventory, 'Pick').traits.unresolvedCallbacks, []);
+});
+
+test('spread props resolve through exact objects, component props and direct call sites; escaping functions block', () => {
+  const button = 'export function Button({onClick,children}){return <button onClick={onClick}>{children}</button>}';
+  const resolved = mount({
+    files: {
+      'components/ui/button.tsx': button,
+      'pages/page.tsx': `import {Button} from '../components/ui/button';
+        function renderAction(props){ return <Button {...props}/>; }
+        function Wrapped(props){ return <Button {...props}/>; }
+        export function Page(){ const [n,setN]=useState(0); const extra={ onClick: () => setN(1) };
+          return <><Button {...extra}>One</Button><Wrapped onClick={() => setN(2)}/>{renderAction({ onClick: () => setN(3) })}</>; }`,
+    },
+  });
+  assert.deepEqual(resolved.actions.find((item) => item.owner === 'Button').traits.callerBindings, { onClick: { callers: 3, resolved: 3 } });
+  const escaping = mount({
+    files: {
+      'components/ui/button.tsx': button,
+      'pages/page.tsx': `import {Button} from '../components/ui/button';
+        function renderAction(props){ return <Button {...props}/>; }
+        export function Page({items}){ return <>{renderAction({ onClick: () => {} })}{items.map(renderAction)}</>; }`,
+    },
+  });
+  assert.equal(forwardedStates(escaping, 'Button').reload.applicable, null);
+});
+
+test('block-scoped redeclarations resolve to the enclosing block and stay ambiguous outside it', () => {
+  const inventory = mount({
+    files: {
+      'components/ui/button.tsx': 'export function Button({onClick,children}){return <button onClick={onClick}>{children}</button>}',
+      'pages/page.tsx': `import {Button} from '../components/ui/button';
+        export function Page({mode}){ const [n,setN]=useState(0);
+          if (mode) { const props={ onClick: () => setN(1) }; return <Button {...props}>First</Button>; }
+          { const props={ label: 'none' }; }
+          return <Button {...props}>Second</Button>; }`,
+    },
+  });
+  const binding = inventory.actions.find((item) => item.owner === 'Button').traits.callerBindings.onClick;
+  assert.deepEqual(binding, { callers: 2, resolved: 1 });
+});
+
+test('props members, destructured prop aliases and members of prop objects flow back to their declarations', () => {
+  const inventory = mount({
+    files: {
+      'components/ui/select.tsx': "export function Select({onChange}){ return <button onClick={() => onChange('a')}>Choose</button>; }",
+      'pages/page.tsx': `import {Select} from '../components/ui/select';
+        function Panel({form}){ return <Select onChange={form.onCadence}/>; }
+        function Refined(props){ const { model } = props; return <><Select onChange={props.onKind}/><Panel form={model}/></>; }
+        export function Page(){ const [c,setC]=useState(''); const model={ onCadence: (value) => setC(value) };
+          return <Refined onKind={setC} model={model}/>; }`,
+    },
+  });
+  assert.deepEqual(inventory.actions.find((item) => item.owner === 'Select').traits.callerBindings, { onChange: { callers: 2, resolved: 2 } });
 });

@@ -50,7 +50,8 @@ export const DELEGATING_OWNERS = Object.freeze(new Set(['Button', 'AnchorButton'
 function delegatedCallbacks(action) {
   const unresolved = action.traits?.unresolvedCallbacks ?? [];
   const bindings = action.traits?.callerBindings ?? {};
-  const bound = unresolved.every((name) => bindings[name]?.callers > 0 && bindings[name].resolved === bindings[name].callers);
+  const supplying = (name) => bindings[name].callers - (bindings[name].omitted ?? 0);
+  const bound = unresolved.every((name) => bindings[name] && supplying(name) > 0 && bindings[name].resolved === supplying(name));
   return DELEGATING_OWNERS.has(action.owner) && unresolved.length && bound ? unresolved : [];
 }
 
@@ -78,7 +79,9 @@ export function actionStateApplicability(action) {
   const delegated = delegatedCallbacks(action);
   if (delegated.length && action.kind !== 'anchor') {
     const callers = Math.max(...delegated.map((name) => traits.callerBindings[name].callers));
-    for (const state of ['busy', 'invalid', 'cancel', 'error-retry', 'denial', 'reload']) if (!result[state].applicable) result[state] = { applicable: false, reason: `Shared primitive forwarding ${delegated.join(', ')}: all ${callers} mounted callers bind a resolved callback and each caller is its own inventoried semantic action that owns the ${state} transition; this primitive owns native activation only.` };
+    const omitted = Math.max(...delegated.map((name) => traits.callerBindings[name].omitted ?? 0));
+    const omission = omitted ? `; ${omitted} omit it, which leaves no handler` : '';
+    for (const state of ['busy', 'invalid', 'cancel', 'error-retry', 'denial', 'reload']) if (!result[state].applicable) result[state] = { applicable: false, reason: `Shared primitive forwarding ${delegated.join(', ')}: all ${callers - omitted} supplying mounted callers bind a resolved callback${omission}, and each caller is its own inventoried semantic action that owns the ${state} transition; this primitive owns native activation only.` };
   } else if (traits.unresolvedCallbacks?.length && action.kind !== 'anchor') {
     for (const state of ['busy', 'invalid', 'cancel', 'error-retry', 'denial', 'reload']) if (!result[state].applicable) result[state] = { applicable: null, reason: `Unresolved injected callback ${traits.unresolvedCallbacks.join(', ')}: explicit semantic caller binding still required; this is not N/A.` };
   }
