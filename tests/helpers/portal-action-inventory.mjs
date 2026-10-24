@@ -145,13 +145,13 @@ export function buildPortalActionInventory({ root = PORTAL_SOURCE_ROOT } = {}) {
     collectScope(functionRoot);
     const result = { bindings, setterNames, parameterOwners, tuples, aliases, functionRoot }; lexicalCache.set(marker, result); return result;
   }
-  function registerCaller(module, owner, node) {
+  function registerCaller(module, owner, node, gates = []) {
     if (node.name?.type !== 'JSXIdentifier') return;
     const target = resolveValue(module.file, node.name.name);
     if (!target) return;
     const key = keyFor(target.module.file, target.name);
     if (!callerProps.has(key)) callerProps.set(key, []);
-    callerProps.get(key).push({ module, owner, attributes: node.attributes, spread: node.attributes.some((attr) => attr.type === 'JSXSpreadAttribute'), props: new Map(node.attributes.filter((attr) => attr.type === 'JSXAttribute').map((attr) => [raw(module, attr.name), attr.value?.expression])) });
+    callerProps.get(key).push({ module, owner, gates, attributes: node.attributes, spread: node.attributes.some((attr) => attr.type === 'JSXSpreadAttribute'), props: new Map(node.attributes.filter((attr) => attr.type === 'JSXAttribute').map((attr) => [raw(module, attr.name), attr.value?.expression])) });
   }
   const valueReferences = new Map();
   function registerReference(module, owner, node, parent) {
@@ -1000,7 +1000,7 @@ export function buildPortalActionInventory({ root = PORTAL_SOURCE_ROOT } = {}) {
         const published = /^usePublish([A-Z]\w*)$/.exec(child.callee.name);
         if (published) { if (!storePublishers.has(published[1])) storePublishers.set(published[1], new Set()); storePublishers.get(published[1]).add(key); }
       }
-      if (child.type === 'JSXOpeningElement') registerCaller(module, resolved.name, child);
+      if (child.type === 'JSXOpeningElement') registerCaller(module, resolved.name, child, gates);
       if (child.type === 'JSXOpeningElement') { const before = actions.length; recordAction(module, child, parent, resolved.name, gates); if (actions.length > before) actions[actions.length - 1].routeConstraint = constraint; }
       if (child.type === 'JSXIdentifier' && parent?.type === 'JSXOpeningElement' && parent.name === child) follow(module.file, child.name, key, constraint);
       if (child.type === 'Identifier') {
@@ -1105,12 +1105,48 @@ export function buildPortalActionInventory({ root = PORTAL_SOURCE_ROOT } = {}) {
     for (const gate of input.gates) scan(input.module, input.owner, gate, 0);
     return [...names].filter((name) => storePublishers.has(name));
   };
+  // A component rendered only behind resolvable identity guards inherits them: the OR over its
+  // callers of each caller element's gates AND the caller's early exits AND its own inheritance.
+  // Any caller path without a resolvable guard leaves the component unrestricted.
+  const inheritedCache = new Map();
+  function ownerEarlyGates(module, owner) {
+    return (componentRoot(module, owner)?.body?.body ?? []).filter((node) => {
+      if (node.type !== 'IfStatement') return false;
+      const exits = node.consequent.type === 'BlockStatement' ? node.consequent.body : [node.consequent];
+      return exits.some((child) => child.type === 'ReturnStatement' && (!child.argument || child.argument.type === 'Literal' && child.argument.value === null));
+    }).map((node) => node.test);
+  }
+  function inheritedGuard(module, owner, seen = new Set()) {
+    const key = keyFor(module.file, owner);
+    if (inheritedCache.has(key)) return inheritedCache.get(key);
+    if (seen.has(key)) return null;
+    seen = new Set([...seen, key]);
+    const callers = callerProps.get(key) ?? [];
+    let result = null;
+    if (callers.length) {
+      const paths = [];
+      for (const caller of callers) {
+        const parts = [
+          ...ownerEarlyGates(caller.module, caller.owner).map((gate) => permissionGuard(caller.module, caller.owner, gate, true)),
+          ...(caller.gates ?? []).map((gate) => permissionGuard(caller.module, caller.owner, gate)),
+          inheritedGuard(caller.module, caller.owner, seen),
+        ].filter(Boolean);
+        if (!parts.length) { paths.length = 0; break; }
+        paths.push(parts.reduce((left, right) => ({ operator: '&&', left, right })));
+      }
+      if (paths.length === callers.length) result = paths.reduce((left, right) => ({ operator: '||', left, right }));
+    }
+    if (seen.size === 1) inheritedCache.set(key, result);
+    return result;
+  }
   const unique = new Map();
   for (const item of actions) {
     const input = actionInputs.get(item.id);
     const reaching = sharedRoots.filter((root) => rootClosures.get(root).has(item.symbol));
     const mounted = reaching.length === 1 && !routes.some((route) => routeClosures.get(route).has(item.symbol)) ? hostMounts.get(reaching[0]) : null;
     if (mounted) item.traits.authorizationGuards = [...item.traits.authorizationGuards, ...mounted.gates.map((gate) => permissionGuard(mounted.module, mounted.owner, gate)).filter(Boolean)];
+    const inherited = input ? inheritedGuard(input.module, input.owner) : null;
+    if (inherited) item.traits.authorizationGuards = [...item.traits.authorizationGuards, inherited];
     item.routes = shellKeys.has(item.symbol) ? [...routes] : routes.filter((route) => routeClosures.get(route).has(item.symbol));
     if (item.symbol === `${UI_ROOT}/pages/router.tsx#RouteView`) item.routes = [...new Set(branchRanges.filter((range) => item.position >= range.start && item.position <= range.end).flatMap((range) => range.routes))];
     if (item.routeConstraint) item.routes = item.routes.filter((route) => item.routeConstraint.includes(route));

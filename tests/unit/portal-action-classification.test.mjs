@@ -406,3 +406,30 @@ test('a local conditional callback runs each resolvable branch and forwarded req
   assert.deepEqual(approve.traits.requests.map((request) => request.method), ['POST', 'GET']);
   assert.deepEqual(byLabel(inventory, 'Read').traits.requests.map((request) => request.method), ['GET']);
 });
+
+test('a component rendered only behind identity guards inherits them; one unguarded caller path leaves it unrestricted', () => {
+  const dialog = "export function Dialog({onClose}){ return <button onClick={onClose}>Close dialog</button>; }";
+  const guarded = mount({
+    files: {
+      'components/dialog.tsx': dialog,
+      'pages/page.tsx': `import {Dialog} from '../components/dialog';
+        function Trigger({session}){ const [open,setOpen]=useState(false); if (session.principal === 'staff') return null; return <Dialog onClose={() => setOpen(false)}/>; }
+        export function Page({session}){ return <Trigger session={session}/>; }`,
+    },
+  });
+  const close = byLabel(guarded, 'Close dialog');
+  assert.deepEqual(close.traits.authorizationGuards, [{ principals: ['staff'], invert: true }]);
+  const coverage = buildPortalActionCoverage({ inventory: guarded });
+  const cell = (principal, state) => coverage.cells.find((item) => item.action === close.id && item.principal === principal && item.state === state);
+  assert.equal(cell('customer', 'success').applicable, true);
+  assert.equal(cell('customer', 'denial').applicable, false);
+  const open = mount({
+    files: {
+      'components/dialog.tsx': dialog,
+      'pages/page.tsx': `import {Dialog} from '../components/dialog';
+        function Trigger({session}){ const [open,setOpen]=useState(false); if (session.principal === 'staff') return null; return <Dialog onClose={() => setOpen(false)}/>; }
+        export function Page({session}){ const [x,setX]=useState(0); return <><Trigger session={session}/><Dialog onClose={() => setX(1)}/></>; }`,
+    },
+  });
+  assert.deepEqual(byLabel(open, 'Close dialog').traits.authorizationGuards, []);
+});

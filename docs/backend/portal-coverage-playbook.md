@@ -60,6 +60,7 @@ A `null` state means the inventory could not prove applicability from source. Ch
 | `ref.current?.(...)` where the ref only holds `null` or a `new Promise` resolver | Promise settlement; the awaiting caller's action owns what follows | `promiseSettler` |
 | Local conditional callback (`const reload = route === 'a' ? a.reload : b.reload`) | Each non-absent branch is invoked, like an inline conditional | `conditionalBranches` |
 | `requestSocJson(..., { method: options.method })` | Method read from the exact bound options object; absent means GET | request extraction in `actionTraits` |
+| Component rendered only behind identity guards (`if (session.principal === 'staff') return null; ... <InsightsDialog/>`) | Its actions inherit the OR over callers of each caller's element gates, early exits and own inheritance; any unguarded caller path leaves it unrestricted | `inheritedGuard` |
 
 Add a unit test in `tests/unit/portal-action-classification.test.mjs` for any new rule: one fixture proving it resolves, one proving the neighbouring ambiguous case stays blocking. After any inventory change, snapshot all cells before and after (`buildPortalActionCoverage().cells`) and confirm no previously covered cell flipped away from `true`; a flipped covered cell becomes a rejected receipt.
 
@@ -153,12 +154,12 @@ Inventory-only work (no new receipts), measured with `buildPortalActionCoverage(
 
 | Measure | Before | After |
 |---|---|---|
-| Unclassified action states | 16,022 | 3,152 |
-| Required action cells | 33,454 | 33,628 |
+| Unclassified action states | 16,022 | 3,140 |
+| Required action cells | 33,454 | 33,550 |
 | `lib/crud-ui.tsx`, `ui/select.tsx`, `ui/tabs.tsx`, `ui/empty-state.tsx`, `assistant/insights-dialog.tsx` unclassified | 8,412 | 0 |
 | `ui/table.tsx` unclassified | 2,832 | 708 |
 
-No covered cell changed. Six uncovered `success` cells for soc, auditor and viewer became `denial` cells, because the newly resolved callbacks carry `test_policy:write` and `target_group:write` guards. `DataTable`, `TableLoadError`, `FailureNotice`, `DomainPicker`, `RunPicker` and `TargetCandidatePicker` joined `DELEGATING_OWNERS`: each only forwards event props, so its callers' JSX elements are the inventoried semantic actions.
+No covered cell changed. Uncovered `success` cells that no identity could ever reach became `denial` cells: six for soc, auditor and viewer whose resolved callbacks carry `test_policy:write` and `target_group:write` guards, and 410 inherited from render paths (insights dialog and assistant visuals for staff, notification channel dialogs without `notification:write`, the staff-only SOC request view for customers). `DataTable`, `TableLoadError`, `FailureNotice`, `DomainPicker`, `RunPicker` and `TargetCandidatePicker` joined `DELEGATING_OWNERS`: each only forwards event props, so its callers' JSX elements are the inventoried semantic actions.
 
 What still blocks, and why:
 
