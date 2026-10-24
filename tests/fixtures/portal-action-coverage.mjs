@@ -45,7 +45,7 @@ export const STAFF_MUTATING_ACTION_FAMILIES = Object.freeze([
   { id: 'staff.entitlement.edit', method: 'POST', path: '/internal/admin/tenants/ten_demo/entitlements', permission: 'staff:entitlement:write', body: { entitlement_key: 'denied', enabled: true } },
 ]);
 
-export const DELEGATING_OWNERS = Object.freeze(new Set(['Button', 'AnchorButton', 'Select', 'EmptyState', 'EmptyStateAction', 'TabButton', 'Tabs', 'ShellIconButton', 'NavLink', 'FormModal', 'ConfirmModal', 'ConfirmModalProvider', 'Toast', 'DataTableBodyRow', 'VariantSwitch']));
+export const DELEGATING_OWNERS = Object.freeze(new Set(['Button', 'AnchorButton', 'Select', 'EmptyState', 'EmptyStateAction', 'TabButton', 'Tabs', 'ShellIconButton', 'NavLink', 'FormModal', 'ConfirmModal', 'ConfirmModalProvider', 'Toast', 'DataTableBodyRow', 'VariantSwitch', 'DataTable', 'TableLoadError', 'FailureNotice', 'DomainPicker', 'RunPicker', 'TargetCandidatePicker']));
 
 function delegatedCallbacks(action) {
   const unresolved = action.traits?.unresolvedCallbacks ?? [];

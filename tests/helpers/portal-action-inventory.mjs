@@ -331,6 +331,31 @@ export function buildPortalActionInventory({ root = PORTAL_SOURCE_ROOT } = {}) {
     }
     return collection(module, owner, node.object);
   }
+  function conditionalBranches(module, owner, node) {
+    if (node.type !== 'ConditionalExpression') return [resolveCallbackDeclaration(module, owner, node)];
+    return [node.consequent, node.alternate].filter((branch) => !absentValue(module, owner, branch)).flatMap((branch) => conditionalBranches(module, owner, branch));
+  }
+  // A ref whose every assignment is null or a `new Promise` executor's resolve/reject only settles
+  // a pending promise; the awaiting caller's own action owns whatever follows.
+  function promiseSettler(module, owner, node) {
+    const binding = lexicalBindings(module, owner, node).bindings.get(node.name);
+    if (binding?.type !== 'MemberExpression' || binding.computed || binding.property.name !== 'current' || binding.object.type !== 'Identifier') return false;
+    const ref = binding.object.name;
+    if (!/^(?:React\.)?useRef\b/.test(raw(module, lexicalBindings(module, owner, binding).bindings.get(ref)))) return false;
+    const values = [];
+    let escapes = false;
+    each(componentRoot(module, owner), (child, parent) => {
+      if (child.type === 'Identifier' && child.name === ref && !(parent?.type === 'MemberExpression' && parent.object === child && !parent.computed && parent.property.name === 'current') && !(parent?.type === 'VariableDeclarator' && parent.id === child)) escapes = true;
+      if (child.type === 'AssignmentExpression' && raw(module, child.left) === `${ref}.current`) values.push(child.right);
+    });
+    const executors = [];
+    each(componentRoot(module, owner), (child) => {
+      if (child.type === 'NewExpression' && child.callee.type === 'Identifier' && child.callee.name === 'Promise' && ['ArrowFunctionExpression', 'FunctionExpression'].includes(child.arguments[0]?.type)) executors.push(child.arguments[0]);
+    });
+    const settles = (value) => value.type === 'Literal' && value.value === null
+      || value.type === 'Identifier' && executors.some((executor) => executor.start <= value.start && value.end <= executor.end && executor.params.slice(0, 2).some((param) => param.type === 'Identifier' && param.name === value.name));
+    return !escapes && values.length > 0 && values.every(settles) && !lexicalBindings(module, owner, node).parameterOwners.has('Promise');
+  }
   function isNativeCallable(module, owner, node, seen = new Set()) {
     if (node?.type === 'VariableDeclarator') return isNativeCallable(module, owner, node.init, seen);
     if (node?.type !== 'Identifier') return false;
@@ -515,11 +540,13 @@ export function buildPortalActionInventory({ root = PORTAL_SOURCE_ROOT } = {}) {
     if (expression.type === 'MemberExpression' && !expression.computed) {
       const property = expression.property.name;
       if (expression.object.type === 'Identifier' && expression.object.name === whole && !scope.bindings.has(whole)) return propFlow(property);
+      if (expression.object.type === 'Identifier' && receiverWrites(module).has(expression.object.name)) return null;
       const objects = flowValues(module, owner, expression.object, seen);
       if (!objects) return null;
       const values = [];
       for (const object of objects) {
-        const resolved = !object.omitted && resolveObjectValue(object.module, object.owner, object.value, new Set(), true);
+        const mutated = object.value?.type === 'Identifier' && receiverWrites(object.module).has(object.value.name);
+        const resolved = !object.omitted && !mutated && resolveObjectValue(object.module, object.owner, object.value, new Set(), true);
         if (!resolved) return null;
         const member = resolved.node.properties.filter((item) => item.type === 'Property' && !item.computed && (item.key?.name ?? item.key?.value) === property).at(-1);
         if (!member || member.kind !== 'init' || resolved.node.properties.indexOf(member) < resolved.node.properties.findLastIndex((item) => item.type === 'SpreadElement')) return null;
@@ -530,6 +557,25 @@ export function buildPortalActionInventory({ root = PORTAL_SOURCE_ROOT } = {}) {
       return values;
     }
     return [{ module, owner, value: expression }];
+  }
+  // One exact declaration (or only useState setters) behind every supplied flow; any second
+  // declaration is a union of differing business effects and stays unresolved.
+  function flowCallback(module, owner, node) {
+    const flows = flowValues(module, owner, node);
+    if (!flows) return null;
+    const declarations = new Map();
+    let setter = false;
+    let supplied = 0;
+    for (const flow of flows) {
+      if (flow.omitted) { if (!flow.inert) return null; continue; }
+      supplied += 1;
+      const declaration = resolveCallbackDeclaration(flow.module, flow.owner, flow.value);
+      if (declaration) declarations.set(`${declaration.module.file}:${declaration.node.start}:${declaration.node.end}`, declaration);
+      else if (terminalCallback(flow)) setter = true;
+      else return null;
+    }
+    if (!supplied || declarations.size > 1 || declarations.size && setter) return null;
+    return { declaration: [...declarations.values()][0] ?? null, setter };
   }
   function terminalCallback({ module, owner, value }) {
     if (resolveCallbackDeclaration(module, owner, value)) return true;
@@ -574,6 +620,7 @@ export function buildPortalActionInventory({ root = PORTAL_SOURCE_ROOT } = {}) {
     return values;
   }
   function spreadValues(module, owner, node, name, seen) {
+    if (node?.type === 'Identifier' && receiverWrites(module).has(node.name)) return null;
     const object = resolveObjectValue(module, owner, node);
     if (object) {
       const property = object.node.properties.filter((item) => item.type === 'Property' && !item.computed && (item.key.name ?? item.key.value) === name).at(-1);
@@ -637,12 +684,19 @@ export function buildPortalActionInventory({ root = PORTAL_SOURCE_ROOT } = {}) {
       schedule(resolved);
       return true;
     };
+    let localChange = false;
+    const flowResolved = (active, activeOwner, node, use) => {
+      const flow = flowCallback(active, activeOwner, node);
+      if (!flow) return false;
+      if (flow.setter) localChange = true;
+      if (flow.declaration) use(flow.declaration);
+      return true;
+    };
     for (const node of callbackNodes) {
-      if (node.type === 'Identifier' && !bindings.has(node.name) && !lexicalBindings(module, owner).setterNames.has(node.name) && !module.imports.has(node.name) && !bindInjected(module, owner, node)) unresolvedCallbacks.add(node.name);
-      if (node.type === 'MemberExpression' && !resolveMemberCallback(module, owner, node)) unresolvedCallbacks.add(raw(module, node));
+      if (node.type === 'Identifier' && !bindings.has(node.name) && !lexicalBindings(module, owner).setterNames.has(node.name) && !module.imports.has(node.name) && !bindInjected(module, owner, node) && !flowResolved(module, owner, node, (declaration) => pending.push(declaration))) unresolvedCallbacks.add(node.name);
+      if (node.type === 'MemberExpression' && !resolveMemberCallback(module, owner, node) && !flowResolved(module, owner, node, (declaration) => pending.push(declaration))) unresolvedCallbacks.add(raw(module, node));
     }
     const callerBindings = Object.fromEntries(callbackNodes.filter((node) => node.type === 'Identifier' && unresolvedCallbacks.has(node.name)).map((node) => [node.name, callerBinding(module, owner, node.name)]));
-    let localChange = false;
     function argumentBinding(binding, seen = new Set()) {
       const node = binding?.node;
       if (node?.type !== 'Identifier') return binding;
@@ -759,8 +813,17 @@ export function buildPortalActionInventory({ root = PORTAL_SOURCE_ROOT } = {}) {
           const optionsBinding = boundArgument(child.arguments[callee === 'fetch' ? 1 : 3]);
           const endpoint = endpointBinding.node;
           const options = optionsBinding.node;
-          const method = options?.properties?.find((property) => (property.key?.name ?? property.key?.value) === 'method')?.value;
-          requests.push({ callee, endpoint: raw(endpointBinding.module, endpoint), endpointShape: endpoint?.type === 'TemplateLiteral' ? endpoint.quasis.map((part) => part.value.cooked).join(':id') : endpoint?.value ?? null, method: method?.value ?? (method ? raw(optionsBinding.module, method) : options && options.type !== 'ObjectExpression' ? null : 'GET') });
+          let method = options?.properties?.find((property) => (property.key?.name ?? property.key?.value) === 'method')?.value;
+          let methodModule = optionsBinding.module;
+          // `method: options.method` forwards the method of an exact bound options object; absent means GET.
+          if (method?.type === 'MemberExpression' && !method.computed && method.object.type === 'Identifier') {
+            const source = boundArgument(method.object);
+            if (source.node?.type === 'ObjectExpression' && !source.node.properties.some((property) => property.type !== 'Property' || property.computed)) {
+              method = source.node.properties.filter((property) => (property.key.name ?? property.key.value) === method.property.name).at(-1)?.value;
+              methodModule = source.module;
+            } else if (source.knownAbsent) method = undefined;
+          }
+          requests.push({ callee, endpoint: raw(endpointBinding.module, endpoint), endpointShape: endpoint?.type === 'TemplateLiteral' ? endpoint.quasis.map((part) => part.value.cooked).join(':id') : endpoint?.value ?? null, method: method?.value ?? (method ? raw(methodModule, method) : options && options.type !== 'ObjectExpression' ? null : 'GET') });
           beforeBoundary = false;
           sawBoundary = true;
           if (options && options.type !== 'ObjectExpression' || method && method.type !== 'Literal') unresolvedCallbacks.add(`${callee}: unresolved request options/method`);
@@ -771,16 +834,19 @@ export function buildPortalActionInventory({ root = PORTAL_SOURCE_ROOT } = {}) {
           if (declared) invokeTarget({ ...declared, argumentsByName: bound.argumentsByName }, child);
           else if (!(bound.knownAbsent && child.optional)) unresolvedCallbacks.add(`${callee}: unresolved invoked parameter`);
         } else if (child.callee.type === 'Identifier' && scope.parameterOwners.has(callee) && !scope.bindings.has(callee)) {
-          if (!bindInjected(active, activeOwner, child.callee, schedule)) {
+          if (!bindInjected(active, activeOwner, child.callee, schedule) && !flowResolved(active, activeOwner, child.callee, (declaration) => invokeTarget(declaration, child))) {
             unresolvedCallbacks.add(callee);
             if (scope.parameterOwners.get(callee) === scope.functionRoot && !injectedProps.has(callee)) injectedProps.set(callee, { module: active, owner: activeOwner });
           }
         } else if (child.callee.type === 'Identifier' && (scope.bindings.has(callee) || active.imports.has(callee))) {
           let target = scope.bindings.has(callee) ? { module: active, owner: active.values.get(callee) === scope.bindings.get(callee) ? callee : activeOwner, node: scope.bindings.get(callee) } : (() => { const imported = resolveValue(active.file, callee); return imported ? { module: imported.module, owner: imported.name, node: imported.node } : null; })();
           if (target?.node?.type === 'VariableDeclarator') target = { ...target, node: target.node.init };
+          // A local conditional callback runs one of its branches, like an inline conditional does.
+          const branches = target?.node?.type === 'ConditionalExpression' ? conditionalBranches(target.module, target.owner, target.node) : null;
+          if (branches?.length && branches.every(Boolean)) { for (const branch of branches) invokeTarget(branch, child); return; }
           if (target && !['FunctionDeclaration', 'FunctionExpression', 'ArrowFunctionExpression'].includes(target.node?.type)) target = resolveCallbackDeclaration(target.module, target.owner, target.node);
           if (target) invokeTarget(target, child);
-          else if (!isNativeCallable(active, activeOwner, child.callee)) unresolvedCallbacks.add(`${callee}: unresolved callable declaration`);
+          else if (!isNativeCallable(active, activeOwner, child.callee) && !promiseSettler(active, activeOwner, child.callee)) unresolvedCallbacks.add(`${callee}: unresolved callable declaration`);
         } else if (child.callee.type === 'Identifier' && /^(on[A-Z]|handle|submit|save|create|delete|retry|refresh)/.test(callee) && !scope.bindings.has(callee) && !scope.setterNames.has(callee) && !active.imports.has(callee) && !bindInjected(active, activeOwner, child.callee, schedule)) unresolvedCallbacks.add(callee);
         else if (child.callee.type === 'MemberExpression' && /^(?:export|verify|submit|save|create|delete|update|retry|refresh|on[A-Z])/.test(child.callee.property?.name ?? '')) {
           const target = resolveMemberCallback(active, activeOwner, child.callee);
@@ -788,7 +854,7 @@ export function buildPortalActionInventory({ root = PORTAL_SOURCE_ROOT } = {}) {
           const nativeDomCall = ['URL.createObjectURL', 'URL.revokeObjectURL', 'document.createElement'].includes(callee) && receiver.type === 'Identifier'
             && !scope.bindings.has(receiver.name) && !scope.parameterOwners.has(receiver.name) && !active.importBindings.has(receiver.name);
           if (target) invokeTarget(target, child);
-          else if (!isNativeCollectionMethod(active, activeOwner, child.callee) && !nativeDomCall) unresolvedCallbacks.add(callee);
+          else if (!isNativeCollectionMethod(active, activeOwner, child.callee) && !nativeDomCall && !flowResolved(active, activeOwner, child.callee, (declaration) => invokeTarget(declaration, child))) unresolvedCallbacks.add(callee);
         }
       });
       const effect = { alwaysBoundary: sawBoundary && beforeBoundary === false && !returnedBeforeBoundary, mayBoundary: sawBoundary };

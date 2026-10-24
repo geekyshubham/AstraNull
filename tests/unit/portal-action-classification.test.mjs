@@ -265,17 +265,17 @@ test('an omitted optional callback is inert only when every read leaves no handl
   const inert = mount({
     files: {
       'components/ui/empty-state.tsx': empty,
-      'pages/page.tsx': "import {EmptyState} from '../components/ui/empty-state'; export function Page(){ return <><EmptyState title='a'/><EmptyState title='b' onAction={() => {}}/></>; }",
+      'pages/page.tsx': "import {EmptyState} from '../components/ui/empty-state'; export function Page(){ const [n,setN]=useState(0); return <><EmptyState title='a'/><EmptyState title='b' onAction={() => setN(1)}/><EmptyState title='c' onAction={() => setN(2)}/></>; }",
     },
   });
   const action = inert.actions.find((item) => item.owner === 'EmptyStateAction');
-  assert.deepEqual(action.traits.callerBindings, { onAction: { callers: 2, resolved: 1, omitted: 1 } });
+  assert.deepEqual(action.traits.callerBindings, { onAction: { callers: 3, resolved: 2, omitted: 1 } });
   assert.equal(forwardedStates(inert, 'EmptyStateAction').reload.applicable, false);
   assert.match(forwardedStates(inert, 'EmptyStateAction').reload.reason, /1 omit it, which leaves no handler/);
   const invoked = mount({
     files: {
       'components/ui/empty-state.tsx': "function EmptyStateAction({onAction}){ return <button onClick={() => onAction()}>Act</button>; } export function EmptyState({onAction}){ return <EmptyStateAction onAction={onAction}/>; }",
-      'pages/page.tsx': "import {EmptyState} from '../components/ui/empty-state'; export function Page(){ return <><EmptyState/><EmptyState onAction={() => {}}/></>; }",
+      'pages/page.tsx': "import {EmptyState} from '../components/ui/empty-state'; export function Page(){ const [n,setN]=useState(0); return <><EmptyState/><EmptyState onAction={() => setN(1)}/><EmptyState onAction={() => setN(2)}/></>; }",
     },
   });
   assert.equal(forwardedStates(invoked, 'EmptyStateAction').reload.applicable, null, 'An unguarded call of an omitted prop is not inert');
@@ -351,4 +351,58 @@ test('props members, destructured prop aliases and members of prop objects flow 
     },
   });
   assert.deepEqual(inventory.actions.find((item) => item.owner === 'Select').traits.callerBindings, { onChange: { callers: 2, resolved: 2 } });
+});
+
+test('an action callback that flows from props resolves only to one exact declaration or setters, never a union', () => {
+  const single = mount({
+    files: {
+      'pages/page.tsx': `function Refined(props){ return <button onClick={props.onReload}>Reload list</button>; }
+        export function Page({config,session}){ const reload=() => requestJson(config,session,'/v1/list'); return <Refined onReload={reload}/>; }`,
+    },
+  });
+  const reload = byLabel(single, 'Reload list');
+  assert.deepEqual(reload.traits.unresolvedCallbacks, []);
+  assert.equal(reload.traits.requests[0].endpointShape, '/v1/list');
+  const union = mount({
+    files: {
+      'pages/page.tsx': `function Refined(props){ return <button onClick={props.onReload}>Reload list</button>; }
+        export function Page({config,session}){ const first=() => requestJson(config,session,'/v1/a'); const second=() => requestJson(config,session,'/v1/b');
+          return <><Refined onReload={first}/><Refined onReload={second}/></>; }`,
+    },
+  });
+  assert.deepEqual(byLabel(union, 'Reload list').traits.unresolvedCallbacks, ['props.onReload']);
+});
+
+test('a ref holding only a promise executor resolver settles a confirmation; other ref values stay unresolved', () => {
+  const provider = (assignment) => mount({
+    files: {
+      'pages/page.tsx': `import {useCallback,useRef,useState} from 'react';
+        export function Page(){ const [open,setOpen]=useState(false); const resolverRef=useRef<((value: boolean) => void) | null>(null);
+          const ask = () => new Promise((resolve) => { resolverRef.current = resolve; setOpen(true); });
+          ${assignment}
+          const settle = useCallback((value) => { const resolve = resolverRef.current; resolverRef.current = null; resolve?.(value); }, []);
+          return <><button onClick={ask}>Ask</button><button onClick={() => settle(true)}>Confirm choice</button></>; }`,
+    },
+  });
+  assert.deepEqual(byLabel(provider(''), 'Confirm choice').traits.unresolvedCallbacks, []);
+  assert.deepEqual(byLabel(provider('const leak = (fn) => { resolverRef.current = fn; };'), 'Confirm choice').traits.unresolvedCallbacks, ['resolve: unresolved callable declaration']);
+});
+
+test('a local conditional callback runs each resolvable branch and forwarded request methods come from the exact options object', () => {
+  const inventory = mount({
+    files: {
+      'pages/page.tsx': `import {useCallback} from 'react';
+        function useDetail(path){ const reload = useCallback(() => requestJson(config,session,path), [path]); return { reload }; }
+        export function Page({route,config,session}){ const run=useDetail('/v1/runs/1'); const finding=useDetail('/v1/findings/1');
+          const activeReload = route === 'run' ? run.reload : route === 'finding' ? finding.reload : null;
+          async function socFetch(path, options = {}){ return requestSocJson(config,session,path,{ method: options.method, body: options.body }); }
+          const approve = async () => { await socFetch('/internal/soc/requests/1/approve', { method: 'POST', body: {} }); if (activeReload) activeReload(); };
+          const read = async () => { await socFetch('/internal/soc/requests/1'); };
+          return <><button onClick={approve}>Approve</button><button onClick={read}>Read</button></>; }`,
+    },
+  });
+  const approve = byLabel(inventory, 'Approve');
+  assert.deepEqual(approve.traits.unresolvedCallbacks, []);
+  assert.deepEqual(approve.traits.requests.map((request) => request.method), ['POST', 'GET']);
+  assert.deepEqual(byLabel(inventory, 'Read').traits.requests.map((request) => request.method), ['GET']);
 });
