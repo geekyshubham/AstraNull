@@ -307,9 +307,9 @@ describe('versioned conservative readiness', () => {
     event.metadata.completed_marker_legs = 1;
     assert.equal(projectReadiness(world).score, 0);
   });
-  it('excludes catalog E1/E2 and reports setup-required independently', () => {
+  it('excludes catalog E1/E2 and no longer excludes setup-required checks', () => {
     const world = assuranceWorld(); world.targets[0].kind = 'fqdn'; world.targets[0].value = 'app.example.test'; world.catalog.push(getCheckById('dns.authoritative_response.safe'), getCheckById('ops.runbook_contact_validation.safe'), getCheckById('origin.host_sni_bypass.safe'), { ...structuredClone(world.catalog[0]), check_id: 'waf.fixture_setup.safe', required_customer_setup: ['declared_fixture_probe_path'] });
-    const result = projectReadiness(world); assert.equal(result.coverage.applicable_count, 1); assert.ok(result.coverage.observation_only_count >= 1); assert.ok(result.coverage.setup_required_count >= 1); assert.equal(result.score, 0);
+    const result = projectReadiness(world); assert.equal(result.coverage.applicable_count, 2); assert.ok(result.coverage.observation_only_count >= 1); assert.equal(result.coverage.setup_required_count, 0); assert.equal(result.score, 0);
   });
   it('requires complete inputs rather than inventing estate completeness from a bounded feed', () => {
     const world = assuranceWorld(); addAssuredObservation(world); world.input_complete = false; const result = projectReadiness(world);

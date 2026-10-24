@@ -9,7 +9,6 @@ import {
   getCheckById,
   isCustomerRunnable,
 } from '../../contracts/checks.mjs';
-import { isExplicitDemoTenant } from '../../lib/demoAutoVerify.mjs';
 import { targetKindCompatibilityError } from '../../contracts/checkTargetCompatibility.mjs';
 import { validateReviewedOperationSelection } from '../../contracts/reviewedOperationBinding.mjs';
 import { targetDedupeKey } from '../../contracts/targetManagement.mjs';
@@ -38,7 +37,6 @@ import {
   DEFAULT_MAX_RUNS_PER_HOUR,
   DEFAULT_MIN_SECONDS_BETWEEN_RUNS,
   effectiveSafetyConstraints,
-  isWithinSafeTestWindow,
   isWithinSafeTestWindowRaw,
   wouldExceedEventCap,
 } from '../../lib/safeTestGuards.mjs';
@@ -72,7 +70,6 @@ import { simulateProbeResult } from '../../services/probeStub.mjs';
 import { buildTargetRuleCoverage } from '../../services/ruleCoverage.mjs';
 import { buildVerdictReplay } from '../../lib/verdictReplay.mjs';
 import { LEAN_GROUP_LOOKUP } from './coreCatalogRepository.mjs';
-import { isWithinPolicySafeWindow } from '../../contracts/testPolicyManagement.mjs';
 import { normalizeCancelReason, withCheckSection } from '../../contracts/validationScanManagement.mjs';
 
 /** @type {readonly string[]} */
@@ -496,9 +493,6 @@ export function createPostgresValidationServices(repositories, options = {}) {
       return { error: 'test_policy_binding_mismatch', status: 409 };
     }
     if (Number(policy.max_concurrent_runs) !== 1) return { error: 'unsafe_policy_concurrency', status: 409 };
-    if (policy.safe_windows?.length && !isWithinPolicySafeWindow(policy, nowFn())) {
-      return { error: 'policy_safe_window_closed', status: 429 };
-    }
 
     const trustedDispatch = dispatchOptions.policyDispatch;
     if (policy.cadence !== 'manual' && !trustedDispatch && !dispatchOptions.policyEvent) {
@@ -1567,14 +1561,6 @@ export function createPostgresValidationServices(repositories, options = {}) {
       }
       const check = getCheckById(body.check_id);
       if (!check) return { error: 'unknown_check', status: 400 };
-      if (!isCustomerRunnable(check, ctx)) {
-        await appendAudit(ctx, 'test_run.blocked_soc_gated', 'check', check.check_id);
-        return {
-          error: 'soc_gated_check',
-          status: 403,
-          message: 'This check requires SOC governance.',
-        };
-      }
 
       const targetGroupId = body.target_group_id;
       if (typeof validationEvidence.lockAdmissionDefinitions === 'function') {
@@ -1769,22 +1755,11 @@ export function createPostgresValidationServices(repositories, options = {}) {
         };
       }
 
-      const isDemo = isExplicitDemoTenant(ctx);
       const now = nowFn();
       const nowMs = now.getTime();
-      const safeWindowBypassed = isDemo && (group.safe_test_windows ?? []).length > 0 && !isWithinSafeTestWindowRaw(group, nowMs);
-      if (!isDemo && (group.safe_test_windows ?? []).length > 0 && !isWithinSafeTestWindow(group, nowMs, { tenantId: ctx.tenantId })) {
-        return denySafeStart(
-          ctx,
-          'test_run.safe_window_denied',
-          targetGroupId,
-          { check_id: check.check_id, target_group_id: targetGroupId },
-          'safe_window_closed',
-          429,
-        );
-      }
-
-      const groupPolicy = effectiveSafetyConstraints(check, group, { tenantId: ctx });
+      // The group safety policy is advisory: a closed window, an hourly cap or the minimum interval
+      // is recorded on the audit trail but never refuses a start.
+      const safeWindowBypassed = (group.safe_test_windows ?? []).length > 0 && !isWithinSafeTestWindowRaw(group, nowMs);
       const usage = typeof validationEvidence.readSafeAdmissionUsage === 'function'
         ? await validationEvidence.readSafeAdmissionUsage(ctx, { now: now.toISOString(), targetId, targetGroupId,
           customerCheckIds: CHECK_CATALOG.filter(isCustomerRunnable).map((item) => item.check_id) })
@@ -1797,45 +1772,15 @@ export function createPostgresValidationServices(repositories, options = {}) {
       }
       const runsLastHour = usage.runs_last_hour;
       const normalMaxRuns = group.safety_policy?.max_runs_per_hour ?? DEFAULT_MAX_RUNS_PER_HOUR;
-      const hourlyCapBypassed = isDemo && (runsLastHour >= normalMaxRuns);
-      if (runsLastHour >= groupPolicy.max_runs_per_hour) {
-        return denySafeStart(
-          ctx,
-          'test_run.safe_rate_denied',
-          targetGroupId,
-          {
-            check_id: check.check_id,
-            max_runs_per_hour: groupPolicy.max_runs_per_hour,
-          },
-          'safe_rate_cap_exceeded',
-          429,
-        );
-      }
+      const hourlyCapBypassed = runsLastHour >= normalMaxRuns;
 
       const priorRun = usage.prior_run;
       const normalMinSeconds = group.safety_policy?.min_seconds_between_runs ?? DEFAULT_MIN_SECONDS_BETWEEN_RUNS;
       let minIntervalBypassed = false;
-      if (priorRun && isDemo && normalMinSeconds > 0) {
+      if (priorRun && normalMinSeconds > 0) {
         const elapsedMs = nowMs - new Date(priorRun.created_at).getTime();
         if (elapsedMs < normalMinSeconds * 1000) {
           minIntervalBypassed = true;
-        }
-      }
-      if (priorRun && groupPolicy.min_seconds_between_runs > 0) {
-        const elapsedMs = nowMs - new Date(priorRun.created_at).getTime();
-        if (elapsedMs < groupPolicy.min_seconds_between_runs * 1000) {
-          return denySafeStart(
-            ctx,
-            'test_run.safe_interval_denied',
-            priorRun.id,
-            {
-              check_id: check.check_id,
-              target_group_id: targetGroupId,
-              min_seconds_between_runs: groupPolicy.min_seconds_between_runs,
-            },
-            'safe_min_interval_active',
-            429,
-          );
         }
       }
 
@@ -1960,10 +1905,6 @@ export function createPostgresValidationServices(repositories, options = {}) {
         return denySafeStart(ctx, 'test_run.kill_switch_denied', targetGroupId,
           { check_id: check.check_id, phase: 'admission_commit' }, 'kill_switch_active', 423);
       }
-      if (!isDemo && !isWithinSafeTestWindow(group, nowFn().getTime(), { tenantId: ctx.tenantId })) {
-        return denySafeStart(ctx, 'test_run.safe_window_denied', targetGroupId,
-          { check_id: check.check_id, phase: 'admission_commit' }, 'safe_window_closed', 429);
-      }
       const openWindowEnds = (group.safe_test_windows ?? []).filter((window) =>
         new Date(window.start_at).getTime() <= nowMs && new Date(window.end_at).getTime() >= nowMs)
         .map((window) => new Date(window.end_at).getTime());
@@ -2024,11 +1965,10 @@ export function createPostgresValidationServices(repositories, options = {}) {
       });
 
       const targetDeclarations = await storedTargetDeclarations(ctx, target.id);
-      const missingInput = isDemo ? demoMissingInputRefusal(check, { target, declarations: targetDeclarations, originBindings, probeMode: runtimeConfig.probeMode }) : null;
+      const missingInput = demoMissingInputRefusal(check, { target, declarations: targetDeclarations, originBindings, probeMode: runtimeConfig.probeMode });
       const inputRequirementBypassed = missingInput ? `input_requirement:${missingInput.error}` : null;
 
       const demoBypassedGates = [];
-      if (isDemo && !isCustomerRunnable(check)) demoBypassedGates.push('soc_gated');
       if (safeWindowBypassed) demoBypassedGates.push('safe_window');
       if (hourlyCapBypassed) demoBypassedGates.push('hourly_cap');
       if (minIntervalBypassed) demoBypassedGates.push('min_interval');

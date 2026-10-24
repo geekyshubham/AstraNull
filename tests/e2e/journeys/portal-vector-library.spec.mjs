@@ -47,7 +47,7 @@ async function openVectorAction(page, vectorId) {
   await expect
     .poll(async () => toggles.count())
     .toBeGreaterThan(0);
-  // Non-runnable vectors (SOC-gated, monitor-only) sit in the Miscellaneous group, which uses the same toggle.
+  // Non-runnable vectors (monitor-only, unfitted request-only) sit in the Miscellaneous group, which uses the same toggle.
   for (let index = 0, total = await toggles.count(); index < total; index += 1) {
     const toggle = toggles.nth(index);
     if ((await toggle.getAttribute('aria-expanded')) !== 'true') await toggle.click();
@@ -157,7 +157,7 @@ test.describe('target-first check library workflow', () => {
     await expect(page.getByRole('status').filter({ hasText: 'started on' })).toBeVisible();
   });
 
-  test('keeps SOC-governed and monitor-only vectors non-runnable', async ({ page }) => {
+  test('keeps request-only and monitor-only vectors non-runnable until a target is chosen', async ({ page }) => {
     await injectPortalDevHeadersSession(page);
     const runPosts = [];
     page.on('request', (request) => {
@@ -167,7 +167,7 @@ test.describe('target-first check library workflow', () => {
 
     await openVectorAction(page, 'NET-016');
     let detail = page.locator('dialog.form-modal[open]');
-    await expect(detail).toContainText('SOC-gated only');
+    await expect(detail).toContainText('Request-only check');
     await expect(detail).toContainText('supplemental declaration or transport evidence is not an exposure result');
     await expect(detail.getByRole('button', { name: 'Review run' })).toHaveCount(0);
     await detail.getByRole('button', { name: 'Close dialog' }).click();

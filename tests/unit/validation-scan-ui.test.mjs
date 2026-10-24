@@ -97,7 +97,7 @@ describe('validation scan UI helpers: form and payload', () => {
   });
 
   it('humanizes backend error payloads without leaking raw codes', () => {
-    assert.match(ui.scanErrorMessage({ error: 'soc_gated_check', check_id: 'waf.soc' }), /SOC governance/);
+    assert.match(ui.scanErrorMessage({ error: 'soc_gated_check', check_id: 'waf.soc' }), /request-only/);
     assert.match(ui.scanErrorMessage({ error: 'soc_gated_check', check_id: 'waf.soc' }), /waf\.soc/);
     assert.match(ui.scanErrorMessage({ error: 'invalid_validation_scan', field: 'scheduled_for', message: 'scheduled_for must be at least one minute in the future.' }), /one minute/);
     assert.match(ui.scanErrorMessage({ error: 'scan_has_no_runnable_steps', excluded: [{}, {}] }), /2 incompatible/);

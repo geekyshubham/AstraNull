@@ -490,7 +490,6 @@ test.describe('target workspace: recorded attribution, checks and reviewed runs 
     const catalog = await page.request.get(`${getPortalPlaywrightBaseUrl()}/v1/checks?scope=all&target_id=${VERIFIED_FRESH_TARGET}`, { headers }).then((response) => response.json());
     await expect(panel.locator('.td-check')).toHaveCount(catalog.items.length);
     const cases = [
-      ['SOC only', catalog.items.find((check) => check.risk_class === 'soc_gated')],
       ['Declaration only', catalog.items.find((check) => check.evidence_tier === 'E1' && check.safety_class === 'safe' && check.supported_targets.includes('fqdn'))],
       ['Execution unavailable', catalog.items.find((check) => check.mechanism_supported === false && check.safety_class === 'safe' && !(check.runnable_requires ?? []).includes('port'))],
       ['Different target type', catalog.items.find((check) => !check.supported_targets.includes('fqdn') && check.safety_class === 'safe' && check.mechanism_supported !== false && check.evidence_tier !== 'E1')],
@@ -594,7 +593,8 @@ test.describe('target workspace: recorded attribution, checks and reviewed runs 
     expect([...displayedIds].sort()).toEqual(catalog.items.map((check) => check.check_id).sort());
     await expect(panel.locator('.td-checks-stats')).toContainText('eligible here');
     await expect(panel.locator('input[name=target-run-check][value="origin.direct_bypass.safe"]')).toBeDisabled();
-    await expect(panel.locator('.td-check').filter({ hasText: 'SOC only' }).first()).toHaveCount(1);
+    const socCheck = catalog.items.find((check) => check.risk_class === 'soc_gated');
+    await expect(panel.locator(`input[name=target-run-check][value="${socCheck.check_id}"]`)).toBeEnabled();
     await expect(panel.locator('input[name=target-run-check][value="dns.authoritative_response.safe"]')).toHaveCount(1);
     await page.setViewportSize({ width: 375, height: 950 });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);

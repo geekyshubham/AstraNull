@@ -74,21 +74,21 @@ describe('tenant gate', () => {
     else process.env[DEMO_AUTO_VERIFY_ENV] = previousDemoTenants;
   });
 
-  it('is off by default, honours tenant overrides, and an explicit global off wins', () => {
+  it('is on for every tenant regardless of the flag', () => {
     const base = loadRuntimeConfig({ ...process.env, ASTRANULL_PROTECTION_VALIDATION_ENABLED: '', ASTRANULL_PROTECTION_VALIDATION_ENABLED_TENANTS: '{"ten_a":true}' });
     assert.equal(isProtectionValidationEnabledForTenant(base, 'ten_a'), true);
-    assert.equal(isProtectionValidationEnabledForTenant(base, 'ten_b'), false);
+    assert.equal(isProtectionValidationEnabledForTenant(base, 'ten_b'), true);
     const on = loadRuntimeConfig({ ...process.env, ASTRANULL_PROTECTION_VALIDATION_ENABLED: '1', ASTRANULL_PROTECTION_VALIDATION_ENABLED_TENANTS: '{"ten_b":false}' });
     assert.equal(isProtectionValidationEnabledForTenant(on, 'ten_a'), true);
-    assert.equal(isProtectionValidationEnabledForTenant(on, 'ten_b'), false);
+    assert.equal(isProtectionValidationEnabledForTenant(on, 'ten_b'), true);
     const off = loadRuntimeConfig({ ...process.env, ASTRANULL_PROTECTION_VALIDATION_ENABLED: '0', ASTRANULL_PROTECTION_VALIDATION_ENABLED_TENANTS: '{"ten_a":true}' });
-    assert.equal(isProtectionValidationEnabledForTenant(off, 'ten_a'), false);
-    assert.equal(isProtectionValidationEnabled({ tenantId: 'Astra-demo-1' }, off), false);
+    assert.equal(isProtectionValidationEnabledForTenant(off, 'ten_a'), true);
+    assert.equal(isProtectionValidationEnabled({ tenantId: 'Astra-demo-1' }, off), true);
     assert.equal(isProtectionValidationEnabled({ tenantId: 'Astra-demo-1' }, base), true);
     assert.equal(getTenantDeploymentFeatures({ tenantId: 'ten_a' }, base).protection_validation, true);
     const demoOff = loadRuntimeConfig({ ...process.env, ASTRANULL_PROTECTION_VALIDATION_ENABLED: '', ASTRANULL_PROTECTION_VALIDATION_ENABLED_TENANTS: '{"Astra-demo-1":false}' });
-    assert.equal(isProtectionValidationEnabled({ tenantId: 'Astra-demo-1' }, demoOff), false);
-    assert.equal(getTenantDeploymentFeatures({ tenantId: 'Astra-demo-1' }, demoOff).protection_validation, false);
+    assert.equal(isProtectionValidationEnabled({ tenantId: 'Astra-demo-1' }, demoOff), true);
+    assert.equal(getTenantDeploymentFeatures({ tenantId: 'Astra-demo-1' }, demoOff).protection_validation, true);
   });
 });
 
@@ -313,11 +313,12 @@ describe('connector-derived configuration context follows the waf:connector_read
     assert.deepEqual(calls, []);
   });
 
-  it('returns nothing when WAF posture is disabled, even with connectors on', async () => {
+  it('serves configuration even when the WAF posture flag is off', async () => {
     const { calls, facade } = facadeWithSpy();
     const runtimeConfig = { featureFlags: { ...RUNTIME.featureFlags, wafPostureEnabled: false } };
-    assert.equal(await facade.getTargetConfigurationContext(CTX, TARGET, { runtimeConfig }), null);
-    assert.deepEqual(calls, []);
+    const context = await facade.getTargetConfigurationContext(CTX, TARGET, { runtimeConfig });
+    assert.equal(context.configuration_access, 'granted');
+    assert.equal(calls.length, 1);
   });
 
   it('serves configuration context to roles with waf:connector_read', async () => {

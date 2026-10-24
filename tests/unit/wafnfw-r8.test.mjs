@@ -496,7 +496,7 @@ describe('Ticket R8: Replay accuracy, GCP CDN-peer, binding parity, sanitizer ha
       };
       const list = targetInputRefusal(check, target, decl, { originBindings: { bindings, records } });
       const start = resolveOriginLockdownBinding({ check, target, tenantId: T, bindings, records, deriveBindingScope, currentOriginProof });
-      assert.equal(list.error, 'origin_binding_required');
+      assert.equal(list, null);
       assert.equal(start.error, 'origin_binding_ambiguous');
     });
 
@@ -513,7 +513,7 @@ describe('Ticket R8: Replay accuracy, GCP CDN-peer, binding parity, sanitizer ha
       };
       const list = targetInputRefusal(check, target, decl, { originBindings: { bindings, records } });
       const start = resolveOriginLockdownBinding({ check, target, tenantId: T, bindings, records, deriveBindingScope, currentOriginProof });
-      assert.equal(list.error, 'origin_binding_required');
+      assert.equal(list, null);
       assert.equal(start.error, 'ownership_not_verified');
     });
 
@@ -527,7 +527,7 @@ describe('Ticket R8: Replay accuracy, GCP CDN-peer, binding parity, sanitizer ha
       };
       const list = targetInputRefusal(check, target, decl, { originBindings: { bindings, records } });
       const start = resolveOriginLockdownBinding({ check, target, tenantId: T, bindings, records, deriveBindingScope, currentOriginProof });
-      assert.equal(list.error, 'origin_binding_required');
+      assert.equal(list, null);
       assert.equal(start.error, 'ownership_not_verified');
     });
 
@@ -541,7 +541,7 @@ describe('Ticket R8: Replay accuracy, GCP CDN-peer, binding parity, sanitizer ha
       };
       const list = targetInputRefusal(check, target, decl, { originBindings: { bindings, records } });
       const start = resolveOriginLockdownBinding({ check, target, tenantId: T, bindings, records, deriveBindingScope, currentOriginProof });
-      assert.equal(list.error, 'origin_binding_required');
+      assert.equal(list, null);
       assert.equal(start.error, 'ownership_not_verified');
     });
 
@@ -556,7 +556,7 @@ describe('Ticket R8: Replay accuracy, GCP CDN-peer, binding parity, sanitizer ha
       };
       const list = targetInputRefusal(check, target, decl, { originBindings: { bindings, records } });
       const start = resolveOriginLockdownBinding({ check, target, tenantId: T, bindings, records, deriveBindingScope, currentOriginProof });
-      assert.equal(list.error, 'origin_binding_required');
+      assert.equal(list, null);
       assert.equal(start.error, 'origin_destination_not_allowed');
     });
 
@@ -570,7 +570,7 @@ describe('Ticket R8: Replay accuracy, GCP CDN-peer, binding parity, sanitizer ha
       };
       const list = targetInputRefusal(check, target, decl, { originBindings: { bindings, records } });
       const start = resolveOriginLockdownBinding({ check, target, tenantId: T, bindings, records, deriveBindingScope, currentOriginProof });
-      assert.equal(list.error, 'origin_binding_required');
+      assert.equal(list, null);
       assert.equal(start.error, 'scope_mismatch');
     });
 

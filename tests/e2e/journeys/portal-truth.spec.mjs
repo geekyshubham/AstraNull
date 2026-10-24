@@ -70,7 +70,7 @@ test.describe('portal truth surfaces', () => {
 
     await openCheck(page, 'waf.offensive_sqli.soc');
     await expect(page.locator('#portal-main')).toContainText(checkPresentation('waf.offensive_sqli.soc').mechanism);
-    await expect(page.getByText('No customer execution', { exact: true }).first()).toBeVisible();
+    await expect(page.getByText('Runs through the SOC workflow', { exact: true }).first()).toBeVisible();
     technical = await openCheckTechnicalDetails(page);
     await expect(technical.getByText('WV-001', { exact: true })).toBeVisible();
     await expect(technical.getByText('No ATT identifiers recorded.', { exact: true })).toBeVisible();

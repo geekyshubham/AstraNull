@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { additionalInputRefusal, getCheckById, WAF_SAFE_CHECK_IDS } from '../../src/contracts/checks.mjs';
+import { additionalInputRefusal, rawAdditionalInputRefusal, getCheckById, WAF_SAFE_CHECK_IDS } from '../../src/contracts/checks.mjs';
 import { SCENARIO_TO_CHECK } from '../../src/contracts/wafOrchestrator.mjs';
 import { firewallSideState } from '../../src/contracts/protectionValidation.mjs';
 import { WAF_GRADING_VERSION, SIGNATURE_CORPUS_VERSION } from '../../src/lib/externalObservationOutcomes.mjs';
@@ -222,9 +222,12 @@ describe('R1 reconcile: UDP outcomes, wiring, SOC canary-sink', () => {
     assert.equal(allowlist.verdict, 'exposed');
     assert.equal(allowlist.severity, 'medium');
     const check = getCheckById('nfw.perspective_allowlist.safe');
-    assert.equal(additionalInputRefusal(check, {}).error, 'two_perspectives_required');
-    assert.equal(additionalInputRefusal(check, two).error, 'declared_perspectives_required');
-    assert.equal(additionalInputRefusal(check, two, { declarations: { perspectives: { denied_perspective_ids: ['eu'] } } }), null);
+    assert.equal(rawAdditionalInputRefusal(check, {}).error, 'two_perspectives_required');
+    assert.equal(rawAdditionalInputRefusal(check, two).error, 'declared_perspectives_required');
+    assert.equal(rawAdditionalInputRefusal(check, two, { declarations: { perspectives: { denied_perspective_ids: ['eu'] } } }), null);
+    // The public preflight never blocks selection.
+    assert.equal(additionalInputRefusal(check, {}), null);
+    assert.equal(additionalInputRefusal(check, two), null);
   });
 
   it('sends up to four composite reflection profiles and never exceeds four', async () => {

@@ -473,7 +473,7 @@ export function ScanDetailView({
         </div>
       ) : null}
       {scan && active && scan.next_eligible_at ? (
-        <div className="form-banner info" role="note">Next step deferred by the selected domain’s execution cooldown until {formatDate(scan.next_eligible_at)}.</div>
+        <div className="form-banner info" role="note">Next step waits for the subscribed run allowance until {formatDate(scan.next_eligible_at)}.</div>
       ) : null}
       {scan && terminal ? (
         <div className={`form-banner ${status === 'completed' ? '' : 'neutral'}`} role="note">

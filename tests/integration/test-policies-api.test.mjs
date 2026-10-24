@@ -100,8 +100,8 @@ describe('test policies API', () => {
     assert.equal(listedAfterArchive.json.items.length, 0);
   });
 
-  it('rejects SOC-gated checks as customer-runnable policy bindings', async () => {
-    // A customer other than the public demo login, which may select every check.
+  it('accepts request-only checks as customer-runnable policy bindings for every tenant', async () => {
+    // No tenant exemption is left: a non-demo customer binds a request-only check like any other.
     const engineer = demoHeaders('engineer', 'ten_demo', 'usr_customer_engineer');
     const created = await request(baseUrl, 'POST', '/v1/test-policies', {
       headers: engineer,
@@ -113,8 +113,8 @@ describe('test policies API', () => {
       },
     });
 
-    assert.equal(created.status, 403);
-    assert.equal(created.json.error, 'soc_gated_check');
+    assert.equal(created.status, 201);
+    assert.equal(created.json.check_id, 'high_scale.volumetric.request_only');
   });
 
   it('retains a successful policy and its audit across later failed and duplicate pair writes', async () => {

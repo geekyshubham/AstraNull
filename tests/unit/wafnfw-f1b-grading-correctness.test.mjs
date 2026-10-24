@@ -555,24 +555,22 @@ describe('D14 rule coverage is honest about canaries and unrunnable checks', () 
 
 describe('D16 basic deny-rule runnability', () => {
   const check = getCheckById('l3.basic_deny_rule.safe');
-  it('runs for a tcp host:port target or a declared TCP deny, refused otherwise', () => {
+  it('is always dispatchable regardless of target or declared deny', () => {
     assert.equal(additionalInputRefusal(check, {}, { target: { kind: 'tcp', value: '192.0.2.10:22' } }), null);
     assert.equal(additionalInputRefusal(check, {}, {
       target: { kind: 'fqdn', value: 'a.example', metadata: { control_declarations: { network_policy: [{ protocol: 'tcp', port: 22, action: 'deny' }] } } },
     }), null);
-    const refused = additionalInputRefusal(check, {}, {
+    assert.equal(additionalInputRefusal(check, {}, {
       target: { kind: 'fqdn', value: 'a.example', metadata: { control_declarations: { network_policy: [{ protocol: 'tcp', port: 443, action: 'allow' }] } } },
-    });
-    assert.equal(refused.error, 'port_or_declared_deny_required');
-    assert.match(refused.message, /tcp host:port target/);
-    assert.equal(additionalInputRefusal(check, {}).error, 'port_or_declared_deny_required');
-    assert.equal(checkRequiresAdditionalInput(check), true);
+    }), null);
+    assert.equal(additionalInputRefusal(check, {}), null);
+    assert.equal(checkRequiresAdditionalInput(check), false);
     assert.ok(check.supported_targets.includes('tcp'));
     assert.equal(check.mechanism_supported, true);
   });
 });
 
-describe('D17 WAF orchestrator preflight refuses SOC-only scenarios', () => {
+describe('D17 WAF orchestrator runs SOC-only scenarios without a SOC gate', () => {
   const envSnapshot = { ...process.env };
   const ctx = { tenantId: 'ten_demo', userId: 'usr_demo', role: 'engineer' };
   beforeEach(() => {
@@ -584,10 +582,12 @@ describe('D17 WAF orchestrator preflight refuses SOC-only scenarios', () => {
       tenants: [{ id: 'ten_demo', name: 'Demo' }],
       targetGroups: [{ id: 'tg_1', tenant_id: 'ten_demo', name: 'TG', expected_behavior_default: 'must_block_before_origin', ownership_status: 'dns_verified' }],
       targets: [{ id: 'tgt_1', tenant_id: 'ten_demo', target_group_id: 'tg_1', kind: 'fqdn', value: 'app.example.com', expected_behavior: 'must_block_before_origin' }],
+      targetVerifications: [{ id: 'tv_1', tenant_id: 'ten_demo', target_id: 'tgt_1', state: 'dns_verified', source_kind: 'dns_txt', transitioned_at: new Date().toISOString(), transitioned_by: 'system' }],
       wafAssets: [{ id: 'waf_1', tenant_id: 'ten_demo', target_group_id: 'tg_1', target_id: 'tgt_1', canonical_url: 'https://app.example.com', status: 'protected', expected_waf_required: true }],
       wafValidationPlans: [],
       testRuns: [],
       probeJobs: [],
+      events: [],
       auditLog: [],
     });
   });
@@ -596,16 +596,16 @@ describe('D17 WAF orchestrator preflight refuses SOC-only scenarios', () => {
     Object.assign(process.env, envSnapshot);
   });
 
-  it('rce_marker is refused at preflight with a clear reason, before any run or probe job', () => {
+  it('rce_marker delegates straight through without a SOC gate', () => {
     const created = createValidationPlan(ctx, { target_group_id: 'tg_1', scenarios: ['rce_marker'], max_concurrent: 2, timeout_ms: 45_000 });
     assert.equal(created.error, undefined);
     const executed = executeValidationPlan(ctx, created.validation_plan.id, loadRuntimeConfig());
-    assert.equal(executed.error, 'soc_gated_check');
-    assert.equal(executed.status, 403);
-    assert.equal(executed.check_id, 'waf.offensive_rce.soc');
-    assert.match(executed.message, /SOC-only check waf\.offensive_rce\.soc/);
-    assert.equal(getStore().probeJobs.length, 0);
-    assert.equal(getStore().testRuns.length, 0);
-    assert.ok(getStore().auditLog.some((row) => row.action === 'waf.validation_plan.blocked_soc_gated'));
+    assert.equal(executed.error, undefined);
+    assert.equal(executed.validation_plan.state, 'completed');
+    assert.equal(executed.delegated_jobs.length, 1);
+    assert.equal(executed.delegated_jobs[0].check_id, 'waf.offensive_rce.soc');
+    assert.equal(getStore().testRuns.length, 1);
+    assert.equal(getStore().probeJobs.length, 1);
+    assert.equal(getStore().auditLog.some((row) => row.action === 'waf.validation_plan.blocked_soc_gated'), false);
   });
 });

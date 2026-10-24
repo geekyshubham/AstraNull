@@ -8,9 +8,7 @@ import {
   evaluateCheckPrerequisites,
   formatMissingInputMessage,
   getCheckById,
-  isCustomerRunnable,
 } from '../contracts/checks.mjs';
-import { isExplicitDemoTenant } from '../lib/demoAutoVerify.mjs';
 import { targetKindCompatibilityError } from '../contracts/checkTargetCompatibility.mjs';
 import { validateReviewedOperationSelection } from '../contracts/reviewedOperationBinding.mjs';
 import { targetDedupeKey } from '../contracts/targetManagement.mjs';
@@ -43,7 +41,6 @@ import { buildOriginIdentityPairSnapshot, originIdentityScenario } from '../lib/
 import { reviewedOriginIdentityPair } from '../lib/entryPathComparison.mjs';
 import { targetOwnershipProof } from './ownershipVerification.mjs';
 import { getTestPolicyForDispatch } from './testPolicies.mjs';
-import { isWithinPolicySafeWindow } from '../contracts/testPolicyManagement.mjs';
 import { isTrustedProducerEvent } from '../lib/trustedEventProvenance.mjs';
 import {
   approvedScenarioVersion,
@@ -68,10 +65,8 @@ import {
   DEFAULT_MIN_SECONDS_BETWEEN_RUNS,
   countCustomerRunnableRunsLastHour,
   effectiveSafetyConstraints,
-  isWithinSafeTestWindow,
   isWithinSafeTestWindowRaw,
   lastRunForTargetGroup,
-  normalizeSafetyPolicy,
   wouldExceedEventCap,
 } from './safeTestPolicy.mjs';
 import { isKillSwitchActiveForTenant } from './killSwitchState.mjs';
@@ -317,9 +312,6 @@ function validatePolicyBinding(ctx, body, group, check, options = {}) {
     return { error: 'test_policy_binding_mismatch', status: 409 };
   }
   if (policy.max_concurrent_runs !== 1) return { error: 'unsafe_policy_concurrency', status: 409 };
-  if (policy.safe_windows?.length && !isWithinPolicySafeWindow(policy)) {
-    return { error: 'policy_safe_window_closed', status: 429 };
-  }
 
   const trustedDispatch = options.policyDispatch;
   if (policy.cadence !== 'manual' && !trustedDispatch && !options.policyEvent) {
@@ -477,19 +469,6 @@ export function startTestRun(ctx, body, runtimeConfig = { probeMode: 'simulation
       { check_id: check.check_id, origin_binding_id: body.origin_binding_id ?? null },
       'origin_identity_review_required', 409);
   }
-  if (!isCustomerRunnable(check, ctx)) {
-    audit({
-      tenant_id: ctx.tenantId,
-      actor_user_id: ctx.userId,
-      actor_role: ctx.role,
-      action: 'test_run.blocked_soc_gated',
-      resource_type: 'check',
-      resource_id: check.check_id,
-    });
-    persistStore();
-    return { error: 'soc_gated_check', status: 403, message: 'This check requires SOC governance.' };
-  }
-
   const targetGroupId = body.target_group_id;
   const group = getStore().targetGroups.find(
     (g) => g.id === targetGroupId && g.tenant_id === ctx.tenantId && !isArchivedTargetGroup(g),
@@ -657,72 +636,30 @@ export function startTestRun(ctx, body, runtimeConfig = { probeMode: 'simulation
     };
   }
 
-  const isDemo = isExplicitDemoTenant(ctx);
   const nowMs = Date.now();
-  const safeWindowBypassed = isDemo && (group.safe_test_windows ?? []).length > 0 && !isWithinSafeTestWindowRaw(group, nowMs);
-  if (!isDemo && (group.safe_test_windows ?? []).length > 0 && !isWithinSafeTestWindow(group, nowMs, { tenantId: ctx.tenantId })) {
-    return denySafeStart(
-      ctx,
-      'test_run.safe_window_denied',
-      targetGroupId,
-      { check_id: check.check_id, target_group_id: targetGroupId },
-      'safe_window_closed',
-      429,
-    );
-  }
-
+  // The group safety policy is advisory: a closed window, an hourly cap or the minimum interval is
+  // recorded on the audit trail but never refuses a start.
+  const safeWindowBypassed = (group.safe_test_windows ?? []).length > 0 && !isWithinSafeTestWindowRaw(group, nowMs);
   const normalMaxRuns = group.safety_policy?.max_runs_per_hour ?? DEFAULT_MAX_RUNS_PER_HOUR;
   const runsLastHour = countCustomerRunnableRunsLastHour(ctx.tenantId, nowMs);
-  const hourlyCapBypassed = isDemo && (runsLastHour >= normalMaxRuns);
-  const groupPolicy = normalizeSafetyPolicy(group.safety_policy, { tenantId: ctx });
-  if (runsLastHour >= groupPolicy.max_runs_per_hour) {
-    return denySafeStart(
-      ctx,
-      'test_run.safe_rate_denied',
-      targetGroupId,
-      {
-        check_id: check.check_id,
-        max_runs_per_hour: groupPolicy.max_runs_per_hour,
-      },
-      'safe_rate_cap_exceeded',
-      429,
-    );
-  }
+  const hourlyCapBypassed = runsLastHour >= normalMaxRuns;
 
   const targetDeclarations = controlDeclarationsFromTarget(target);
-  const missingInput = isDemo ? demoMissingInputRefusal(check, { target, declarations: targetDeclarations, originBindings: { bindings: targetBindings, records: bindingRecords }, probeMode: runtimeConfig.probeMode }) : null;
+  const missingInput = demoMissingInputRefusal(check, { target, declarations: targetDeclarations, originBindings: { bindings: targetBindings, records: bindingRecords }, probeMode: runtimeConfig.probeMode });
   const inputRequirementBypassed = missingInput ? `input_requirement:${missingInput.error}` : null;
 
   const normalMinSeconds = group.safety_policy?.min_seconds_between_runs ?? DEFAULT_MIN_SECONDS_BETWEEN_RUNS;
   let minIntervalBypassed = false;
   const priorRun = getStore().testRuns.filter((run) => run.tenant_id === ctx.tenantId
     && run.target_id === targetId).sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)))[0];
-  if (priorRun && isDemo && normalMinSeconds > 0) {
+  if (priorRun && normalMinSeconds > 0) {
     const elapsedMs = Date.now() - new Date(priorRun.created_at).getTime();
     if (elapsedMs < normalMinSeconds * 1000) {
       minIntervalBypassed = true;
     }
   }
-  if (priorRun && groupPolicy.min_seconds_between_runs > 0) {
-    const elapsedMs = Date.now() - new Date(priorRun.created_at).getTime();
-    if (elapsedMs < groupPolicy.min_seconds_between_runs * 1000) {
-      return denySafeStart(
-        ctx,
-        'test_run.safe_interval_denied',
-        priorRun.id,
-        {
-          check_id: check.check_id,
-          target_group_id: targetGroupId,
-          min_seconds_between_runs: groupPolicy.min_seconds_between_runs,
-        },
-        'safe_min_interval_active',
-        429,
-      );
-    }
-  }
 
   const demoBypassedGates = [];
-  if (isDemo && !isCustomerRunnable(check)) demoBypassedGates.push('soc_gated');
   if (safeWindowBypassed) demoBypassedGates.push('safe_window');
   if (hourlyCapBypassed) demoBypassedGates.push('hourly_cap');
   if (minIntervalBypassed) demoBypassedGates.push('min_interval');

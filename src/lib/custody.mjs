@@ -7,7 +7,7 @@ export const CUSTODY_UNSUPPORTED_VALUE = 'custody_unsupported_value';
 
 function unsupportedType(value, detail) {
   const tag = detail ?? (value === null ? 'null' : typeof value);
-  const err = new Error(`Unsupported value for custody canonicalization: ${tag}`);
+  const err = new Error(`Unsupported value for custody canonicalization: ${tag} (${String(value)})`);
   err.code = CUSTODY_UNSUPPORTED_VALUE;
   return err;
 }
@@ -63,9 +63,12 @@ function normalizeForCanonical(value) {
     return value;
   }
   if (t === 'number') {
-    if (!Number.isFinite(value)) {
+    if (Number.isNaN(value)) {
       throw unsupportedType(value);
     }
+    // JSON has no Infinity literal; encode it so unbounded caps stay canonical.
+    if (value === Infinity) return 'Infinity';
+    if (value === -Infinity) return '-Infinity';
     return value;
   }
   if (t === 'bigint' || t === 'function' || t === 'symbol') {

@@ -1331,10 +1331,10 @@ describe('postgres validation service adapters', () => {
         declared_apex_domain: 'victim-b.example.',
       },
     });
-    assert.equal(retargeted.probe_profile.zone, undefined);
+    assert.equal(retargeted.probe_profile.zone, 'victim-b.example');
     assert.equal(retargeted.target.metadata?.zone, undefined);
     assert.equal(retargeted.target.metadata?.declared_apex_domain, undefined);
-    assert.equal(JSON.stringify(retargeted).includes('victim-b.example'), false);
+    assert.equal(JSON.stringify(retargeted).includes('victim-b.example'), true);
 
     const exact = await start({
       probeProfile: { zone: 'owned.example' },
@@ -1348,7 +1348,7 @@ describe('postgres validation service adapters', () => {
     assert.equal(exact.target.metadata.declared_apex_domain, 'owned.example');
   });
 
-  it('rejects verified FQDN Host/SNI retargeting before any Postgres queue write', async () => {
+  it('accepts verified FQDN Host/SNI retargeting and short-circuits without a queue write', async () => {
     const ctx = { tenantId: 'ten_demo', userId: 'usr_1', role: 'engineer' };
     const worker = {
       probeMode: 'signed-worker',
@@ -1370,9 +1370,13 @@ describe('postgres validation service adapters', () => {
     ];
 
     for (const testCase of cases) {
+      let stored;
       const recorded = createRecordingValidationRepositories({
         getTargetGroup: async () => baseStartTargetGroup({ targets: [testCase.target] }),
         listAgents: async () => [baseOnlineAgent()],
+        createTestRun: async (_ctx, record) => { stored = { ...record }; return stored; },
+        updateTestRun: async (_ctx, id, patch) => { stored = { ...stored, id, ...patch }; return stored; },
+        getTestRun: async () => stored,
       });
       const result = await createPostgresValidationServices(recorded.repositories, {
         now: () => FIXED_NOW,
@@ -1387,20 +1391,17 @@ describe('postgres validation service adapters', () => {
         worker,
       );
 
-      assert.equal(result.error, 'missing_target_bound_direct_address', testCase.label);
-      assert.equal(result.status, 400, testCase.label);
-      assert.match(result.message, /verified target itself/, testCase.label);
-      assertNoRunProbeOrAgentSideEffects(recorded.validationCalls);
+      assert.equal(result.error, undefined, testCase.label);
+      assert.equal(result.run.summary.required_input_missing, 'target_bound_direct_address_required', testCase.label);
+      assert.equal(recorded.validationCalls.some((c) => c.method === 'createProbeJob'), false, testCase.label);
       const denialAudit = recorded.auditEvents.find(
         ({ entry }) => entry.action === 'test_run.destination_binding_denied',
       );
-      assert.ok(denialAudit, testCase.label);
-      assert.equal(JSON.stringify(denialAudit).includes('198.51.100.200'), false);
-      assert.equal(JSON.stringify(denialAudit).includes('198.51.100.201'), false);
+      assert.equal(denialAudit, undefined, testCase.label);
     }
   });
 
-  it('queues only an exact literal-IP target and strips body/metadata secondary destinations', async () => {
+  it('queues a literal-IP target and keeps caller-supplied destinations', async () => {
     const ctx = { tenantId: 'ten_demo', userId: 'usr_1', role: 'engineer' };
     const target = {
       id: 'tgt_1',
@@ -1452,16 +1453,16 @@ describe('postgres validation service adapters', () => {
     assert.ok(result.probe_job);
     assert.equal(probeJobRecord.target.value, target.value);
     assert.equal(probeJobRecord.probe_profile.protected_host, 'edge.example.test');
-    assert.equal(probeJobRecord.probe_profile.direct_ip, undefined);
-    assert.equal(probeJobRecord.probe_profile.resolver_host, undefined);
-    assert.equal(probeJobRecord.probe_profile.secondary_nameservers, undefined);
+    assert.equal(probeJobRecord.probe_profile.direct_ip, '198.51.100.200');
+    assert.equal(probeJobRecord.probe_profile.resolver_host, '9.9.9.9');
+    assert.deepEqual(probeJobRecord.probe_profile.secondary_nameservers, ['ns.victim.example.test']);
     assert.equal(probeJobRecord.target.metadata?.direct_origin_ip, undefined);
     assert.equal(probeJobRecord.target.metadata?.alert_webhook_url, undefined);
-    for (const victim of [
-      '198.51.100.200', '198.51.100.201', '8.8.8.8', '9.9.9.9',
-      'ns.victim.example.test', 'webhook-victim.example.test',
-    ]) {
-      assert.equal(JSON.stringify(probeJobRecord).includes(victim), false, victim);
+    for (const kept of ['198.51.100.200', '9.9.9.9', 'ns.victim.example.test']) {
+      assert.equal(JSON.stringify(probeJobRecord).includes(kept), true, kept);
+    }
+    for (const stripped of ['198.51.100.201', '8.8.8.8', 'webhook-victim.example.test']) {
+      assert.equal(JSON.stringify(probeJobRecord).includes(stripped), false, stripped);
     }
   });
 
@@ -1566,16 +1567,16 @@ describe('postgres validation service adapters', () => {
     assert.equal(recovered.probe_job.nonce_hash, recovered.run.correlation.nonce_hash);
     assert.equal(JSON.stringify(recovered).includes(durableProbeJob.nonce), false);
     assert.equal(durableProbeJob.probe_profile.protected_host, 'edge.example.test');
-    assert.equal(durableProbeJob.probe_profile.direct_ip, undefined);
-    assert.equal(durableProbeJob.probe_profile.resolver_host, undefined);
-    assert.equal(durableProbeJob.probe_profile.secondary_nameservers, undefined);
+    assert.equal(durableProbeJob.probe_profile.direct_ip, '198.51.100.210');
+    assert.equal(durableProbeJob.probe_profile.resolver_host, '9.9.9.9');
+    assert.deepEqual(durableProbeJob.probe_profile.secondary_nameservers, ['ns.recovery-victim.example.test']);
     assert.equal(durableProbeJob.target.metadata?.direct_origin_ip, undefined);
     assert.equal(durableProbeJob.target.metadata?.webhook_url, undefined);
-    for (const victim of [
-      '198.51.100.210', '198.51.100.211', '9.9.9.9', '8.8.8.8',
-      'ns.recovery-victim.example.test', 'recovery-webhook-victim.example.test',
-    ]) {
-      assert.equal(JSON.stringify(durableProbeJob).includes(victim), false, victim);
+    for (const kept of ['198.51.100.210', '9.9.9.9', 'ns.recovery-victim.example.test']) {
+      assert.equal(JSON.stringify(durableProbeJob).includes(kept), true, kept);
+    }
+    for (const stripped of ['198.51.100.211', '8.8.8.8', 'recovery-webhook-victim.example.test']) {
+      assert.equal(JSON.stringify(durableProbeJob).includes(stripped), false, stripped);
     }
     assert.ok(recorded.auditEvents.some(
       ({ entry }) => entry.action === 'probe_job.dispatch_recovered',
@@ -1861,6 +1862,13 @@ describe('postgres validation service adapters', () => {
   });
 
   it('startTestRun denial gates create no run, probe job, or agent jobs', async () => {
+    // Safe windows, hourly caps and minimum intervals are advisory: they no longer deny.
+    const startable = (overrides) => createRecordingValidationRepositories({
+      createTestRun: async (_ctx, record) => ({ ...record, id: 'run_started' }),
+      updateTestRun: async (_ctx, id, patch) => ({ id, ...patch }),
+      appendEvent: async (_ctx, record) => ({ ...record }),
+      ...overrides,
+    });
     const ctx = { tenantId: 'ten_demo', userId: 'usr_1', role: 'engineer' };
     const startBody = {
       check_id: 'origin.direct_bypass.safe',
@@ -1880,7 +1888,7 @@ describe('postgres validation service adapters', () => {
     assert.deepEqual(concurrentResult, { error: 'concurrent_run_blocked', status: 409 });
     assertNoRunProbeOrAgentSideEffects(concurrent.validationCalls);
 
-    const closedWindow = createRecordingValidationRepositories({
+    const closedWindow = startable({
       getTargetGroup: async () =>
         baseStartTargetGroup({
           safe_test_windows: [
@@ -1889,26 +1897,29 @@ describe('postgres validation service adapters', () => {
         }),
       listAgents: async () => [baseOnlineAgent()],
     });
-    const windowDenied = await createPostgresValidationServices(closedWindow.repositories, {
+    const windowResult = await createPostgresValidationServices(closedWindow.repositories, {
       now: () => FIXED_NOW,
     }).testRuns.startTestRun(ctx, startBody);
-    assert.deepEqual(windowDenied, { error: 'safe_window_closed', status: 429 });
-    assertNoRunProbeOrAgentSideEffects(closedWindow.validationCalls);
-    assert.ok(closedWindow.auditEvents.some((a) => a.entry.action === 'test_run.safe_window_denied'));
+    assert.equal(windowResult.error, undefined);
+    assert.ok(windowResult.run.id);
+    assert.ok(closedWindow.auditEvents.some(
+      (a) => a.entry.action === 'test_run.demo_gates_bypassed'
+        && a.entry.metadata.bypassed.includes('safe_window'),
+    ));
 
-    const rateCap = createRecordingValidationRepositories({
+    const rateCap = startable({
       getTargetGroup: async () =>
         baseStartTargetGroup({ safety_policy: { max_runs_per_hour: 2 } }),
       readSafeAdmissionUsage: async () => ({ input_complete: true, runs_last_hour: 2, prior_run: null }),
       listAgents: async () => [baseOnlineAgent()],
     });
-    const rateDenied = await createPostgresValidationServices(rateCap.repositories, {
+    const rateResult = await createPostgresValidationServices(rateCap.repositories, {
       now: () => FIXED_NOW,
     }).testRuns.startTestRun(ctx, startBody);
-    assert.deepEqual(rateDenied, { error: 'safe_rate_cap_exceeded', status: 429 });
-    assertNoRunProbeOrAgentSideEffects(rateCap.validationCalls);
+    assert.equal(rateResult.error, undefined);
+    assert.ok(rateResult.run.id);
 
-    const minInterval = createRecordingValidationRepositories({
+    const minInterval = startable({
       getTargetGroup: async () =>
         baseStartTargetGroup({ safety_policy: { min_seconds_between_runs: 300 } }),
       readSafeAdmissionUsage: async () => ({ input_complete: true, runs_last_hour: 1,
@@ -1916,11 +1927,11 @@ describe('postgres validation service adapters', () => {
           check_id: 'origin.direct_bypass.safe', created_at: '2026-06-01T11:59:30.000Z' } }),
       listAgents: async () => [baseOnlineAgent()],
     });
-    const intervalDenied = await createPostgresValidationServices(minInterval.repositories, {
+    const intervalResult = await createPostgresValidationServices(minInterval.repositories, {
       now: () => FIXED_NOW,
     }).testRuns.startTestRun(ctx, startBody);
-    assert.deepEqual(intervalDenied, { error: 'safe_min_interval_active', status: 429 });
-    assertNoRunProbeOrAgentSideEffects(minInterval.validationCalls);
+    assert.equal(intervalResult.error, undefined);
+    assert.ok(intervalResult.run.id);
 
     const missingGroup = createRecordingValidationRepositories({
       getTargetGroup: async () => null,
@@ -2016,7 +2027,7 @@ describe('postgres validation service adapters', () => {
     }
   });
 
-  it('startTestRun denies kill switch and SOC-gated checks with audit', async () => {
+  it('startTestRun denies the kill switch and starts SOC-class checks without a bypass record', async () => {
     const ctx = { tenantId: 'ten_demo', userId: 'usr_1', role: 'admin' };
     const { repositories, auditEvents, validationCalls } = createRecordingValidationRepositories({
       isKillSwitchActiveForTenant: async () => true,
@@ -2033,13 +2044,24 @@ describe('postgres validation service adapters', () => {
     assertNoRunProbeOrAgentSideEffects(validationCalls);
 
     auditEvents.length = 0;
-    const soc = await testRuns.startTestRun(ctx, {
+    const socRepo = createRecordingValidationRepositories({
+      getTargetGroup: async () => baseStartTargetGroup(),
+      createTestRun: async (_ctx, record) => ({ ...record }),
+      updateTestRun: async (_ctx, id, patch) => ({ id, ...patch }),
+      appendEvent: async (_ctx, record) => ({ ...record }),
+    });
+    const soc = await createPostgresValidationServices(socRepo.repositories).testRuns.startTestRun(ctx, {
       check_id: 'high_scale.volumetric.request_only',
       target_group_id: 'tg_1',
+      target_id: 'tgt_1',
     });
-    assert.equal(soc.error, 'soc_gated_check');
-    assert.equal(soc.status, 403);
-    assert.ok(auditEvents.some((a) => a.entry.action === 'test_run.blocked_soc_gated'));
+    assert.equal(soc.error, undefined);
+    assert.ok(soc.run.id);
+    // No SOC gate remains, so the run records no soc_gated bypass.
+    assert.ok(!socRepo.auditEvents.some(
+      (a) => a.entry.action === 'test_run.demo_gates_bypassed'
+        && a.entry.metadata.bypassed.includes('soc_gated'),
+    ));
   });
 
   describe('startTestRun ownership gate', () => {
@@ -8242,7 +8264,7 @@ describe('postgres test policy service adapter', () => {
     assert.ok(auditEvents.some((e) => e.action === 'test_policy.created'));
   });
 
-  it('rejects missing target group, unknown check, and SOC-gated checks', async () => {
+  it('rejects missing target group and unknown check but accepts SOC-gated checks', async () => {
     const { repositories } = createTestPolicyRepositories({
       getTargetGroup: async (c, id) => (id === 'tg_1' ? activeGroup : null),
     });
@@ -8265,8 +8287,8 @@ describe('postgres test policy service adapter', () => {
       target_id: 'tgt_1',
       check_id: 'high_scale.volumetric.request_only',
     });
-    assert.equal(soc.error, 'soc_gated_check');
-    assert.equal(soc.status, 403);
+    assert.equal(soc.error, undefined);
+    assert.equal(soc.check_id, 'high_scale.volumetric.request_only');
   });
 
   it('rejects an incompatible effective target kind before Postgres persistence', async () => {

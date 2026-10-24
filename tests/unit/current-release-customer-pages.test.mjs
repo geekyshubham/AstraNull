@@ -499,7 +499,7 @@ describe('SOC console kill switch', () => {
 
   it('offers quick approval only for reviewable requests and names what is approved', () => {
     assert.match(socPage, /const reviewable = \['submitted', 'under_review'\]\.includes\(state\);/);
-    assert.match(socPage, /short: 'Pack not accepted'/);
+    assert.doesNotMatch(socPage, /short: 'Pack not accepted'/);
     assert.match(socPage, /short: 'Select a tenant'/);
     assert.match(socPage, /for tenant \$\{tenantDisplayName\(tenantId\)\} and move it to approved/);
     assert.doesNotMatch(socPage, /schedule: `Schedule high-scale request|start: `Start high-scale execution/);

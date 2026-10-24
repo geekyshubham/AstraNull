@@ -1,8 +1,6 @@
 import { withStandaloneTenantContext, withTenantContext } from './tenantContext.mjs';
 import { mapProbeJobRow } from './probeJobRepository.mjs';
 import { canonicalJsonStringify } from '../../lib/custody.mjs';
-import { getSubscriptionPlan } from '../../contracts/subscriptions.mjs';
-import { isWithinSafeTestWindowRaw } from '../../lib/safeTestGuards.mjs';
 
 const clock = (column) => `to_char(${column} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`;
 const millis = (value) => typeof value === 'string' ? value.replace(/(\.\d{3})000Z$/, '$1Z') : value;
@@ -14,18 +12,7 @@ export function createReviewedSafeExecutionRepository(pool, { audit, authority, 
     actor_user_id: ctx.workerId, actor_role: 'probe_worker', action, resource_type: 'probe_job', resource_id: job.id,
     metadata: { test_run_id: job.test_run_id, ...metadata } }, { client });
   async function tenantGate(client, ctx, { admission = false } = {}) {
-    const account = (await client.query('SELECT lifecycle_state FROM tenant_accounts WHERE tenant_id = $1 FOR SHARE', [ctx.tenantId])).rows[0];
-    const subscription = (await client.query('SELECT * FROM tenant_subscriptions WHERE tenant_id = $1 FOR SHARE', [ctx.tenantId])).rows[0];
-    if (account?.lifecycle_state !== 'active' || subscription?.status !== 'active'
-      || !Number.isFinite(Date.parse(subscription.effective_at)) || Date.parse(subscription.effective_at) > Date.now()) {
-      return { error: 'reviewed_execution_subscription_unavailable', status: 409 };
-    }
-    if (admission) {
-      const limit = subscription.limits_json?.safe_runs_per_hour ?? getSubscriptionPlan(subscription.plan_id)?.limits.safe_runs_per_hour;
-      const usage = (await client.query(`SELECT count(*) AS count FROM test_runs WHERE tenant_id = $1
-        AND created_at >= clock_timestamp() - interval '1 hour' AND safety_class = 'safe'`, [ctx.tenantId])).rows[0];
-      if (!Number.isSafeInteger(limit) || limit < 1 || Number(usage.count) >= limit) return { error: 'subscription_limit_exceeded', status: 429 };
-    }
+    // No account is gated on subscription state or hourly safe-run limits.
     return null;
   }
   return {
@@ -38,7 +25,6 @@ export function createReviewedSafeExecutionRepository(pool, { audit, authority, 
           metadata: { reason: denied.error } }, { client });
         return denied;
       }
-      if (!isWithinSafeTestWindowRaw(snapshot.targetGroup,Date.now())) return { error: 'safe_window_closed', status: 429 };
       return callback(snapshot);
     }, { client })),
     withTransaction: (ctx, jobId, callback) => withStandaloneTenantContext(pool, ctx.tenantId, async (client) => {
@@ -66,7 +52,6 @@ export function createReviewedSafeExecutionRepository(pool, { audit, authority, 
         withAuthority: (fn) => authority.withCurrentAuthority(ctx, { mode: 'compare', targetId: job.target_id,
           checkId: job.check_id, binding: job.constraints.reviewed_operation_binding }, async (snapshot) => {
           const denied = await tenantGate(client,ctx); if (denied) return denied;
-          if (!isWithinSafeTestWindowRaw(snapshot.targetGroup,Date.parse(await at()))) return { error: 'safe_window_closed', status: 429 };
           return fn(snapshot);
         }, { client }),
         async reserve(reservation) {

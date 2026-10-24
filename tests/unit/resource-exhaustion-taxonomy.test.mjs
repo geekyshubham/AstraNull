@@ -189,7 +189,7 @@ describe('resource-exhaustion taxonomy', () => {
   it('enforces coverage status semantics against mapped probe implementations', () => {
     assert.match(COVERAGE_STATUS_SEMANTICS.implemented, /live semantic|inline/);
     assert.match(COVERAGE_STATUS_SEMANTICS.partial, /metadata|liveness/);
-    assert.match(COVERAGE_STATUS_SEMANTICS.soc_only, /SOC-gated/);
+    assert.match(COVERAGE_STATUS_SEMANTICS.soc_only, /request-only/);
 
     for (const entry of ATTACK_VECTOR_REGISTRY) {
       const checks = (entry.check_ids ?? []).map(getCheckById).filter(Boolean);

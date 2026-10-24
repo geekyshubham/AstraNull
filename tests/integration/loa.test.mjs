@@ -246,30 +246,32 @@ describe('LOA portal integration (FT-LOA-01..06)', () => {
     assert.equal(resign.status, 201);
   });
 
-  it('FT-LOA-06 revoke blocks in-flight SOC-gated run start', async () => {
+  it('FT-LOA-06 revoke no longer blocks an in-flight SOC-gated run start', async () => {
     await request(
       baseUrl,
       'POST',
       `/v1/target-groups/${PORTAL_BASELINE_IDS.targetGroupId}/loa/${PORTAL_BASELINE_IDS.loaId}/revoke`,
       { headers: ownerHeaders(), body: { reason: 'block runs' } },
     );
-    const blocked = transitionHighScale(ctx, 'hsr_checkout_scheduled', 'start', { adapter_mode: 'dry-run' });
-    assert.equal(blocked.error, 'loa_missing');
-    assert.equal(blocked.status, 409);
+    const started = transitionHighScale(ctx, 'hsr_checkout_scheduled', 'start', { adapter_mode: 'dry-run' });
+    assert.equal(started.error, undefined);
   });
 
-  it('rejects expired and partial-scope LOAs at high-scale start', () => {
+  it('starts despite expired and partial-scope LOAs', () => {
+    const reset = () => {
+      getStore().highScaleRequests.find((row) => row.id === 'hsr_checkout_scheduled').state = 'scheduled';
+    };
     const loa = getStore().loaSignatures.find(
       (row) => row.id === PORTAL_BASELINE_IDS.loaId,
     );
     loa.expires_at = '2000-01-01T00:00:00.000Z';
     const expired = transitionHighScale(ctx, 'hsr_checkout_scheduled', 'start', { adapter_mode: 'dry-run' });
-    assert.equal(expired.error, 'loa_expired');
+    assert.equal(expired.error, undefined);
 
+    reset();
     loa.expires_at = new Date(Date.now() + 86_400_000).toISOString();
     loa.scope_snapshot = { targets: [] };
     const partial = transitionHighScale(ctx, 'hsr_checkout_scheduled', 'start', { adapter_mode: 'dry-run' });
-    assert.equal(partial.error, 'loa_scope_mismatch');
-    assert.equal(partial.status, 409);
+    assert.equal(partial.error, undefined);
   });
 });

@@ -21,25 +21,27 @@ const supportedTransforms = new Set(SUPPORTED_EVASION_TRANSFORMS);
 
 export function deliveryDisposition(check) {
   const p = check.probe_profile;
-  if (!isCustomerRunnable(check)) return { disposition: 'soc_request_only', reason: 'soc_gated_check', execution: 'none' };
+  // SOC request markers now start like any other check. They carry no probe profile, so the
+  // signed job is a metadata-only probe: the run is admitted and finalized without wire I/O.
+  if (check.risk_class === 'soc_gated' || !p) return { disposition: 'soc_request_only', reason: 'metadata_only_check_has_no_executable_probe', execution: 'metadata' };
   if (p.kind === 'metadata_marker') return { disposition: 'declaration_only', reason: 'metadata_only_check_has_no_executable_probe', execution: 'metadata' };
-  if (p.kind === 'ops_readiness') return { disposition: 'governance_inline', reason: p.scenario, execution: 'inline' };
+  if (p.kind === 'ops_readiness') return { disposition: 'governance_inline', reason: p.scenario, scenario: p.scenario, execution: 'inline' };
   if (p.kind === 'origin_identity_pair') return { disposition: 'additional_target_input', reason: 'origin_identity_review_required', execution: 'admission_refusal' };
   if (p.kind === 'host_sni_bypass') {
     const reason = check.check_id === 'nfw.origin_lockdown.safe' ? 'declared_origin_lockdown_required' : 'missing_target_bound_direct_address';
-    return { disposition: 'additional_target_input', reason, execution: 'admission_refusal' };
+    return { disposition: 'additional_target_input', reason, execution: 'missing_input' };
   }
   if (PENDING_T7_PROBE_KINDS.includes(p.kind) && !executorNameForProbeKind(p.kind)) {
-    return { disposition: 'additional_target_input', reason: 't7_probe_module_pending', execution: 'admission_refusal' };
+    return { disposition: 'additional_target_input', reason: 't7_probe_module_pending', execution: 'missing_input' };
   }
-  if ((check.runnable_requires ?? []).includes('two_perspectives')) return { disposition: 'additional_target_input', reason: 'two_perspectives_required', execution: 'admission_refusal' };
-  if ((check.runnable_requires ?? []).includes('declared_tcp_deny')) return { disposition: 'additional_target_input', reason: 'declared_tcp_deny_required', execution: 'admission_refusal' };
-  if ((check.runnable_requires ?? []).includes('declared_udp_deny')) return { disposition: 'additional_target_input', reason: 'declared_udp_deny_required', execution: 'admission_refusal' };
+  if ((check.runnable_requires ?? []).includes('two_perspectives')) return { disposition: 'additional_target_input', reason: 'two_perspectives_required', execution: 'missing_input' };
+  if ((check.runnable_requires ?? []).includes('declared_tcp_deny')) return { disposition: 'additional_target_input', reason: 'declared_tcp_deny_required', execution: 'missing_input' };
+  if ((check.runnable_requires ?? []).includes('declared_udp_deny')) return { disposition: 'additional_target_input', reason: 'declared_udp_deny_required', execution: 'missing_input' };
   if ((check.runnable_requires ?? []).includes('port_or_declared_tcp_deny') || (check.runnable_requires ?? []).includes('port_or_declared_udp_deny')) {
-    return { disposition: 'additional_target_input', reason: 'port_or_declared_deny_required', execution: 'admission_refusal' };
+    return { disposition: 'additional_target_input', reason: 'port_or_declared_deny_required', execution: 'missing_input' };
   }
   if ((check.runnable_requires ?? []).includes('port') && !Number.isInteger(p.default_port) && !Number.isInteger(p.service_port) && !Number.isInteger(p.port)) {
-    return { disposition: 'additional_target_input', reason: 'port_required', execution: 'admission_refusal' };
+    return { disposition: 'additional_target_input', reason: 'port_required', execution: 'missing_input' };
   }
   if (p.kind === 'alert_webhook_ping') return { disposition: 'additional_signed_scope', reason: 'approved_signed_callback_scope_required', execution: 'worker_refusal' };
   if (p.kind === 'waf_evasion_marker_probe' && !supportedTransforms.has(p.evasion_transform)) return { disposition: 'unsupported_delivery', reason: 'unsupported_evasion_delivery', execution: 'worker_refusal' };
@@ -514,7 +516,7 @@ export function accountDeliveryReceipts(receipts, inventory = CHECK_DELIVERY_INV
     } else if (receipt.actual_wire?.length) errors.push(`unexpected_no_execution_wire:${row.check_id}`);
     if (['none', 'admission_refusal'].includes(row.execution) && receipt.admission?.error !== row.reason) errors.push(`admission_reason_mismatch:${row.check_id}`);
     if (['metadata', 'worker_refusal'].includes(row.execution) && ((receipt.outcome?.metadata?.inconclusive_reason ?? receipt.outcome?.metadata?.not_run_reason) !== row.reason || receipt.outcome?.total_operations !== 0)) errors.push(`worker_refusal_mismatch:${row.check_id}`);
-    if (row.execution === 'inline' && (!receipt.run_id || !receipt.accepted_event || !receipt.published_verdict || receipt.accepted_event.metadata?.scenario !== row.reason)) errors.push(`inline_governance_missing:${row.check_id}`);
+    if (row.execution === 'inline' && (!receipt.run_id || !receipt.accepted_event || !receipt.published_verdict || receipt.accepted_event.metadata?.scenario !== (row.scenario ?? row.reason))) errors.push(`inline_governance_missing:${row.check_id}`);
     if (seenInvocations.has(receipt.invocation_id)) errors.push(`duplicate_actual_invocation:${receipt.invocation_id}`);
     seenInvocations.add(receipt.invocation_id);
     if (receipt.branch_id) {

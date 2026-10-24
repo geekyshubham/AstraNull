@@ -59,10 +59,33 @@ export function evidenceCapabilityCopy(capability) {
 export function vectorTargetAvailability(vector, checks, target) {
   const disposition = text(vector?.execution_disposition);
   if (disposition === 'soc_gated_only') {
+    if (!target) {
+      return {
+        id: 'soc_gated',
+        label: 'Request-only check',
+        detail: 'Choose an exact declared domain or endpoint to start the mapped request-only check.',
+        tone: 'muted',
+        runnableChecks: [],
+      };
+    }
+    const governedIds = new Set(values(vector?.soc_check_ids));
+    const mappedGoverned = checks.filter((check) => (
+      !isDeclarationOnlyCheck(check) && governedIds.has(text(check.check_id))
+    ));
+    const runnableGoverned = mappedGoverned.filter((check) => vectorCheckSupportsTarget(check, target));
+    if (runnableGoverned.length > 0) {
+      return {
+        id: 'soc_gated',
+        label: 'Request-only check available',
+        detail: `${runnableGoverned.length} mapped request-only check${runnableGoverned.length === 1 ? '' : 's'} can be started on this target; the governed workflow records the verdict.`,
+        tone: 'success',
+        runnableChecks: runnableGoverned,
+      };
+    }
     return {
       id: 'soc_gated',
-      label: 'SOC-gated only',
-      detail: 'This scenario is governed and not customer-runnable directly.',
+      label: 'Request-only check',
+      detail: 'The mapped request-only check does not apply to this target kind.',
       tone: 'muted',
       runnableChecks: [],
     };

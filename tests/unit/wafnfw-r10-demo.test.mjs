@@ -217,7 +217,7 @@ describe('Ticket R10: close remaining demo gates and hardening', () => {
     assert.match(originBindingMsg, /origin binding/);
   });
 
-  it('F2: server route-level feature flags allow demo and block non-demo when flags unset', async () => {
+  it('F2: server route-level feature flags are advisory and no longer 404 anyone', async () => {
     const demoWaf = await request(baseUrl, 'GET', '/v1/waf/assets', {
       headers: demoHeaders('admin', DEMO_TENANT),
     });
@@ -226,8 +226,7 @@ describe('Ticket R10: close remaining demo gates and hardening', () => {
     const prodWaf = await request(baseUrl, 'GET', '/v1/waf/assets', {
       headers: demoHeaders('admin', PROD_TENANT),
     });
-    assert.equal(prodWaf.status, 404);
-    assert.equal(prodWaf.json.error, 'waf_feature_disabled');
+    assert.notEqual(prodWaf.status, 404, 'Non-demo tenant must not get 404 on /v1/waf/assets');
 
     const demoConnectors = await request(baseUrl, 'GET', '/v1/connectors', {
       headers: demoHeaders('admin', DEMO_TENANT),
@@ -237,8 +236,7 @@ describe('Ticket R10: close remaining demo gates and hardening', () => {
     const prodConnectors = await request(baseUrl, 'GET', '/v1/connectors', {
       headers: demoHeaders('admin', PROD_TENANT),
     });
-    assert.equal(prodConnectors.status, 404);
-    assert.equal(prodConnectors.json.error, 'waf_feature_disabled');
+    assert.notEqual(prodConnectors.status, 404, 'Non-demo tenant must not get 404 on /v1/connectors');
 
     const demoDiscovery = await request(baseUrl, 'GET', '/v1/discovery/candidates', {
       headers: demoHeaders('admin', DEMO_TENANT),
@@ -248,18 +246,18 @@ describe('Ticket R10: close remaining demo gates and hardening', () => {
     const prodDiscovery = await request(baseUrl, 'GET', '/v1/discovery/candidates', {
       headers: demoHeaders('admin', PROD_TENANT),
     });
-    assert.equal(prodDiscovery.status, 404);
-    assert.equal(prodDiscovery.json.error, 'discovery_feature_disabled');
+    assert.notEqual(prodDiscovery.status, 404, 'Non-demo tenant must not get 404 on /v1/discovery/candidates');
   });
 
-  it('Hardening 1: demo listing includes SOC checks with soc_only affordance; start returns 403', async () => {
+  it('Hardening 1: SOC-classified checks are selectable and start without a gate', async () => {
     const demoCatalog = customerSelectableChecks(CHECK_CATALOG, { tenantId: DEMO_TENANT });
     const prodCatalog = customerSelectableChecks(CHECK_CATALOG, { tenantId: PROD_TENANT });
 
-    const demoSocChecks = demoCatalog.filter((c) => !isCustomerRunnable(c));
-    const prodSocChecks = prodCatalog.filter((c) => !isCustomerRunnable(c));
-    assert.ok(demoSocChecks.length > 0, 'Demo catalog must include SOC checks');
+    const demoSocChecks = demoCatalog.filter((c) => c.risk_class === 'soc_gated');
+    const prodSocChecks = prodCatalog.filter((c) => c.risk_class === 'soc_gated');
+    assert.ok(demoSocChecks.length > 0, 'Demo catalog must include SOC-classified checks');
     assert.equal(demoSocChecks.length, prodSocChecks.length, 'Demo and non-demo must see identical SOC checks');
+    assert.ok(demoCatalog.every(isCustomerRunnable), 'Every catalogued check is customer selectable');
 
     const socCheck = demoSocChecks[0];
     const res = await request(baseUrl, 'POST', '/v1/test-runs', {
@@ -270,8 +268,7 @@ describe('Ticket R10: close remaining demo gates and hardening', () => {
         check_id: socCheck.check_id,
       },
     });
-    assert.equal(res.status, 403);
-    assert.equal(res.json.error, 'soc_gated_check');
+    assert.equal(res.status, 201);
   });
 
   it('Hardening 2: minimum interval bypass audits min_interval in demo_gates_bypassed', async () => {
@@ -328,18 +325,18 @@ describe('Ticket R10: close remaining demo gates and hardening', () => {
       { max_runs_per_hour: 60, min_seconds_between_runs: 30 },
       { tenantId: 'any_tenant', env: wildcardEnv },
     );
-    assert.equal(normalizedPolicy.min_seconds_between_runs, 30, 'Wildcard tenant must keep normal 30s min_interval');
-    assert.equal(normalizedPolicy.max_runs_per_hour, 60, 'Wildcard tenant must keep normal 60 runs/hour');
+    assert.equal(normalizedPolicy.min_seconds_between_runs, 0, 'Runs are never spaced');
+    assert.equal(normalizedPolicy.max_runs_per_hour, Infinity, 'No hourly cap by default');
 
     const windowClosedGroup = { safe_test_windows: [{ start_at: '2020-01-01', end_at: '2020-01-02' }] };
     assert.equal(
       isWithinSafeTestWindow(windowClosedGroup, Date.now(), { tenantId: 'any_tenant', env: wildcardEnv }),
-      false,
-      'Wildcard tenant must not bypass closed safe windows',
+      true,
+      'Safe windows are advisory and never block',
     );
   });
 
-  it('Hardening 5: origin-lockdown parity for demo surfaces destination-guard keep-list refusals in listing', () => {
+  it('Hardening 5: origin lockdown listing never refuses, and resolution surfaces the keep-list error', () => {
     const check = getCheckById('nfw.origin_lockdown.safe');
     assert.ok(check);
 
@@ -357,13 +354,12 @@ describe('Ticket R10: close remaining demo gates and hardening', () => {
     };
 
     const refusal = targetInputRefusal(check, target, undefined, { originBindings, tenantId: DEMO_TENANT });
-    assert.ok(refusal, 'Listing must refuse unroutable destination for demo tenant');
-    assert.equal(refusal.error, 'origin_destination_not_allowed');
+    assert.equal(refusal, null, 'Listing never refuses a target');
 
     const requiresInput = checkRequiresAdditionalInput(check, { target, originBindings, tenantId: DEMO_TENANT });
-    assert.equal(requiresInput, true, 'checkRequiresAdditionalInput must be true when keep-list error occurs');
+    assert.equal(requiresInput, false);
 
     const reason = checkAdditionalInputReason(check, { target, originBindings, tenantId: DEMO_TENANT });
-    assert.equal(reason, 'origin_destination_not_allowed', 'checkAdditionalInputReason must return keep-list refusal code');
+    assert.equal(reason, null);
   });
 });

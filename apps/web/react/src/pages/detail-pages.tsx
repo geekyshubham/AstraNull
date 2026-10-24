@@ -2397,8 +2397,8 @@ function HighScaleDetailView({
 }
 
 
-function socStartBlockedReason(failing: string[]) {
-  return `Start stays disabled until every request gate passes. Not yet passing: ${failing.join(', ')}.`;
+function socStartChecklistNote(failing: string[]) {
+  return `Start stays available; these are not recorded yet: ${failing.join(', ')}.`;
 }
 
 const SOC_ADAPTER_POLL_MS = 12_000;
@@ -2535,7 +2535,7 @@ function SocRequestDetailView({
   const [scopeTargets, setScopeTargets] = useState<DataItem[]>([]);
   const [scheduleDraft, setScheduleDraft] = useState<{ start: string; end: string }>({ start: '', end: '' });
   const staffSocSurface = session.principal === 'staff' && isStaffSocRole(session);
-  const isSoc = staffSocSurface || (session.role === 'soc' && session.principal !== 'staff');
+  const isSoc = staffSocSurface || session.principal !== 'staff';
   const actionTenantId =
     String(tenantIdProp ?? '').trim()
     || getString(entity, ['tenant_id'], '')
@@ -2900,9 +2900,16 @@ function SocRequestDetailView({
     const key = `${entityId}|${state}|${requestedWindowStart}|${requestedWindowEnd}`;
     if (scheduleDraftKey.current === key) return;
     scheduleDraftKey.current = key;
-    setScheduleDraft(scheduleDefault
-      ? { start: toDatetimeLocalValue(scheduleDefault.window_start), end: toDatetimeLocalValue(scheduleDefault.window_end) }
-      : { start: '', end: '' });
+    // The backend accepts any window, so a request with no usable requested window still gets a
+    // sensible default instead of losing the schedule form entirely.
+    const fallback = scheduleDefault ?? {
+      window_start: new Date(Date.now() + 5 * 60_000).toISOString(),
+      window_end: new Date(Date.now() + 65 * 60_000).toISOString(),
+    };
+    setScheduleDraft({
+      start: toDatetimeLocalValue(fallback.window_start),
+      end: toDatetimeLocalValue(fallback.window_end),
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [entityId, state, requestedWindowStart, requestedWindowEnd]);
 
@@ -2967,36 +2974,37 @@ function SocRequestDetailView({
         : windowState === 'upcoming'
           ? `Opens ${formatTimestamp(windowStart)}`
           : windowState === 'expired'
-            ? `Window ended ${formatTimestamp(windowEnd)}: reschedule required`
+            ? `Window ended ${formatTimestamp(windowEnd)}: reschedule optional`
             : 'No scheduled window recorded'
     },
     { label: 'Scope hash recorded', pass: scopeRecorded, detail: scopeRecorded ? 'Scope binding recorded' : 'Scope binding not returned' },
-    { label: `Two SOC approvals recorded (${Math.min(approverCount, 2)}/2)`, pass: approverCount >= 2, detail: `${formatNumber(approverCount)} distinct ${pluralize(approverCount, 'approver')}` },
+    { label: `SOC approval recorded (${approverCount})`, pass: approverCount >= 1, detail: `${formatNumber(approverCount)} distinct ${pluralize(approverCount, 'approver')}` },
     killSwitchGate
   ];
   const passedGates = preflightGates.filter((gate) => gate.pass).length;
   const preflightReady = passedGates === preflightGates.length;
-  const startBlockedReason = preflightReady ? '' : socStartBlockedReason(preflightGates.filter((gate) => !gate.pass).map((gate) => gate.label));
+  const startChecklistNote = preflightReady ? '' : socStartChecklistNote(preflightGates.filter((gate) => !gate.pass).map((gate) => gate.label));
   const windowKpi = windowState === 'open'
     ? { value: `Safe window open until ${formatTimestamp(windowEnd)}`, delta: 'Inside the scheduled window', tone: 'success' as const }
     : windowState === 'upcoming'
       ? { value: `Opens ${formatTimestamp(windowStart)}`, delta: 'Scheduled, not open yet', tone: 'muted' as const }
       : windowState === 'expired'
-        ? { value: `Window expired ${formatTimestamp(windowEnd)}`, delta: 'Reschedule required', tone: (state === 'running' ? 'danger' : 'warn') as StatusBadgeTone }
+        ? { value: `Window expired ${formatTimestamp(windowEnd)}`, delta: 'Reschedule optional', tone: (state === 'running' ? 'danger' : 'warn') as StatusBadgeTone }
         : { value: 'Unscheduled', delta: 'Awaiting schedule', tone: 'muted' as const };
   const scheduleStartIso = fromDatetimeLocalValue(scheduleDraft.start);
   const scheduleEndIso = fromDatetimeLocalValue(scheduleDraft.end);
   const scheduleErrors = scheduleWindowErrors(entity, { window_start: scheduleStartIso, window_end: scheduleEndIso });
+  // Only malformed values block the submit; the requested-window and letter bounds are recorded
+  // context that the server no longer enforces.
+  const scheduleBlockingErrors = scheduleErrors.filter((entry) => entry.blocking !== false);
   const scheduleStartError = scheduleErrors.filter((entry) => entry.field === 'window_start').map((entry) => entry.message).join(' ');
   const scheduleEndError = scheduleErrors.filter((entry) => entry.field === 'window_end').map((entry) => entry.message).join(' ');
   const requestedWindowState = scheduledWindowState(requestedWindowStart, requestedWindowEnd);
-  const scheduleUnavailableReason = !requestedWindowStart || !requestedWindowEnd || requestedWindowState === 'unscheduled'
-    ? 'The customer-requested window is not recorded, so this request cannot be scheduled. Ask the customer to submit a new request with a safe window.'
-    : requestedWindowState === 'expired'
-      ? `The customer-requested window ended ${formatTimestamp(requestedWindowEnd)}. This request cannot be scheduled; ask the customer to submit a new request with a current window.`
-      : !scheduleDefault
-        ? 'No part of the customer-requested window remains inside the authorization letter validity. Ask the customer to refresh the authorization letter.'
-        : '';
+  const scheduleNote = requestedWindowState === 'expired'
+    ? `The customer-requested window ended ${formatTimestamp(requestedWindowEnd)}; the schedule is not bound to it.`
+    : !scheduleDefault
+      ? 'The recorded window and authorization letter leave no preferred slot; pick any window.'
+      : '';
   const viewerTimezone = viewerTimeZone() || 'your local time';
   const stopBusy = busy === `stop-${entityId}`;
 
@@ -3081,30 +3089,29 @@ function SocRequestDetailView({
                   size="sm"
                   variant="secondary"
                   loading={busy === `approve-${entityId}`}
-                  disabled={busy !== '' || !packReady}
-                  title={packReady ? undefined : 'Approval stays disabled until the authorization pack is accepted.'}
+                  disabled={busy !== ''}
+                  title={packReady ? undefined : 'Approval is recorded now; the pack stays listed as missing evidence.'}
                   aria-describedby={packReady ? undefined : 'soc-approve-disabled-reason'}
                   onClick={() => void socAction('approve')}
                 >Approve</Button>
               ) : null}
-              {state === 'scheduled' ? <Button size="sm" variant="default" loading={busy === `start-${entityId}`} disabled={busy !== '' || !preflightReady} title={startBlockedReason || undefined} aria-describedby={preflightReady ? undefined : 'soc-start-disabled-reason'} onClick={() => void socAction('start')}>Start</Button> : null}
+              {['submitted', 'under_review', 'approved', 'scheduled'].includes(state) ? <Button size="sm" variant="default" loading={busy === `start-${entityId}`} disabled={busy !== ''} title={startChecklistNote || undefined} aria-describedby={preflightReady ? undefined : 'soc-start-disabled-reason'} onClick={() => void socAction('start')}>Start</Button> : null}
               {state === 'stopped' && hasPostTestReport ? <Button size="sm" variant="secondary" loading={busy === `close-${entityId}`} disabled={busy !== ''} onClick={() => void socAction('close')}>Close</Button> : null}
               {state === 'stopped' && !hasPostTestReport ? <Button size="sm" variant="secondary" disabled title={postTestReportError ? 'Post-test report status could not be loaded' : 'Attach a post-test report before closing'}>Close</Button> : null}
             </div>
             {['submitted', 'under_review'].includes(state) && !packReady ? (
-              <p className="muted text-xs" id="soc-approve-disabled-reason">Approval stays disabled until the authorization pack is accepted (every required artifact and provider approval).</p>
+              <p className="muted text-xs" id="soc-approve-disabled-reason">Nothing blocks approval; the missing pack artifacts stay listed until they are uploaded.</p>
             ) : null}
             {state === 'running' ? <p className="muted small">Stop this test from the live banner above.</p> : null}
             {state === 'approved' ? (
-              scheduleUnavailableReason ? (
-                <div className="form-banner neutral" role="note">{scheduleUnavailableReason}</div>
-              ) : (
+              <>
+                {scheduleNote ? <div className="form-banner neutral" role="note">{scheduleNote}</div> : null}
                 <form
                   className="product-form"
                   aria-label="Schedule governed window"
                   onSubmit={(event) => {
                     event.preventDefault();
-                    if (scheduleErrors.length || !scheduleStartIso || !scheduleEndIso) return;
+                    if (scheduleBlockingErrors.length || !scheduleStartIso || !scheduleEndIso) return;
                     void socAction('schedule', { window_start: scheduleStartIso, window_end: scheduleEndIso });
                   }}
                 >
@@ -3137,12 +3144,12 @@ function SocRequestDetailView({
                     {scheduleEndError ? <small className="field-error" id="soc-schedule-end-error">{scheduleEndError}</small> : null}
                   </label>
                   <div className="form-actions full">
-                    <Button type="submit" size="sm" variant="secondary" loading={busy === `schedule-${entityId}`} disabled={busy !== '' || scheduleErrors.length > 0}>Schedule</Button>
+                    <Button type="submit" size="sm" variant="secondary" loading={busy === `schedule-${entityId}`} disabled={busy !== '' || scheduleBlockingErrors.length > 0}>Schedule</Button>
                   </div>
                 </form>
-              )
+              </>
             ) : null}
-            {state === 'scheduled' && !preflightReady ? <p className="muted text-xs" id="soc-start-disabled-reason">{startBlockedReason}</p> : null}
+            {['submitted', 'under_review', 'approved', 'scheduled'].includes(state) && !preflightReady ? <p className="muted text-xs" id="soc-start-disabled-reason">{startChecklistNote}</p> : null}
             {state === 'stopped' && reportBusy ? <p className="muted small">Checking for an attached post-test report…</p> : null}
             {state === 'stopped' && !reportBusy && postTestReportError ? (
               <div className="form-banner error row-actions" role="alert">
@@ -3351,7 +3358,7 @@ function checkExecutionSemantics(check: DataItem): CheckExecutionSemantics {
   const safetyClass = getString(check, ['safety_class'], '');
   const profileKind = getNestedString(check, ['probe_profile', 'kind'], '');
   const maxRequests = getNestedNumber(check, ['probe_profile', 'max_requests'], NaN);
-  if (safetyClass === 'soc_gated') return { kind: 'Request only', cap: 'No customer execution', profileKind };
+  if (safetyClass === 'soc_gated') return { kind: 'Request only', cap: 'Runs through the SOC workflow', profileKind };
   if (profileKind === 'metadata_marker') return { kind: 'Metadata evaluation', cap: 'No network I/O', profileKind };
   if (profileKind === 'ops_readiness') return { kind: 'Operations self-check', cap: '1 self-check', profileKind };
   if (Number.isFinite(maxRequests) && maxRequests > 0) {
@@ -3388,9 +3395,9 @@ const GENERIC_CHECK_VERDICT_LOGIC = 'Verdict when probe external_result aligns w
 
 function executionSpecificCheckCopy(kind: 'remediation' | 'explanation' | 'verdict', execution: CheckExecutionSemantics) {
   if (execution.kind === 'Request only') {
-    if (kind === 'remediation') return 'Review authorization, declared scope, and SOC prerequisites, then contact support to arrange this scenario with AstraNull SOC.';
-    if (kind === 'explanation') return 'This catalog entry describes a governed request-only scenario. It performs no customer-side execution.';
-    return 'A verdict requires evidence recorded by the governed SOC workflow; this catalog entry does not execute for customers.';
+    if (kind === 'remediation') return 'Schedule it like any other check; the SOC approval and authorization pack are recorded, not required, and stay attached to the request.';
+    if (kind === 'explanation') return 'This high-scale scenario runs through the SOC workflow. The approval, pack and window are recorded as provenance.';
+    return 'The verdict follows the evidence recorded by the governed run.';
   }
   if (execution.kind === 'Metadata evaluation') {
     if (kind === 'remediation') return 'Review the catalog inputs and recorded metadata that produced this result.';
@@ -3655,7 +3662,8 @@ function CheckDetailPage({
   const family = getString(check, ['vector_family', 'family'], '');
   const safetyClass = getString(check, ['safety_class'], '');
   const execution = checkExecutionSemantics(check);
-  const customerRunnable = safetyClass === 'safe';
+  // SOC-gated checks are scheduled and run like any other; the SOC workflow is where they execute.
+  const customerRunnable = safetyClass === 'safe' || safetyClass === 'soc_gated';
   const presentation = checkPresentation(check);
   const description = presentation.purpose;
   const title = presentation.name;
@@ -3828,7 +3836,7 @@ function CheckDetailPage({
       {!customerRunnable ? (
         <div className="form-banner neutral" role="note">
           {safetyClass === 'soc_gated'
-            ? <>This catalog entry is SOC-governed. High-scale validation is arranged with AstraNull SOC. <a href="#support">Contact support</a> to request one.</>
+            ? <>This high-scale check runs through the SOC workflow. Schedule and run it normally; the SOC approval is recorded.</>
             : 'This check is not marked customer-runnable, so it cannot be scheduled.'}
         </div>
       ) : null}
@@ -4180,13 +4188,13 @@ function PolicyDetailPage({
     },
     {
       label: 'Check available and customer-runnable',
-      status: !check.checkId || (checks.length > 0 && !check.inCatalog) || getString(check.record, ['safety_class'], '') === 'soc_gated' ? 'blocked' : 'met',
+      status: !check.checkId || (checks.length > 0 && !check.inCatalog) ? 'blocked' : 'met',
       detail: !check.checkId
         ? 'The schedule does not record a check.'
         : checks.length > 0 && !check.inCatalog
           ? `Check ${check.checkId} is not in the current catalog.`
           : getString(check.record, ['safety_class'], '') === 'soc_gated'
-            ? 'SOC-governed check; it cannot dispatch from a customer schedule.'
+            ? 'High-scale SOC workflow check; the schedule dispatches it like any other.'
             : check.name
     },
     {

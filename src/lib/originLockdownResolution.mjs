@@ -312,7 +312,9 @@ export function hasActiveVerifiedOriginBinding(target, declarations, originBindi
       bindings: list,
       records,
     });
-    return Boolean(res?.ok);
+    // The lockdown resolver only applies to hostname targets. An IP-literal direct
+    // address still needs its binding's origin proof, checked below.
+    if (res) return Boolean(res.ok);
   }
 
   if (records && binding.origin_target_id) {

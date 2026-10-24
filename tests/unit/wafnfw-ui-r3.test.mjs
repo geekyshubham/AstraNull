@@ -46,7 +46,7 @@ function serverReasonCodes() {
 describe('per-item refusal codes', () => {
   it('has plain copy for every reason the server can return', () => {
     const codes = serverReasonCodes();
-    assert.ok(codes.length >= 12, codes.join(', '));
+    assert.ok(codes.length >= 11, codes.join(', '));
     for (const code of codes) {
       const copy = additionalInputReasonCopy(code);
       assert.ok(copy, `missing copy for ${code}`);
@@ -75,8 +75,9 @@ describe('per-item refusal codes', () => {
     };
     for (const [checkId, [reason, section]] of Object.entries(expected)) {
       const item = serverItem(getCheckById(checkId), EMPTY);
-      assert.equal(item.additional_input_reason, reason, checkId);
-      const prerequisite = checkPrerequisite(item, { serverRunnableIndex: targetRunnableIndex([item]) });
+      assert.equal(item.requires_additional_input, false, `${checkId} is never withheld`);
+      // The copy is still reachable from a server refusal of the same code.
+      const prerequisite = checkPrerequisite(item, { serverRunnable: { runnable: false, reason } });
       assert.equal(prerequisite.reason, reason);
       assert.equal(prerequisite.label, ADDITIONAL_INPUT_REASON_COPY[reason].label);
       assert.equal(prerequisiteSection(prerequisite), section);

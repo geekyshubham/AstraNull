@@ -14,19 +14,13 @@ Related: [plan](../implementation/provider-neutral-protection-validation-plan.md
 | Part | Gate | Why |
 |---|---|---|
 | PV-01 evidence correction (scanner, `host_sni_bypass` executor, correlation, projections, portal labels) | **Not gated.** It ships as a correctness fix. | Timeouts, refusals, TLS errors and generic error pages must stop producing protection claims for every tenant, whether or not the new workflow is enabled. |
-| PV-02 to PV-08 workflow (entry paths, comparisons, firewall acceptance, matrix, report, findings, retests, configuration explanations, portal sections) | Tenant gate `protection_validation`, **off by default**. | Additive feature; enabled per tenant after staging evidence. |
+| PV-02 to PV-08 workflow (entry paths, comparisons, firewall acceptance, matrix, report, findings, retests, configuration explanations, portal sections) | **Always on** for every tenant. | Additive feature; no flag or allow-list to enable. |
 
-## Tenant feature gate
+## Feature surface (always on)
 
-Resolved by `isProtectionValidationEnabled` in `src/services/tenantDeploymentFeatures.mjs`, in this order:
+`isProtectionValidationEnabled` in `src/services/tenantDeploymentFeatures.mjs` delegates to `protectionValidationEnabledFor()` in `src/lib/tenantFeatureAccess.mjs`, which returns `true` for every tenant. The `ASTRANULL_PROTECTION_VALIDATION_ENABLED*` variables are still read but no longer change the outcome, so `404 protection_validation_disabled` is unreachable and the portal never shows a "not enabled" notice.
 
-1. `ASTRANULL_PROTECTION_VALIDATION_ENABLED=0` turns the workflow off for **every** tenant, including demo tenants (ADR-0016). This is the rollback switch.
-2. `ASTRANULL_PROTECTION_VALIDATION_ENABLED_TENANTS` (JSON object, `tenant_id` to `true`/`false` or `1`/`0`) overrides the default per tenant.
-3. Otherwise `ASTRANULL_PROTECTION_VALIDATION_ENABLED` (unset means off). Demo tenants are on unless step 1 or an explicit false tenant override applies.
-
-Demo detection (`isDemoAutoVerifyTenant`, committed before this change set) treats every tenant id starting with `Astra-` as a demo tenant, plus the ids in `ASTRANULL_DEMO_AUTO_VERIFY_TENANTS`. Confirm no customer tenant id matches that prefix before deploying, or those tenants get the workflow without an explicit enable. An explicit false override can disable one demo tenant.
-
-`GET /v1/tenant/deployment-features` reports `protection_validation`. With the gate off, every protection-validation route and `GET /v1/reports/protection-validation` return `404 protection_validation_disabled`, and the portal shows a "not enabled" notice and calls no protection-validation route.
+`GET /v1/tenant/deployment-features` still reports `protection_validation` (always `true`).
 
 Related settings:
 

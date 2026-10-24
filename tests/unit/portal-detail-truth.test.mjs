@@ -22,7 +22,7 @@ describe('portal detail truth labels', () => {
     assert.match(source, /maxRequests === 1 \? '1 probe operation' : `Up to \$\{maxRequests\} probe operations`/);
     assert.match(source, /up to two DNS destination-vetting resolver operations per hostname destination/);
     assert.match(source, /cap: checkProbeOperationBoundLabel\(maxRequests\)/);
-    assert.match(source, /Request only', cap: 'No customer execution'/);
+    assert.match(source, /Request only', cap: 'Runs through the SOC workflow'/);
     assert.doesNotMatch(source, /maxRequests === 1\) return 'metadata'/);
   });
 
@@ -136,16 +136,16 @@ describe('portal detail truth labels', () => {
     assert.match(approve, /confirmTone: 'default' as const/);
   });
 
-  it('gates SOC Start on an open scheduled window, two distinct approvers and a clear kill switch', () => {
+  it('lists the recorded request checks without gating SOC Start on them', () => {
     const soc = sourceBetween(source, 'function SocRequestDetailView(', 'function detailRowNavProps(');
     assert.match(soc, /label: 'Inside scheduled safe window',\n      pass: windowState === 'open'/);
-    assert.match(soc, /Window ended \$\{formatTimestamp\(windowEnd\)\}: reschedule required/);
-    assert.match(soc, /label: `Two SOC approvals recorded \(\$\{Math\.min\(approverCount, 2\)\}\/2\)`, pass: approverCount >= 2/);
+    assert.match(soc, /Window ended \$\{formatTimestamp\(windowEnd\)\}: reschedule optional/);
+    assert.match(soc, /label: `SOC approval recorded \(\$\{approverCount\}\)`, pass: approverCount >= 1/);
     assert.match(soc, /label: 'Tenant kill switch clear'/);
-    assert.match(soc, /disabled=\{busy !== '' \|\| !preflightReady\}/);
+    assert.match(soc, /disabled=\{busy !== ''\}/);
     assert.match(soc, /<CardTitle>Request gates<\/CardTitle>/);
     assert.doesNotMatch(soc, /Confirmed safe window|Safe window confirmed|Go \/ No-Go/);
-    assert.match(source, /Start stays disabled until every request gate passes\./);
+    assert.match(source, /Start stays available; these are not recorded yet/);
   });
 
   it('keeps one always-visible Stop control and polls adapter status without blocking it', () => {

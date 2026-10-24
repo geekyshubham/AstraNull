@@ -193,7 +193,8 @@ describe('postgres core catalog repository', () => {
       safe_test_windows: [{ start_at: FIXED_NOW, end_at: FIXED_NOW }],
       created_at: FIXED_NOW,
     });
-    assert.equal(group.safety_policy.max_runs_per_hour, 60);
+    assert.equal(group.safety_policy.max_runs_per_hour, Infinity);
+    assert.equal(group.safety_policy.min_seconds_between_runs, 0);
     assert.equal(group.timezone, 'UTC');
 
     const target = mapTargetRow({
@@ -961,7 +962,7 @@ describe('postgres core catalog repository', () => {
     assert.equal(group.id, 'tg_new');
     assert.equal(group.environment_id, undefined);
     assert.equal(group.validation_mode, 'external_only');
-    assert.equal(group.safety_policy.max_runs_per_hour, 10);
+    assert.equal(group.safety_policy.max_runs_per_hour, Infinity);
     assertTenantWrapped(pool.client, CTX.tenantId);
   });
 
@@ -1099,13 +1100,15 @@ describe('postgres core catalog repository', () => {
     assertTenantWrapped(pool.client, CTX.tenantId);
   });
 
-  it('rejects connector-backed bulk import when persisted feature authority is disabled', async () => {
+  it('bulk import no longer consults persisted connector feature authority', async () => {
+    let featureQueried = false;
     const pool = createRecordingPool((text) => {
       if (/SELECT id FROM target_groups/i.test(text)) return { rows: [{ id: 'tg_1' }] };
-      if (/FROM tenant_connector_features/i.test(text)) return { rows: [{ enabled: false }] };
-      if (/FROM waf_connectors|INSERT INTO targets/i.test(text)) {
-        assert.fail('disabled feature must reject before connector evidence or target mutation');
+      if (/FROM tenant_connector_features/i.test(text)) {
+        featureQueried = true;
+        return { rows: [{ enabled: false }] };
       }
+      if (/FROM waf_connectors/i.test(text)) return { rows: [] };
       return { rows: [] };
     });
     const repo = createTestRepository(pool);
@@ -1119,7 +1122,8 @@ describe('postgres core catalog repository', () => {
       },
     );
 
-    assert.deepEqual(result, { error: 'connectors_feature_disabled', status: 404 });
+    assert.equal(result.error, undefined);
+    assert.equal(featureQueried, false);
     assertTenantWrapped(pool.client, CTX.tenantId);
   });
 

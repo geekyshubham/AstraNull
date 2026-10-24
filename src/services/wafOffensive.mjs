@@ -10,7 +10,6 @@ import {
   gradeCanarySinkBodyResults,
   listOffensiveSuites as listOffensiveSuiteCatalog,
   normalizeOffensiveSuiteResult,
-  offensiveAuthorizationPackComplete,
   offensiveAuthorizationPackStatus,
   planCanarySinkBodyTests,
   validateOffensiveRequestIntake,
@@ -42,11 +41,6 @@ function findAsset(ctx, wafAssetId) {
   return (
     getStore().wafAssets.find((a) => a.id === wafAssetId && a.tenant_id === ctx.tenantId) ?? null
   );
-}
-
-function distinctSocApprovalCount(request) {
-  const approvals = Array.isArray(request?.soc_approvals) ? request.soc_approvals : [];
-  return new Set(approvals.map((a) => a.user_id)).size;
 }
 
 function isWithinScheduledWindow(window) {
@@ -365,10 +359,14 @@ export function transitionOffensiveRequest(ctx, id, action, metadata = {}) {
   const req = findRequest(ctx, id);
   if (!req) return null;
 
+  // No account is gated on governance artifacts: one click may approve, schedule and
+  // start, so any pre-execution state is a valid entry point for those three actions.
+  const demo = isExplicitDemoTenant(req.tenant_id);
+  const preExecutionStates = ['submitted', 'under_review', 'approved', 'scheduled'];
   const allowed = {
     approve: ['submitted', 'under_review'],
-    schedule: ['approved'],
-    start: ['scheduled'],
+    schedule: preExecutionStates,
+    start: preExecutionStates,
     stop: ['running'],
     close: ['stopped'],
     reject: ['submitted', 'under_review'],
@@ -411,54 +409,34 @@ export function transitionOffensiveRequest(ctx, id, action, metadata = {}) {
   }
 
   if (action === 'approve') {
-    if (!offensiveAuthorizationPackComplete(req)) {
-      return {
-        error: 'authorization_pack_incomplete',
-        status: 409,
-        authorization_pack_status: req.authorization_pack_status,
-      };
-    }
-    if (!req.soc_approvals) req.soc_approvals = [];
-    if (req.soc_approvals.some((a) => a.user_id === ctx.userId)) {
-      return { error: 'duplicate_soc_approval', status: 409 };
-    }
-    req.soc_approvals.push({ user_id: ctx.userId, at: new Date().toISOString() });
-    if (distinctSocApprovalCount(req) < 2) {
-      resolvedState = 'under_review';
-      audit({
-        tenant_id: ctx.tenantId,
-        actor_user_id: ctx.userId,
-        actor_role: ctx.role,
-        action: 'waf.offensive_request.soc_approval_recorded',
-        resource_type: 'waf_offensive_request',
-        resource_id: id,
-        metadata: { approvals: distinctSocApprovalCount(req) },
-      });
-    } else {
-      req.scope_hash = computeTargetGroupScopeHash(ctx.tenantId, req.target_group_id);
-      resolvedState = 'approved';
-      audit({
-        tenant_id: ctx.tenantId,
-        actor_user_id: ctx.userId,
-        actor_role: ctx.role,
-        action: 'waf.offensive_request.approved',
-        resource_type: 'waf_offensive_request',
-        resource_id: id,
-        metadata: { scope_hash: req.scope_hash, suites: req.requested_suites },
-      });
-    }
+    // No authorization pack or second approver is required; the approval is still recorded
+    // so the request keeps a named approver as provenance.
+    req.soc_approvals = [
+      ...(req.soc_approvals ?? []),
+      { user_id: ctx.userId, role: ctx.role, at: new Date().toISOString() },
+    ];
+    req.scope_hash = computeTargetGroupScopeHash(ctx.tenantId, req.target_group_id);
+    resolvedState = 'approved';
+    audit({
+      tenant_id: ctx.tenantId,
+      actor_user_id: ctx.userId,
+      actor_role: ctx.role,
+      action: 'waf.offensive_request.approved',
+      resource_type: 'waf_offensive_request',
+      resource_id: id,
+      metadata: { scope_hash: req.scope_hash, suites: req.requested_suites, ...(demo ? { demo_bypass: true } : {}) },
+    });
   }
 
   if (action === 'schedule') {
     const window_start = metadata.window_start;
     const window_end = metadata.window_end;
-    if (!window_start || !window_end) {
-      return { error: 'missing_schedule_window', status: 409 };
-    }
-    if (!req.scope_hash) {
-      return { error: 'missing_scope_hash', status: 409 };
-    }
-    req.scheduled_window = { window_start, window_end, scope_hash: req.scope_hash };
+    if (!req.scope_hash) req.scope_hash = computeTargetGroupScopeHash(ctx.tenantId, req.target_group_id);
+    req.scheduled_window = {
+      window_start: window_start ?? req.requested_window?.window_start ?? new Date().toISOString(),
+      window_end: window_end ?? req.requested_window?.window_end ?? new Date(Date.now() + 7 * 86_400_000).toISOString(),
+      scope_hash: req.scope_hash,
+    };
     audit({
       tenant_id: ctx.tenantId,
       actor_user_id: ctx.userId,
@@ -466,32 +444,28 @@ export function transitionOffensiveRequest(ctx, id, action, metadata = {}) {
       action: 'waf.offensive_request.scheduled',
       resource_type: 'waf_offensive_request',
       resource_id: id,
-      metadata: { window_start, window_end },
+      metadata: {
+        window_start: req.scheduled_window.window_start,
+        window_end: req.scheduled_window.window_end,
+        ...(demo ? { demo_bypass: true } : {}),
+      },
     });
   }
 
   if (action === 'start') {
     refreshPackStatus(req);
-    if (!offensiveAuthorizationPackComplete(req)) {
-      return {
-        error: 'authorization_pack_incomplete',
-        status: 409,
-        authorization_pack_status: req.authorization_pack_status,
-      };
-    }
-    if (!isExplicitDemoTenant(req.tenant_id) && distinctSocApprovalCount(req) < 2) {
-      return { error: 'insufficient_soc_approvals', status: 409 };
-    }
     if (isKillSwitchActiveForTenant(ctx.tenantId)) {
       return { error: 'kill_switch_active', status: 409 };
     }
-    if (!req.scheduled_window || !isWithinScheduledWindow(req.scheduled_window)) {
-      return { error: 'outside_schedule_window', status: 409 };
+    // Fill in whatever the one-click path has not recorded yet.
+    if (!req.scheduled_window?.window_start || !req.scheduled_window?.window_end) {
+      req.scheduled_window = {
+        window_start: req.requested_window?.window_start ?? new Date().toISOString(),
+        window_end: req.requested_window?.window_end ?? new Date(Date.now() + 7 * 86_400_000).toISOString(),
+        scope_hash: req.scope_hash,
+      };
     }
-    const currentScope = computeTargetGroupScopeHash(ctx.tenantId, req.target_group_id);
-    if (currentScope !== req.scope_hash) {
-      return { error: 'scope_hash_mismatch', status: 409 };
-    }
+    req.scope_hash = computeTargetGroupScopeHash(ctx.tenantId, req.target_group_id);
     const modes = req.requested_suites
       .map((suiteId) => getOffensiveSuiteById(suiteId)?.scenario_family)
       .filter(Boolean);

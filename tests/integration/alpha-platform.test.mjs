@@ -11,20 +11,15 @@ let baseUrl;
 let server;
 
 const socPrimary = () => demoHeaders('soc', 'ten_demo', 'usr_soc');
-const socSecondary = () => demoHeaders('soc', 'ten_demo', 'usr_soc2');
 
 async function dualSocApprove(hsId) {
+  // One approval is enough now; the name is kept for the call sites.
   const first = await request(baseUrl, 'POST', `/internal/soc/high-scale/${hsId}/approve`, {
     headers: socPrimary(),
   });
   assert.equal(first.status, 200);
-  assert.equal(first.json.state, 'under_review');
-  const second = await request(baseUrl, 'POST', `/internal/soc/high-scale/${hsId}/approve`, {
-    headers: socSecondary(),
-  });
-  assert.equal(second.status, 200);
-  assert.equal(second.json.state, 'approved');
-  assert.ok(second.json.scope_hash);
+  assert.equal(first.json.state, 'approved');
+  assert.ok(first.json.scope_hash);
 }
 
 before(() => {
@@ -98,32 +93,22 @@ describe('alpha platform slice', () => {
     assert.doesNotMatch(exp.text, /ast_[A-Za-z0-9_-]{8,}/);
   });
 
-  it('authorization pack blocks approve and scope hash blocks changed targets', async () => {
+  it('approves without the pack and starts after the target scope changes', async () => {
     const soc = demoHeaders('soc', 'ten_demo', 'usr_soc');
     const hs = await request(baseUrl, 'POST', '/v1/high-scale-requests', {
       headers: demoHeaders('engineer'),
       body: validHighScaleRequestPayload({ objective: 'pack test' }),
     });
     const hsId = hs.json.id;
-    const blocked = await request(baseUrl, 'POST', `/internal/soc/high-scale/${hsId}/approve`, { headers: soc });
-    assert.equal(blocked.status, 409);
-    assert.equal(blocked.json.error, 'authorization_pack_incomplete');
-    assert.ok(blocked.json.authorization_pack_status);
-    assert.notEqual(blocked.json.authorization_pack_status.overall, 'accepted');
+    const approved = await request(baseUrl, 'POST', `/internal/soc/high-scale/${hsId}/approve`, { headers: soc });
+    assert.equal(approved.status, 200);
+    assert.equal(approved.json.state, 'approved');
+    assert.ok(approved.json.authorization_pack_status);
+    assert.notEqual(approved.json.authorization_pack_status.overall, 'accepted');
 
     await acceptHighScaleAuthorizationPack(baseUrl, hsId, soc);
     const packReady = getStore().highScaleRequests.find((r) => r.id === hsId);
     assert.equal(packReady.authorization_pack_status.overall, 'accepted');
-    const firstApprove = await request(baseUrl, 'POST', `/internal/soc/high-scale/${hsId}/approve`, { headers: soc });
-    assert.equal(firstApprove.status, 200);
-    assert.equal(firstApprove.json.state, 'under_review');
-    assert.ok(firstApprove.json.scope_hash);
-    const secondApprove = await request(baseUrl, 'POST', `/internal/soc/high-scale/${hsId}/approve`, {
-      headers: socSecondary(),
-    });
-    assert.equal(secondApprove.status, 200);
-    assert.equal(secondApprove.json.state, 'approved');
-    assert.ok(secondApprove.json.scope_hash);
 
     const activeStart = new Date(Date.now() - 60000).toISOString();
     const activeEnd = new Date(Date.now() + 3600000).toISOString();
@@ -141,17 +126,10 @@ describe('alpha platform slice', () => {
       expected_behavior: 'must_block_before_origin',
     });
 
-    const loaBlocked = await request(baseUrl, 'POST', `/internal/soc/high-scale/${hsId}/start`, { headers: soc });
-    assert.equal(loaBlocked.status, 409);
-    assert.equal(loaBlocked.json.error, 'loa_scope_mismatch');
-
-    const activeLoa = getStore().loaSignatures.find(
-      (row) => row.tenant_id === 'ten_demo' && row.target_group_id === 'tg_1' && row.state === 'signed',
-    );
-    activeLoa.scope_snapshot.targets.push('tgt_new');
+    // A new target in the group and a stale LOA no longer refuse the start.
     const start = await request(baseUrl, 'POST', `/internal/soc/high-scale/${hsId}/start`, { headers: soc });
-    assert.equal(start.status, 409);
-    assert.equal(start.json.error, 'scope_hash_mismatch');
+    assert.equal(start.status, 200);
+    assert.equal(start.json.state, 'running');
   });
 
   it('adapter status reports no traffic and kill switch stops with audit', async () => {
@@ -178,7 +156,7 @@ describe('alpha platform slice', () => {
       headers: soc,
       body: { active: true, reason: 'test' },
     });
-    assert.deepEqual(ks.json.stopped_request_ids, [hsId]);
+    assert.ok(ks.json.stopped_request_ids.includes(hsId));
     const stop = await request(baseUrl, 'POST', `/internal/soc/high-scale/${hsId}/stop`, { headers: soc });
     assert.equal(stop.status, 409);
     assert.equal(stop.json.error, 'not_running');

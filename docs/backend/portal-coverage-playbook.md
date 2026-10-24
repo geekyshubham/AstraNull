@@ -51,6 +51,16 @@ A `null` state means the inventory could not prove applicability from source. Ch
 | Child component returns `null` for a principal | Callee early-exit guard is attached at the callsite | `calleeGates` |
 | Host mounted in `App.tsx` behind a gate | Host-mount guards apply to controls reachable only through that host | `hostMounts` |
 | Control gated on a store a page publishes (`useX` / `usePublishX`) | Routes restricted to components that publish | `storePublishers` |
+| Prop invoked inside a primitive helper (`choose(v) { onChange(v) }`), or forwarded through wrappers (`Tabs` -> `TabButton`, `EmptyState` -> `EmptyStateAction`) | Caller bindings follow every supplying caller, recursively through forwarded props | `callerBinding`, `flowValues` |
+| Caller omits an optional callback | Counted as `omitted` only when every read of the prop leaves no handler (truthiness test, guarded or optional call, hook deps, intrinsic event attribute, or a child prop that is inert in turn) | `omissionInert` |
+| `<X {...obj}/>`, `<X {...props}/>`, `renderX({ ... })` | Spread values resolve through exact objects, the caller's JSX callers, or direct call sites; an escaping function reference blocks | `callerValues`, `spreadValues`, `directCallSites` |
+| `props.onX`, `const { a } = props`, `form.onX` where `form` is a prop object | Value flows back to the declaration; the action resolves only when every flow names one declaration (or only setters). A second declaration is a union and stays blocking | `flowValues`, `flowCallback` |
+| Hook-returned member (`insights.reload`, `{ ...state, reload }`, `useMemo(() => ({...}))`) or hook tuple (`const [v, setV] = useX()`) | Resolves to the hook's declaration; a spread after the property blocks | `resolveObjectValue(..., members)`, `tuples` |
+| Same name declared in two blocks of one function | Resolves to the block holding the reference, otherwise ambiguous (never the last declaration) | `lexicalBindings` |
+| `ref.current?.(...)` where the ref only holds `null` or a `new Promise` resolver | Promise settlement; the awaiting caller's action owns what follows | `promiseSettler` |
+| Local conditional callback (`const reload = route === 'a' ? a.reload : b.reload`) | Each non-absent branch is invoked, like an inline conditional | `conditionalBranches` |
+| `requestSocJson(..., { method: options.method })` | Method read from the exact bound options object; absent means GET | request extraction in `actionTraits` |
+| Component rendered only behind identity guards (`if (session.principal === 'staff') return null; ... <InsightsDialog/>`) | Its actions inherit the OR over callers of each caller's element gates, early exits and own inheritance; any unguarded caller path leaves it unrestricted | `inheritedGuard` |
 
 Add a unit test in `tests/unit/portal-action-classification.test.mjs` for any new rule: one fixture proving it resolves, one proving the neighbouring ambiguous case stays blocking. After any inventory change, snapshot all cells before and after (`buildPortalActionCoverage().cells`) and confirm no previously covered cell flipped away from `true`; a flipped covered cell becomes a rejected receipt.
 
@@ -135,6 +145,30 @@ node scripts/portal-coverage-file-report.mjs /tmp/portal-report.json --file foo
 ```
 
 Capture binds every source and test file digest, so freeze edits before capture and reconcile with all invocations at once. Overall reconciliation exits nonzero until every file is covered; compare per-file counts, `rejected` (must be empty) and `portal.errors`. Run `npm run -s lint`, `npm run -s lint:portal`, `npm run -s web:typecheck` and the unit tests in `tests/unit/portal-action-*.test.mjs`.
+
+Set `PORTAL_INVENTORY_DEBUG=1` while building the inventory to print every caller value that does not bind, with its file, owner and source expression.
+
+## Phase 2 classification result
+
+Inventory-only work (no new receipts), measured with `buildPortalActionCoverage()` before and after:
+
+| Measure | Before | After |
+|---|---|---|
+| Unclassified action states | 16,022 | 3,140 |
+| Required action cells | 33,454 | 33,550 |
+| `lib/crud-ui.tsx`, `ui/select.tsx`, `ui/tabs.tsx`, `ui/empty-state.tsx`, `assistant/insights-dialog.tsx` unclassified | 8,412 | 0 |
+| `ui/table.tsx` unclassified | 2,832 | 708 |
+
+No covered cell changed. Uncovered `success` cells that no identity could ever reach became `denial` cells: six for soc, auditor and viewer whose resolved callbacks carry `test_policy:write` and `target_group:write` guards, and 410 inherited from render paths (insights dialog and assistant visuals for staff, notification channel dialogs without `notification:write`, the staff-only SOC request view for customers). `DataTable`, `TableLoadError`, `FailureNotice`, `DomainPicker`, `RunPicker` and `TargetCandidatePicker` joined `DELEGATING_OWNERS`: each only forwards event props, so its callers' JSX elements are the inventoried semantic actions.
+
+What still blocks, and why:
+
+| Remaining | Cells | Reason |
+|---|---|---|
+| `evidence/execution-inspector.tsx`, `targets/probe-activity.tsx` Reconnect/Stop | 1,365 | `readerRef.current?.refresh()` reads a reader cached in a module-level `Map` behind a ref; no exact declaration is provable |
+| `ui/table.tsx` `DataTableBodyRow` | 708 | Row `onClick`/`onKeyDown` come from per-table `getRowProps` objects with different effects; needs per-caller action expansion, not delegation |
+| Dialog completion callbacks (`ValidationScanLauncher`, `CancelScanDialog`, `RiskAcceptanceDialog`, `ScheduleActions`, `EntryPathCard`, ...) | about 500 | Every caller binds, but to different declarations; unions are refused by design |
+| Long tail (`chip.clear`, `inflight.current.delete`, `options.onProgress`, `action.onSelect`, ...) | about 580 | Array-item, ref and per-call option callbacks |
 
 ## Order of work for the remaining files
 

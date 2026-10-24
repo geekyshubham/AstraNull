@@ -146,23 +146,24 @@ async function approveAndSchedule(service, objective) {
   const requestId = created.offensive_request.id;
   await addAndAcceptAuthorizationPack(service, requestId);
 
+  // One SOC approval is enough; a concurrent duplicate either wins the race or loses it.
   const concurrentSameSoc = await Promise.all([
     service.transitionOffensiveRequest(SOC_A, requestId, 'approve'),
     service.transitionOffensiveRequest(SOC_A, requestId, 'approve'),
   ]);
-  assert.equal(
-    concurrentSameSoc.filter((result) => result?.offensive_request?.state === 'under_review').length,
-    1,
+  assert.ok(
+    concurrentSameSoc.some((result) => result?.offensive_request?.state === 'approved'),
   );
-  assert.equal(
-    concurrentSameSoc.filter((result) => result?.error === 'duplicate_soc_approval').length,
-    1,
+  assert.ok(
+    concurrentSameSoc.every(
+      (result) => result?.offensive_request?.state === 'approved' || result?.error === 'invalid_transition',
+    ),
   );
 
-  const second = await service.transitionOffensiveRequest(SOC_B, requestId, 'approve');
-  assert.equal(second.offensive_request.state, 'approved');
+  const approved = await service.getOffensiveRequest(SOC_A, requestId);
+  assert.equal(approved.offensive_request.state, 'approved');
   assert.equal(
-    second.offensive_request.scope_hash,
+    approved.offensive_request.scope_hash,
     computeScopeHashFromTargets(GROUP_A, [{
       id: TARGET_A,
       kind: 'fqdn',
@@ -315,7 +316,6 @@ describe('Postgres WAF offensive workflow', () => {
           .map((entry) => entry.action);
         for (const action of [
           'waf.offensive_request.submitted',
-          'waf.offensive_request.soc_approval_recorded',
           'waf.offensive_request.approved',
           'waf.offensive_request.scheduled',
           'waf.offensive_validation.started',

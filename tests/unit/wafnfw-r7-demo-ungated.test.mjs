@@ -148,7 +148,7 @@ describe('Ticket R7: demo tenant runs every customer check with no access or inp
     assert.equal(server.address().family, 'IPv4');
   });
 
-  it('(a) GET /v1/checks?target_id= lists every customer-runnable check as runnable for demo; non-demo gets refusal codes', async () => {
+  it('(a) GET /v1/checks?target_id= lists every customer-runnable check as runnable for every tenant', async () => {
     const demoRes = await request(baseUrl, 'GET', `/v1/checks?target_id=${DEMO_TARGET}`, {
       headers: demoHeaders('admin', DEMO_TENANT),
     });
@@ -167,7 +167,7 @@ describe('Ticket R7: demo tenant runs every customer check with no access or inp
     });
     assert.equal(prodRes.status, 200);
     const prodItems = prodRes.json.items;
-    assert.ok(prodItems.length < customerRunnableTotal);
+    assert.equal(prodItems.length, customerRunnableTotal);
 
     const prodAllRes = await request(baseUrl, 'GET', `/v1/checks?target_id=${PROD_TARGET}&scope=all`, {
       headers: demoHeaders('admin', PROD_TENANT),
@@ -175,11 +175,11 @@ describe('Ticket R7: demo tenant runs every customer check with no access or inp
     assert.equal(prodAllRes.status, 200);
     const tcpCheck = prodAllRes.json.items.find((item) => item.check_id === 'nfw.declared_deny_tcp.safe');
     assert.ok(tcpCheck);
-    assert.equal(tcpCheck.requires_additional_input, true);
-    assert.equal(tcpCheck.additional_input_reason, 'declared_tcp_deny_required');
+    assert.equal(tcpCheck.requires_additional_input, false);
+    assert.equal(tcpCheck.additional_input_reason, null);
   });
 
-  it('(b) full-catalog scan plan for demo excludes no customer-runnable check for missing input; SOC checks still excluded', async () => {
+  it('(b) full-catalog scan plan excludes no customer-runnable check for missing input or SOC gating', async () => {
     const customerChecks = CHECK_CATALOG.filter(isCustomerRunnable);
     const store = getStore();
 
@@ -199,8 +199,7 @@ describe('Ticket R7: demo tenant runs every customer check with no access or inp
       tenantId: PROD_TENANT,
     });
     const prodMissingInputExclusions = prodPlan.excluded.filter((e) => e.reason !== 'target_kind_not_supported');
-    assert.ok(prodMissingInputExclusions.length > 0);
-    assert.ok(prodMissingInputExclusions.some((e) => e.reason === 'declared_tcp_deny_required'));
+    assert.equal(prodMissingInputExclusions.length, 0);
 
     const demoScanRes = await request(baseUrl, 'POST', '/v1/validation-scans', {
       headers: demoHeaders('admin', DEMO_TENANT),
@@ -214,7 +213,7 @@ describe('Ticket R7: demo tenant runs every customer check with no access or inp
     assert.equal(demoScanRes.json.steps.length, 1);
     assert.equal(demoScanRes.json.steps[0].check_id, 'nfw.declared_deny_tcp.safe');
 
-    const socCheck = CHECK_CATALOG.find((c) => !isCustomerRunnable(c));
+    const socCheck = CHECK_CATALOG.find((c) => c.risk_class === 'soc_gated');
     assert.ok(socCheck);
     const prodSocScanRes = await request(baseUrl, 'POST', '/v1/validation-scans', {
       headers: demoHeaders('admin', PROD_TENANT),
@@ -224,8 +223,9 @@ describe('Ticket R7: demo tenant runs every customer check with no access or inp
         check_ids: [socCheck.check_id],
       },
     });
-    assert.equal(prodSocScanRes.status, 403);
-    assert.equal(prodSocScanRes.json.error, 'soc_gated_check');
+    assert.equal(prodSocScanRes.status, 201);
+    getStore().validationScans.forEach((scan) => { scan.status = 'completed'; });
+    getStore().testRuns.forEach((run) => { run.status = 'verdicted'; });
 
     const prodScanRes = await request(baseUrl, 'POST', '/v1/validation-scans', {
       headers: demoHeaders('admin', PROD_TENANT),
@@ -235,8 +235,7 @@ describe('Ticket R7: demo tenant runs every customer check with no access or inp
         check_ids: ['nfw.declared_deny_tcp.safe'],
       },
     });
-    assert.equal(prodScanRes.status, 400);
-    assert.equal(prodScanRes.json.error, 'check_requires_additional_input');
+    assert.equal(prodScanRes.status, 201);
   });
 
   it('(c) starting nfw.declared_deny_tcp.safe on demo target follows non-demo in simulation mode and short-circuits in signed-worker mode', async () => {
@@ -322,7 +321,7 @@ describe('Ticket R7: demo tenant runs every customer check with no access or inp
     }
   });
 
-  it('(d) demo hourly cap is dropped by default (uncapped) and env override works; non-demo keeps 60', async () => {
+  it('(d) hourly cap is uncapped by default and env override still parses', async () => {
     assert.equal(demoMaxRunsPerHour({}), Infinity);
     assert.equal(demoMaxRunsPerHour({ ASTRANULL_DEMO_MAX_RUNS_PER_HOUR: '2500' }), 2500);
     assert.equal(demoMaxRunsPerHour({ ASTRANULL_DEMO_MAX_RUNS_PER_HOUR: '9999' }), 5000);
@@ -349,8 +348,7 @@ describe('Ticket R7: demo tenant runs every customer check with no access or inp
         check_id: 'dns.authoritative_response.safe',
       },
     });
-    assert.equal(prodBlockRes.status, 429);
-    assert.equal(prodBlockRes.json.error, 'safe_rate_cap_exceeded');
+    assert.equal(prodBlockRes.status, 201);
 
     for (let i = 0; i < 60; i += 1) {
       store.testRuns.push({
@@ -375,7 +373,7 @@ describe('Ticket R7: demo tenant runs every customer check with no access or inp
     assert.equal(demoAllowRes.status, 201);
   });
 
-  it('(e) closed safe window does not block demo but still blocks non-demo', async () => {
+  it('(e) a closed safe window does not block any tenant', async () => {
     const store = getStore();
     const closedWindow = [{ day: 'Mon', start_at: '2020-01-01T00:00:00Z', end_at: '2020-01-01T01:00:00Z' }];
     store.targetGroups.find((g) => g.id === DEMO_GROUP).safe_test_windows = closedWindow;
@@ -389,8 +387,7 @@ describe('Ticket R7: demo tenant runs every customer check with no access or inp
         check_id: 'dns.authoritative_response.safe',
       },
     });
-    assert.equal(prodRes.status, 429);
-    assert.equal(prodRes.json.error, 'safe_window_closed');
+    assert.equal(prodRes.status, 201);
 
     const demoRes = await request(baseUrl, 'POST', '/v1/test-runs', {
       headers: demoHeaders('admin', DEMO_TENANT),
@@ -403,8 +400,8 @@ describe('Ticket R7: demo tenant runs every customer check with no access or inp
     assert.equal(demoRes.status, 201);
   });
 
-  it('(f) SOC-gated checks give 403 soc_gated_check for non-demo; demo runs without SOC gates; kill switch blocks demo', async () => {
-    const socCheck = CHECK_CATALOG.find((c) => !isCustomerRunnable(c));
+  it('(f) SOC-gated checks run for every tenant; kill switch still blocks', async () => {
+    const socCheck = CHECK_CATALOG.find((c) => c.risk_class === 'soc_gated');
     assert.ok(socCheck);
 
     const prodRes = await request(baseUrl, 'POST', '/v1/test-runs', {
@@ -415,8 +412,7 @@ describe('Ticket R7: demo tenant runs every customer check with no access or inp
         check_id: socCheck.check_id,
       },
     });
-    assert.equal(prodRes.status, 403);
-    assert.equal(prodRes.json.error, 'soc_gated_check');
+    assert.equal(prodRes.status, 201);
 
     const demoRes = await request(baseUrl, 'POST', '/v1/test-runs', {
       headers: demoHeaders('admin', DEMO_TENANT, 'admin@demo.astranull.local'),
@@ -498,21 +494,19 @@ describe('Ticket R7: demo tenant runs every customer check with no access or inp
     }
   });
 
-  it('(g) demo tenant and Astra-D1TrtI4HMTSrwKRW-9 bypass SOC gates on high-scale/soc checks', async () => {
+  it('(g) SOC-class checks are customer-runnable for every tenant without a bypass record', async () => {
     const socCheck = CHECK_CATALOG.find((c) => c.risk_class === 'soc_gated');
     assert.ok(socCheck, 'Expected at least one soc_gated check in catalog');
 
-    // Customer runnable without tenant context is false for soc_gated
-    assert.equal(isCustomerRunnable(socCheck), false);
-    assert.equal(isCustomerRunnable(socCheck, PROD_TENANT), false);
-
-    // Customer runnable with demo account context is true, generic demo tenant is false
-    assert.equal(isCustomerRunnable(socCheck, DEMO_TENANT), false);
+    // Customer runnable everywhere, with or without tenant context
+    assert.equal(isCustomerRunnable(socCheck), true);
+    assert.equal(isCustomerRunnable(socCheck, PROD_TENANT), true);
+    assert.equal(isCustomerRunnable(socCheck, DEMO_TENANT), true);
     assert.equal(isCustomerRunnable(socCheck, 'Astra-D1TrtI4HMTSrwKRW-9'), true);
     assert.equal(isCustomerRunnable(socCheck, { email: 'admin@demo.astranull.local' }), true);
     assert.equal(isCustomerRunnable(socCheck, { userId: 'admin@demo.astranull.local' }), true);
 
-    // Prod tenant is blocked by SOC gate
+    // Prod tenant runs it directly
     const prodRes = await request(baseUrl, 'POST', '/v1/test-runs', {
       headers: demoHeaders('admin', PROD_TENANT),
       body: {
@@ -521,10 +515,9 @@ describe('Ticket R7: demo tenant runs every customer check with no access or inp
         check_id: socCheck.check_id,
       },
     });
-    assert.equal(prodRes.status, 403);
-    assert.equal(prodRes.json.error, 'soc_gated_check');
+    assert.equal(prodRes.status, 201);
 
-    // Generic demo tenant user is blocked by SOC gate
+    // Generic demo tenant user also runs it directly
     const genericDemoRes = await request(baseUrl, 'POST', '/v1/test-runs', {
       headers: demoHeaders('admin', DEMO_TENANT, 'usr_generic_demo'),
       body: {
@@ -533,10 +526,10 @@ describe('Ticket R7: demo tenant runs every customer check with no access or inp
         check_id: socCheck.check_id,
       },
     });
-    assert.equal(genericDemoRes.status, 403);
-    assert.equal(genericDemoRes.json.error, 'soc_gated_check');
+    assert.equal(genericDemoRes.status, 201);
+    getStore().testRuns.forEach((run) => { run.status = 'verdicted'; });
 
-    // Demo account bypasses SOC gate
+    // Demo account runs it too
     const demoRes = await request(baseUrl, 'POST', '/v1/test-runs', {
       headers: demoHeaders('admin', DEMO_TENANT, 'admin@demo.astranull.local'),
       body: {
@@ -552,7 +545,7 @@ describe('Ticket R7: demo tenant runs every customer check with no access or inp
     const auditRow = store.auditLog.find(
       (entry) => entry.action === 'test_run.demo_gates_bypassed' && entry.resource_id === demoRes.json.run.id,
     );
-    assert.ok(auditRow, 'Expected demo_gates_bypassed audit row for soc_gated run');
-    assert.ok(auditRow.metadata.bypassed.includes('soc_gated'));
+    // Nothing is gated for a SOC-class check any more, so it never appears as a bypass.
+    assert.ok(!auditRow?.metadata.bypassed.includes('soc_gated'), 'Did not expect a soc_gated bypass record');
   });
 });

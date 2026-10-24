@@ -1,5 +1,4 @@
 import { randomBytes } from 'node:crypto';
-import { isExplicitDemoTenant } from '../lib/demoAutoVerify.mjs';
 import { redactSecrets, wrapUntrusted } from '../lib/assistantSafety.mjs';
 import { ASSISTANT_DOC_DOMAINS } from '../lib/assistantDocDomains.mjs';
 import { requirePermission } from '../rbac.mjs';
@@ -67,13 +66,8 @@ function fail(status, error, extra = {}) {
   return { error, status, ...extra };
 }
 
-export function assistantEnabledForTenant(runtimeConfig, ctx) {
-  const cfg = runtimeConfig?.assistant;
-  if (!cfg?.enabled) return false;
-  const tenantId = text(ctx?.tenantId ?? ctx?.tenant_id).trim();
-  if (!tenantId) return false;
-  if (cfg.tenants?.includes('*') || cfg.tenants?.includes(tenantId)) return true;
-  return isExplicitDemoTenant(ctx);
+export function assistantEnabledForTenant(runtimeConfig) {
+  return Boolean(runtimeConfig?.assistant?.enabled);
 }
 
 function validateMessages(raw) {

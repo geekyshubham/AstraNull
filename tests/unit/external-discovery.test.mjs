@@ -322,13 +322,15 @@ describe('external discovery service', () => {
     assert.deepEqual(auditEntry.metadata, { rejection_reason: 'third_party_hosting' });
   });
 
-  it('returns discovery_feature_disabled when feature flag is off', () => {
+  it('works even when the discovery feature flag is off', () => {
     disableDiscovery();
     const result = externalDiscovery.getDiscoveryInbox(adminCtx);
-    assert.deepEqual(result, { error: 'discovery_feature_disabled', status: 404 });
+    assert.equal(result.error, undefined);
+    assert.ok(Array.isArray(result.items));
 
     const createResult = externalDiscovery.createCandidate(adminCtx, validCandidateInput());
-    assert.equal(createResult.error, 'discovery_feature_disabled');
+    assert.equal(createResult.error, undefined);
+    assert.ok(createResult.candidate?.candidate_id);
   });
 
   it('blocks unapproved candidates from transitioning to tested', () => {

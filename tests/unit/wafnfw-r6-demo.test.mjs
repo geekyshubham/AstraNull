@@ -73,19 +73,18 @@ describe('Ticket R6 — origin-binding pre-check demo-tenant bypass and parity',
     assert.equal(selectable[0].check_id, 'nfw.origin_lockdown.safe');
   });
 
-  it('(b) non-demo tenant with the same data returns origin_binding_required', () => {
+  it('(b) non-demo tenant with the same data is runnable and selectable too', () => {
     process.env.ASTRANULL_DEMO_AUTO_VERIFY_TENANTS = 'ten_demo';
     const { target, originBindings } = makeFixture('ten_prod');
 
     const refusal = targetInputRefusal(check, target, decl, { originBindings });
-    assert.ok(refusal);
-    assert.equal(refusal.error, 'origin_binding_required');
+    assert.equal(refusal, null);
 
     const selectable = customerSelectableChecks([check], { target, declarations: decl, originBindings });
-    assert.equal(selectable.length, 0);
+    assert.equal(selectable.length, 1);
   });
 
-  it('(c) parity: pre-check result agrees with start-path resolver for demo and non-demo tenants', () => {
+  it('(c) parity: the pre-check never blocks while the start-path resolver still reports real blockers', () => {
     process.env.ASTRANULL_DEMO_AUTO_VERIFY_TENANTS = 'ten_demo';
 
     const demo = makeFixture('ten_demo');
@@ -114,8 +113,7 @@ describe('Ticket R6 — origin-binding pre-check demo-tenant bypass and parity',
       deriveBindingScope,
       currentOriginProof,
     });
-    assert.ok(prodRefusal);
-    assert.equal(prodRefusal.error, 'origin_binding_required');
+    assert.equal(prodRefusal, null);
     assert.ok(prodResolved.error);
     assert.equal(prodResolved.error, 'ownership_not_verified');
   });

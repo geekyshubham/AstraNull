@@ -101,31 +101,35 @@ test.describe('validation scans (FT-SCAN-01)', () => {
     await stopPortalPlaywrightServer();
   });
 
-  test('picker hides SOC-gated and monitor-only checks, states why, and passes axe while open', async ({ page }) => {
+  test('picker hides monitor-only and unsupported checks, keeps request-only ones, states why, and passes axe while open', async ({ page }) => {
     await injectPortalDevHeadersSession(page);
     await gotoPortalRoute(page, 'runs', sourceBaseUrl);
     await page.getByRole('button', { name: 'Start validation scan' }).click();
     const modal = launcher(page);
     await expect(modal).toBeVisible();
     await modal.locator('.domain-picker-option').filter({ hasText: /^checkout\.acme\.com/ }).getByRole('checkbox').check();
-    await expect(modal.getByRole('note').filter({ hasText: 'SOC-gated and monitor-only checks cannot be started here' })).toBeVisible();
+    await expect(modal.getByRole('note').filter({ hasText: 'Monitor-only and unsupported-delivery checks cannot run inside a scan' })).toBeVisible();
 
     const catalog = await page.evaluate(async () => {
       const response = await fetch('/v1/checks', {
         headers: { 'x-tenant-id': 'ten_portal_baseline', 'x-user-id': 'usr_owner', 'x-role': 'owner' },
       });
       const payload = await response.json();
-      return payload.items.map((check) => ({ id: check.check_id, safety: check.safety_class, tier: check.evidence_tier }));
+      return payload.items.map((check) => ({
+        id: check.check_id,
+        safety: check.safety_class,
+        tier: check.evidence_tier,
+        deliverySupported: check.mechanism_supported !== false && check.probe_profile?.delivery_supported !== false,
+      }));
     });
-    const hidden = catalog.filter((check) => check.safety !== 'safe' || check.tier === 'E5');
+    const hidden = catalog.filter((check) => check.tier === 'E5' || check.deliverySupported === false);
     expect(hidden.length).toBeGreaterThan(0);
-    expect(hidden.some((check) => check.id === SOC_GATED_CHECK_ID)).toBe(true);
+    expect(hidden.some((check) => check.id === SOC_GATED_CHECK_ID)).toBe(false);
     for (const check of hidden.slice(0, 5)) {
       await expect(modal.locator('li.check-picker-row').filter({ hasText: check.id })).toHaveCount(0);
     }
     await modal.getByPlaceholder(CHECK_PICKER_SEARCH).fill(SOC_GATED_CHECK_ID);
-    await expect(modal.locator('li.check-picker-row')).toHaveCount(0);
-    await expect(modal.getByText('No selectable checks match this search.')).toBeVisible();
+    await expect(modal.locator('li.check-picker-row').first()).toContainText(SOC_GATED_CHECK_ID);
     await modal.getByPlaceholder(CHECK_PICKER_SEARCH).fill('');
     await expect(modal.getByRole('group', { name: DNS_SECTION })).toBeVisible();
 

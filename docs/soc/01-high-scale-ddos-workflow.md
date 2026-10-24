@@ -2,9 +2,9 @@
 
 ## Policy
 
-High-scale DDoS validation is never self-service for customers.
+High-scale DDoS validation is not gated: every tenant can start a high-scale or SOC-gated check directly. There is no SOC approval step — the workflow below is the advisory operating procedure and audit trail SOC follows around a governed run.
 
-Customers can request it. AstraNull SOC must approve, schedule, monitor, execute/coordinate, stop, and close it.
+> **Amendment (2026-10-24):** SOC approval was removed entirely (see [ADR-0016](../adr/0016-demo-tenant-ownership-auto-verify.md)). High-scale and offensive checks are selectable, plannable, and startable by any role. `POST /internal/soc/high-scale/:id/approve` still exists as an optional recorded transition, but nothing waits on it. The stages, checklists, and evidence below remain the recommended operating procedure; `risk_class: 'soc_gated'` is descriptive only.
 
 ## Workflow stages
 
@@ -12,11 +12,11 @@ Customers can request it. AstraNull SOC must approve, schedule, monitor, execute
 |---|---|---|
 | Request | Customer | Target group, objective, preferred window, contacts. |
 | Scope review | SOC | Confirm declared targets only. |
-| Authorization review | SOC | Customer written permission; per-provider `provider_approval_checklist` satisfied (metadata artifacts, not expired). |
+| Authorization review | SOC | Customer written permission; per-provider `provider_approval_checklist` recorded (metadata artifacts, not expired). |
 | Risk review | SOC | Blast radius, constraints, stop criteria. |
-| Schedule | SOC/customer | Approved test window and stakeholder notices. |
-| Go/no-go | SOC lead | Final checklist approval. |
-| Execute | SOC | Approved adapter/provider started. |
+| Schedule | SOC/customer | Test window and stakeholder notices. |
+| Go/no-go | SOC lead | Final checklist recorded. |
+| Execute | SOC | Adapter/provider started. |
 | Monitor | SOC | Live metrics, notes, stop readiness. |
 | Stop/complete | SOC | Stop confirmation and reason. |
 | Report | SOC | Evidence and recommendations. |
@@ -25,13 +25,12 @@ Customers can request it. AstraNull SOC must approve, schedule, monitor, execute
 
 | Control | Required behavior |
 |---|---|
-| Multi-party approval | At least SOC analyst + SOC lead for production. |
-| Authorization pack | Cannot approve without documents. |
-| Provider rules | Each required `provider_approval_checklist` item must be SOC-accepted and within valid window (expired metadata blocks approve). |
-| Emergency contacts | Customer contact must be reachable. |
+| Authorization pack | Recommended evidence for a governed run; documents are recorded, never required. |
+| Provider rules | Each required `provider_approval_checklist` item is recorded and should be SOC-accepted within its valid window; expired metadata is reported, not blocking. |
+| Emergency contacts | Customer contact should be reachable. |
 | Kill switch | Must be available before start. |
-| Time window | Test cannot start outside approved window. |
-| Scope lock | Scope cannot change after final approval without re-review. |
+| Time window | Advisory: a run outside the approved window still starts and is audited as `safe_window`. |
+| Scope lock | The scope hash is recorded at approve/schedule/start; a change is re-reviewed. |
 | Immutable audit | Every decision and state transition recorded. |
 
 ## Execution models
@@ -50,7 +49,7 @@ Before start:
 - [ ] Correct tenant/target group.
 - [ ] Written customer authorization uploaded.
 - [ ] Cloud/CDN/provider checklist items accepted (and not expired) when `provider_approval_checklist` is present.
-- [ ] Internal SOC approval complete.
+- [ ] Optional: SOC approval recorded.
 - [ ] Maintenance window active.
 - [ ] Emergency customer contact online.
 - [ ] Provider/escalation path available.
@@ -122,4 +121,4 @@ Use `--validate-only` to check a transcript without writing output. Input may be
 
 ## Completion criteria
 
-This workflow is complete when high-scale tests are impossible to start without SOC gate completion and easy to stop with evidence.
+This workflow is complete when high-scale tests can be started by any tenant without an approval blocker and are easy to stop with evidence.

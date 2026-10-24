@@ -14,6 +14,7 @@ const ROOT_SYMBOLS = Object.freeze({
 const EVENTS = /^(onClick|onChange|onSubmit|onKeyDown|onKeyUp|onInput|onToggle|onConfirm|onCancel|onClose|onSelect|onValueChange|onCheckedChange|onAction|onRetry|onRefresh|onStartScan|onSave|onRemove|onDelete|onEdit|onNavigate|onRouteChange|onOpen|onExport)$/;
 const INTRINSIC = new Set(['button', 'a', 'form', 'input', 'textarea', 'select', 'summary']);
 const CUSTOM = /(?:Button|Select|Checkbox|Radio|TabsTrigger|MenuItem|EmptyState|ConfirmModal|FormModal)$/;
+const AMBIGUOUS_BINDING = Object.freeze({ type: 'AmbiguousBinding', start: -1, end: -1 });
 const compact = (value) => String(value ?? '').replace(/\s+/g, ' ').trim();
 function children(node) {
   return Object.entries(node).filter(([key]) => !['parent', 'loc', 'comments', 'tokens'].includes(key)).flatMap(([, value]) => Array.isArray(value) ? value.filter((child) => child?.type) : value?.type ? [value] : []);
@@ -83,19 +84,20 @@ export function buildPortalActionInventory({ root = PORTAL_SOURCE_ROOT } = {}) {
   const raw = (module, node) => node ? compact(module.source.slice(node.start, node.end)) : '';
   const attrValue = (module, attr) => !attr?.value ? '' : attr.value.type === 'Literal' ? String(attr.value.value) : attr.value.type === 'JSXExpressionContainer' ? raw(module, attr.value.expression) : raw(module, attr.value);
   const softGates = new WeakSet();
+  let finalPass = false;
   const storePublishers = new Map();
   const lexicalCache = new Map();
   const writtenReceivers = new Map();
   function lexicalBindings(module, owner, within = null) {
     const marker = `${module.file}#${owner}:${within?.start ?? ''}:${within?.end ?? ''}`;
     if (lexicalCache.has(marker)) return lexicalCache.get(marker);
-    const bindings = new Map(module.values); const setterNames = new Set(); const parameterOwners = new Map();
+    const bindings = new Map(module.values); const setterNames = new Set(); const parameterOwners = new Map(); const tuples = new Map(); const aliases = new Map();
     const declaration = module.values.get(owner);
     const functionRoot = declaration?.type === 'VariableDeclarator' ? declaration.init : declaration;
     const collectScope = (rootNode) => {
       const bindParameter = (param) => {
         if (!param) return;
-        if (param.type === 'Identifier') { bindings.delete(param.name); setterNames.delete(param.name); parameterOwners.set(param.name, rootNode); }
+        if (param.type === 'Identifier') { bindings.delete(param.name); setterNames.delete(param.name); tuples.delete(param.name); aliases.delete(param.name); parameterOwners.set(param.name, rootNode); }
         else if (param.type === 'AssignmentPattern') bindParameter(param.left);
         else if (param.type === 'RestElement') bindParameter(param.argument);
         else if (param.type === 'ObjectPattern') for (const property of param.properties) bindParameter(property.type === 'RestElement' ? property.argument : property.value);
@@ -103,34 +105,76 @@ export function buildPortalActionInventory({ root = PORTAL_SOURCE_ROOT } = {}) {
       };
       for (const param of rootNode?.params ?? []) bindParameter(param);
       const nested = [];
+      const declared = new Map();
+      const blocks = [rootNode];
+      const declare = (name, value) => { if (!declared.has(name)) declared.set(name, []); declared.get(name).push({ value, block: blocks.at(-1) }); };
       const collect = (node) => {
         if (!node) return;
-        if (node.type === 'FunctionDeclaration' && node.id) bindings.set(node.id.name, node);
+        if (node.type === 'FunctionDeclaration' && node.id) { bindings.set(node.id.name, node); declare(node.id.name, node); }
         if (node !== rootNode && ['FunctionDeclaration', 'FunctionExpression', 'ArrowFunctionExpression'].includes(node.type)) {
           if (within && node.start <= within.start && node.end >= within.end) nested.push(node);
           return;
         }
         if (node.type === 'VariableDeclarator') {
-          if (node.id.type === 'Identifier') bindings.set(node.id.name, node.init);
+          if (node.id.type === 'Identifier') { bindings.set(node.id.name, node.init); declare(node.id.name, node.init); }
           if (node.id.type === 'ArrayPattern' && /useState/.test(raw(module, node.init))) for (const name of node.id.elements.slice(1)) if (name?.name) setterNames.add(name.name);
+          if (node.id.type === 'ArrayPattern' && node.init?.type === 'CallExpression') node.id.elements.forEach((element, index) => { if (element?.type === 'Identifier') { tuples.set(element.name, { init: node.init, index }); declare(element.name, null); } });
+          if (node.id.type === 'ObjectPattern' && node.init?.type === 'Identifier') for (const property of node.id.properties) if (property.type === 'Property' && !property.computed && property.value.type === 'Identifier') { aliases.set(property.value.name, { object: node.init.name, key: property.key.name ?? property.key.value }); declare(property.value.name, null); }
         }
+        const scoped = node !== rootNode && ['BlockStatement', 'ForStatement', 'ForInStatement', 'ForOfStatement', 'CatchClause', 'SwitchStatement'].includes(node.type);
+        if (scoped) blocks.push(node);
         for (const child of children(node)) collect(child);
+        if (scoped) blocks.pop();
       };
       collect(rootNode);
+      // Block-scoped redeclarations resolve to the innermost block holding the reference; otherwise
+      // the name is ambiguous and must not silently take the last declaration.
+      for (const [name, entries] of declared) {
+        if (entries.length < 2) continue;
+        const holding = within ? entries.filter(({ block }) => block.start <= within.start && within.end <= block.end) : [];
+        const innermost = holding.sort((left, right) => (left.block.end - left.block.start) - (right.block.end - right.block.start));
+        const chosen = innermost.length && (innermost.length === 1 || innermost[0].block !== innermost[1].block) ? innermost[0] : null;
+        setterNames.delete(name); tuples.delete(name); aliases.delete(name);
+        if (chosen?.value) bindings.set(name, chosen.value);
+        else bindings.set(name, AMBIGUOUS_BINDING);
+      }
       // Overlay only the actual enclosing helper, after its outer scope. Sibling
       // callback declarations/locals never shadow the invoked helper's bindings.
       for (const child of nested) collectScope(child);
     };
     collectScope(functionRoot);
-    const result = { bindings, setterNames, parameterOwners, functionRoot }; lexicalCache.set(marker, result); return result;
+    const result = { bindings, setterNames, parameterOwners, tuples, aliases, functionRoot }; lexicalCache.set(marker, result); return result;
   }
-  function registerCaller(module, owner, node) {
+  function registerCaller(module, owner, node, gates = []) {
     if (node.name?.type !== 'JSXIdentifier') return;
     const target = resolveValue(module.file, node.name.name);
     if (!target) return;
     const key = keyFor(target.module.file, target.name);
     if (!callerProps.has(key)) callerProps.set(key, []);
-    callerProps.get(key).push({ module, owner, spread: node.attributes.some((attr) => attr.type === 'JSXSpreadAttribute'), props: new Map(node.attributes.filter((attr) => attr.type === 'JSXAttribute').map((attr) => [raw(module, attr.name), attr.value?.expression])) });
+    callerProps.get(key).push({ module, owner, gates, attributes: node.attributes, spread: node.attributes.some((attr) => attr.type === 'JSXSpreadAttribute'), props: new Map(node.attributes.filter((attr) => attr.type === 'JSXAttribute').map((attr) => [raw(module, attr.name), attr.value?.expression])) });
+  }
+  const valueReferences = new Map();
+  function registerReference(module, owner, node, parent) {
+    if (['FunctionDeclaration', 'VariableDeclarator', 'ClassDeclaration'].includes(parent?.type) && parent.id === node) return;
+    const target = resolveValue(module.file, node.name);
+    if (!target) return;
+    const key = keyFor(target.module.file, target.name);
+    if (!valueReferences.has(key)) valueReferences.set(key, []);
+    valueReferences.get(key).push({ module, owner, node, call: parent?.type === 'CallExpression' && parent.callee === node ? parent : null });
+  }
+  // Exact direct call sites of a reached function, or null when any unshadowed reference lets it escape.
+  function directCallSites(module, owner) {
+    const references = (valueReferences.get(keyFor(module.file, owner)) ?? []).filter((reference) => {
+      const scope = lexicalBindings(reference.module, reference.owner, reference.node);
+      if (scope.parameterOwners.has(reference.node.name)) return false;
+      return reference.module.imports.has(reference.node.name) ? !scope.bindings.has(reference.node.name) : scope.bindings.get(reference.node.name) === reference.module.values.get(reference.node.name);
+    });
+    return references.every((reference) => reference.call) ? references : null;
+  }
+  function reactHook(module, owner, node, name) {
+    const reactImport = module.ast.body.some((statement) => statement.type === 'ImportDeclaration' && statement.source.value === 'react' && statement.specifiers.some((specifier) => specifier.local.name === name && specifier.imported?.name === name));
+    const scope = lexicalBindings(module, owner, node);
+    return reactImport && !module.imports.has(name) && !scope.bindings.has(name) && !scope.parameterOwners.has(name);
   }
   function returnedExpression(fn) {
     const body = fn?.body;
@@ -153,12 +197,7 @@ export function buildPortalActionInventory({ root = PORTAL_SOURCE_ROOT } = {}) {
     if (seen.has(marker)) return null;
     seen = new Set([...seen, marker]);
     if (node.type === 'VariableDeclarator') return resolveCallbackDeclaration(module, owner, node.init, seen);
-    if (node.type === 'CallExpression' && node.callee.type === 'Identifier' && node.callee.name === 'useCallback') {
-      const imported = module.imports.get('useCallback');
-      const reactImport = module.ast.body.some((statement) => statement.type === 'ImportDeclaration' && statement.source.value === 'react' && statement.specifiers.some((specifier) => specifier.local.name === 'useCallback' && specifier.imported?.name === 'useCallback'));
-      const scope = lexicalBindings(module, owner, node);
-      if (reactImport && !imported && !scope.bindings.has('useCallback') && !scope.parameterOwners.has('useCallback')) return resolveCallbackDeclaration(module, owner, node.arguments[0], seen);
-    }
+    if (node.type === 'CallExpression' && node.callee.type === 'Identifier' && node.callee.name === 'useCallback' && reactHook(module, owner, node, 'useCallback')) return resolveCallbackDeclaration(module, owner, node.arguments[0], seen);
     if (node.type === 'CallExpression' && node.callee.type === 'Identifier' && node.arguments.length === 0) {
       const factory = resolveCallbackDeclaration(module, owner, node.callee, seen);
       if (factory && !factory.node.async && !factory.node.generator) {
@@ -170,6 +209,14 @@ export function buildPortalActionInventory({ root = PORTAL_SOURCE_ROOT } = {}) {
       const scope = lexicalBindings(module, owner, node);
       const binding = scope.bindings.get(node.name);
       if (binding) return resolveCallbackDeclaration(module, module.values.get(node.name) === binding ? node.name : owner, binding, seen);
+      const tuple = !scope.setterNames.has(node.name) && scope.tuples.get(node.name);
+      if (tuple && tuple.init.callee.type === 'Identifier') {
+        // A custom hook returning one fixed array exposes the exact declaration at that index.
+        const factory = resolveCallbackDeclaration(module, owner, tuple.init.callee, seen);
+        const returned = factory && !factory.node.async && !factory.node.generator ? returnedExpression(factory.node) : null;
+        const element = returned?.type === 'ArrayExpression' ? returned.elements[tuple.index] : null;
+        return element && element.type !== 'SpreadElement' ? resolveCallbackDeclaration(factory.module, factory.owner, element, seen) : null;
+      }
       if (scope.parameterOwners.has(node.name) && scope.parameterOwners.get(node.name) !== scope.functionRoot) return null;
       if (module.imports.has(node.name) && !scope.parameterOwners.has(node.name)) {
         const imported = resolveValue(module.file, node.name);
@@ -203,21 +250,26 @@ export function buildPortalActionInventory({ root = PORTAL_SOURCE_ROOT } = {}) {
     }
     return null;
   }
-  function resolveObjectValue(module, owner, node, seen = new Set()) {
+  // `members` resolves a hook's returned object for member callbacks: its arguments are only read
+  // there, and spreads are allowed because the member lookup rejects any spread after the property.
+  function resolveObjectValue(module, owner, node, seen = new Set(), members = false) {
     if (!node) return null;
     const marker = `${module.file}:${owner}:${node.start}:${node.end}`;
     if (seen.has(marker)) return null;
     seen = new Set([...seen, marker]);
-    if (node.type === 'ObjectExpression' && !node.properties.some((property) => property.type === 'SpreadElement')) return { module, owner, node };
-    if (node.type === 'VariableDeclarator') return resolveObjectValue(module, owner, node.init, seen);
+    if (node.type === 'ObjectExpression' && (members || !node.properties.some((property) => property.type === 'SpreadElement'))) return { module, owner, node };
+    if (node.type === 'VariableDeclarator') return resolveObjectValue(module, owner, node.init, seen, members);
     if (node.type === 'Identifier') {
       const scope = lexicalBindings(module, owner, node);
       const binding = scope.bindings.get(node.name);
-      if (binding) return resolveObjectValue(module, module.values.get(node.name) === binding ? node.name : owner, binding, seen);
+      if (binding) return resolveObjectValue(module, module.values.get(node.name) === binding ? node.name : owner, binding, seen, members);
     }
-    if (node.type === 'CallExpression' && node.callee.type === 'Identifier' && !node.arguments.length) {
+    if (members && node.type === 'CallExpression' && node.callee.type === 'Identifier' && node.callee.name === 'useMemo' && reactHook(module, owner, node, 'useMemo') && ['ArrowFunctionExpression', 'FunctionExpression'].includes(node.arguments[0]?.type)) {
+      return resolveObjectValue(module, owner, returnedExpression(node.arguments[0]), seen, members);
+    }
+    if (node.type === 'CallExpression' && node.callee.type === 'Identifier' && (members ? /^use[A-Z]/.test(node.callee.name) : !node.arguments.length)) {
       const factory = resolveCallbackDeclaration(module, owner, node.callee);
-      if (factory && !factory.node.async && !factory.node.generator) return resolveObjectValue(factory.module, factory.owner, returnedExpression(factory.node), seen);
+      if (factory && !factory.node.async && !factory.node.generator) return resolveObjectValue(factory.module, factory.owner, returnedExpression(factory.node), seen, members);
     }
     return null;
   }
@@ -249,11 +301,13 @@ export function buildPortalActionInventory({ root = PORTAL_SOURCE_ROOT } = {}) {
     if (node?.type !== 'MemberExpression' || node.computed && node.property.type !== 'Literal') return null;
     const propertyName = node.computed ? node.property.value : node.property.name;
     if (node.object.type === 'Identifier' && receiverWrites(module).has(node.object.name)) return null;
-    const receiver = resolveObjectValue(module, owner, node.object);
+    const receiver = resolveObjectValue(module, owner, node.object, new Set(), true);
     if (!receiver) return null;
-    const properties = receiver.node.properties.filter((property) => !property.computed && (property.key?.name ?? property.key?.value) === propertyName);
+    const properties = receiver.node.properties.filter((property) => property.type === 'Property' && !property.computed && (property.key?.name ?? property.key?.value) === propertyName);
     const property = properties.at(-1);
-    return property && property.kind !== 'get' && property.kind !== 'set' ? resolveCallbackDeclaration(receiver.module, receiver.owner, property.value, seen) : null;
+    const lastSpread = receiver.node.properties.findLastIndex((item) => item.type === 'SpreadElement');
+    if (!property || receiver.node.properties.indexOf(property) < lastSpread) return null;
+    return property.kind !== 'get' && property.kind !== 'set' ? resolveCallbackDeclaration(receiver.module, receiver.owner, property.value, seen) : null;
   }
   function isNativeCollectionMethod(module, owner, node) {
     if (node?.object?.type !== 'Identifier' || node.property?.name !== 'delete') return false;
@@ -276,6 +330,31 @@ export function buildPortalActionInventory({ root = PORTAL_SOURCE_ROOT } = {}) {
         && !scope.bindings.has(value.callee.name) && !scope.parameterOwners.has(value.callee.name) && !active.importBindings.has(value.callee.name);
     }
     return collection(module, owner, node.object);
+  }
+  function conditionalBranches(module, owner, node) {
+    if (node.type !== 'ConditionalExpression') return [resolveCallbackDeclaration(module, owner, node)];
+    return [node.consequent, node.alternate].filter((branch) => !absentValue(module, owner, branch)).flatMap((branch) => conditionalBranches(module, owner, branch));
+  }
+  // A ref whose every assignment is null or a `new Promise` executor's resolve/reject only settles
+  // a pending promise; the awaiting caller's own action owns whatever follows.
+  function promiseSettler(module, owner, node) {
+    const binding = lexicalBindings(module, owner, node).bindings.get(node.name);
+    if (binding?.type !== 'MemberExpression' || binding.computed || binding.property.name !== 'current' || binding.object.type !== 'Identifier') return false;
+    const ref = binding.object.name;
+    if (!/^(?:React\.)?useRef\b/.test(raw(module, lexicalBindings(module, owner, binding).bindings.get(ref)))) return false;
+    const values = [];
+    let escapes = false;
+    each(componentRoot(module, owner), (child, parent) => {
+      if (child.type === 'Identifier' && child.name === ref && !(parent?.type === 'MemberExpression' && parent.object === child && !parent.computed && parent.property.name === 'current') && !(parent?.type === 'VariableDeclarator' && parent.id === child)) escapes = true;
+      if (child.type === 'AssignmentExpression' && raw(module, child.left) === `${ref}.current`) values.push(child.right);
+    });
+    const executors = [];
+    each(componentRoot(module, owner), (child) => {
+      if (child.type === 'NewExpression' && child.callee.type === 'Identifier' && child.callee.name === 'Promise' && ['ArrowFunctionExpression', 'FunctionExpression'].includes(child.arguments[0]?.type)) executors.push(child.arguments[0]);
+    });
+    const settles = (value) => value.type === 'Literal' && value.value === null
+      || value.type === 'Identifier' && executors.some((executor) => executor.start <= value.start && value.end <= executor.end && executor.params.slice(0, 2).some((param) => param.type === 'Identifier' && param.name === value.name));
+    return !escapes && values.length > 0 && values.every(settles) && !lexicalBindings(module, owner, node).parameterOwners.has('Promise');
   }
   function isNativeCallable(module, owner, node, seen = new Set()) {
     if (node?.type === 'VariableDeclarator') return isNativeCallable(module, owner, node.init, seen);
@@ -344,6 +423,229 @@ export function buildPortalActionInventory({ root = PORTAL_SOURCE_ROOT } = {}) {
     }
     return null;
   }
+  const componentRoot = (module, owner) => {
+    const declaration = module.values.get(owner);
+    let root = declaration?.type === 'VariableDeclarator' ? declaration.init : declaration;
+    while (root?.type === 'CallExpression' && /^(?:React\.)?(?:forwardRef|memo)$/.test(raw(module, root.callee)) && root.arguments.length === 1) root = root.arguments[0];
+    return root;
+  };
+  const absentValue = (module, owner, node) => node.type === 'Literal' && node.raw === 'null'
+    || node.type === 'Identifier' && node.name === 'undefined' && !lexicalBindings(module, owner, node).bindings.has('undefined');
+  // An omitted, undefaulted callback prop leaves no handler when every read is a truthiness test,
+  // an optional call, a hook dependency, an intrinsic event attribute, or a child prop that is inert in turn.
+  function omissionInert(module, owner, name, seen = new Set()) {
+    const marker = `${module.file}#${owner}#${name}`;
+    if (seen.has(marker)) return false;
+    seen = new Set([...seen, marker]);
+    const root = componentRoot(module, owner);
+    const pattern = root?.params?.[0];
+    const property = pattern?.type === 'ObjectPattern' ? pattern.properties.find((item) => item.type === 'Property' && !item.computed && (item.key.name ?? item.key.value) === name) : null;
+    const rest = !property && EVENTS.test(name) ? pattern?.properties?.find((item) => item.type === 'RestElement' && item.argument.type === 'Identifier') : null;
+    const whole = pattern?.type === 'Identifier' ? pattern.name : null;
+    if (property?.value.type !== 'Identifier' && !rest && !whole) return false;
+    const local = property ? property.value.name : rest ? rest.argument.name : whole;
+    const ancestors = [];
+    let inert = true;
+    const requires = (test) => test?.type === 'Identifier' ? test.name === local && !whole
+      : test?.type === 'MemberExpression' ? Boolean(whole) && !test.computed && test.object.type === 'Identifier' && test.object.name === whole && test.property.name === name
+        : test?.type === 'LogicalExpression' && test.operator === '&&' && (requires(test.left) || requires(test.right));
+    const guarded = (node) => ancestors.some((ancestor, index) => {
+      const next = ancestors[index + 1] ?? node;
+      return (ancestor.type === 'IfStatement' || ancestor.type === 'ConditionalExpression') && ancestor.consequent === next && requires(ancestor.test)
+        || ancestor.type === 'LogicalExpression' && ancestor.operator === '&&' && ancestor.right === next && requires(ancestor.left);
+    });
+    const reference = (node) => {
+      const [parent, grand, great] = [ancestors.at(-1), ancestors.at(-2), ancestors.at(-3)];
+      if (rest) return parent.type === 'JSXSpreadAttribute' && grand?.type === 'JSXOpeningElement' && grand.name.type === 'JSXIdentifier' && /^[a-z]/.test(grand.name.name);
+      if (parent.type === 'MemberExpression' && parent.property === node && !parent.computed) return true;
+      if (parent.type === 'Property' && parent.key === node && !parent.shorthand) return true;
+      if (guarded(node)) return true;
+      if (parent.type === 'CallExpression') return parent.callee === node && parent.optional;
+      if (['IfStatement', 'ConditionalExpression'].includes(parent.type)) return parent.test === node;
+      if (['LogicalExpression', 'UnaryExpression'].includes(parent.type)) return true;
+      if (parent.type === 'ArrayExpression') return grand?.type === 'CallExpression' && grand.arguments[1] === parent && /^use(?:Callback|Effect|LayoutEffect|Memo)$/.test(raw(module, grand.callee));
+      if (parent.type !== 'JSXExpressionContainer' || grand?.type !== 'JSXAttribute' || great?.type !== 'JSXOpeningElement' || great.name.type !== 'JSXIdentifier') return false;
+      if (/^[a-z]/.test(great.name.name)) return EVENTS.test(raw(module, grand.name));
+      const target = resolveValue(module.file, great.name.name);
+      return Boolean(target) && omissionInert(target.module, target.name, raw(module, grand.name), seen);
+    };
+    const visit = (node) => {
+      if (!inert || !node) return;
+      if (whole && node.type === 'Identifier' && node.name === local && ancestors.length) {
+        const parent = ancestors.at(-1);
+        if (parent.type === 'MemberExpression' && parent.object === node && !parent.computed && parent.property.name !== name) return;
+        if (parent.type !== 'MemberExpression' || parent.object !== node || parent.computed) { inert = false; return; }
+        const member = ancestors.pop();
+        const ok = reference(member);
+        ancestors.push(member);
+        if (!ok) inert = false;
+        return;
+      }
+      if (!whole && node.type === 'Identifier' && node.name === local && ancestors.length && !reference(node)) {
+        if (process.env.PORTAL_INVENTORY_DEBUG && finalPass) console.error('not inert', keyFor(module.file, owner), name, ancestors.at(-1).type, raw(module, ancestors.at(-2) ?? node).slice(0, 80));
+        inert = false; return;
+      }
+      ancestors.push(node);
+      for (const child of children(node)) visit(child);
+      ancestors.pop();
+    };
+    visit(root.body);
+    return inert;
+  }
+  // Every concrete value an expression can carry, following component props, `props.x`,
+  // destructured prop aliases and members of resolvable objects back to their declarations.
+  // Null means some flow is unknown; `{ omitted }` marks a caller that leaves the prop undefined.
+  function flowValues(module, owner, expression, seen = new Set()) {
+    if (!expression) return null;
+    const marker = `${module.file}:${owner}:${expression.start}:${expression.end}`;
+    if (seen.has(marker)) return null;
+    seen = new Set([...seen, marker]);
+    if (expression.type === 'ConditionalExpression') {
+      if (absentValue(module, owner, expression.alternate)) return flowValues(module, owner, expression.consequent, seen);
+      if (absentValue(module, owner, expression.consequent)) return flowValues(module, owner, expression.alternate, seen);
+      const both = [flowValues(module, owner, expression.consequent, seen), flowValues(module, owner, expression.alternate, seen)];
+      return both.every(Boolean) ? both.flat() : null;
+    }
+    const scope = lexicalBindings(module, owner, expression);
+    const root = scope.functionRoot;
+    const whole = root?.params?.[0]?.type === 'Identifier' ? root.params[0].name : null;
+    const propFlow = (prop) => {
+      const callers = callerProps.get(keyFor(module.file, owner)) ?? [];
+      if (!callers.length) return null;
+      const values = [];
+      for (const caller of callers) {
+        const supplied = callerValues(caller, prop);
+        if (!supplied) return null;
+        for (const entry of supplied) {
+          if (entry.value === null) { values.push({ omitted: true, inert: omissionInert(module, owner, prop) }); continue; }
+          const nested = flowValues(entry.module, entry.owner, entry.value, seen);
+          if (!nested) return null;
+          values.push(...nested);
+        }
+      }
+      return values;
+    };
+    if (expression.type === 'Identifier') {
+      const binding = scope.bindings.get(expression.name);
+      if (binding === AMBIGUOUS_BINDING) return null;
+      if (!binding && scope.parameterOwners.get(expression.name) === root && root.params[0]?.type === 'ObjectPattern') {
+        const property = root.params[0].properties.find((item) => item.type === 'Property' && !item.computed && item.value.type === 'Identifier' && item.value.name === expression.name);
+        return property ? propFlow(property.key.name ?? property.key.value) : null;
+      }
+      if (binding && ['Identifier', 'MemberExpression', 'ConditionalExpression'].includes(binding.type)) return receiverWrites(module).has(expression.name) ? null : flowValues(module, owner, binding, seen);
+      const alias = !binding && scope.aliases.get(expression.name);
+      if (alias && whole && alias.object === whole && !scope.bindings.has(whole)) return propFlow(alias.key);
+      return [{ module, owner, value: expression }];
+    }
+    if (expression.type === 'MemberExpression' && !expression.computed) {
+      const property = expression.property.name;
+      if (expression.object.type === 'Identifier' && expression.object.name === whole && !scope.bindings.has(whole)) return propFlow(property);
+      if (expression.object.type === 'Identifier' && receiverWrites(module).has(expression.object.name)) return null;
+      const objects = flowValues(module, owner, expression.object, seen);
+      if (!objects) return null;
+      const values = [];
+      for (const object of objects) {
+        const mutated = object.value?.type === 'Identifier' && receiverWrites(object.module).has(object.value.name);
+        const resolved = !object.omitted && !mutated && resolveObjectValue(object.module, object.owner, object.value, new Set(), true);
+        if (!resolved) return null;
+        const member = resolved.node.properties.filter((item) => item.type === 'Property' && !item.computed && (item.key?.name ?? item.key?.value) === property).at(-1);
+        if (!member || member.kind !== 'init' || resolved.node.properties.indexOf(member) < resolved.node.properties.findLastIndex((item) => item.type === 'SpreadElement')) return null;
+        const nested = flowValues(resolved.module, resolved.owner, member.value, seen);
+        if (!nested) return null;
+        values.push(...nested);
+      }
+      return values;
+    }
+    return [{ module, owner, value: expression }];
+  }
+  // One exact declaration (or only useState setters) behind every supplied flow; any second
+  // declaration is a union of differing business effects and stays unresolved.
+  function flowCallback(module, owner, node) {
+    const flows = flowValues(module, owner, node);
+    if (!flows) return null;
+    const declarations = new Map();
+    let setter = false;
+    let supplied = 0;
+    for (const flow of flows) {
+      if (flow.omitted) { if (!flow.inert) return null; continue; }
+      supplied += 1;
+      const declaration = resolveCallbackDeclaration(flow.module, flow.owner, flow.value);
+      if (declaration) declarations.set(`${declaration.module.file}:${declaration.node.start}:${declaration.node.end}`, declaration);
+      else if (terminalCallback(flow)) setter = true;
+      else return null;
+    }
+    if (!supplied || declarations.size > 1 || declarations.size && setter) return null;
+    return { declaration: [...declarations.values()][0] ?? null, setter };
+  }
+  function terminalCallback({ module, owner, value }) {
+    if (resolveCallbackDeclaration(module, owner, value)) return true;
+    if (value.type !== 'Identifier') return false;
+    const scope = lexicalBindings(module, owner, value);
+    return !scope.bindings.has(value.name) && scope.setterNames.has(value.name);
+  }
+  // A primitive's forwarded callback is bound when every value its callers can supply reaches an
+  // exact declaration or setter; callers that omit it count separately when omission is inert.
+  function callerBinding(module, owner, name) {
+    const callers = callerProps.get(keyFor(module.file, owner)) ?? [];
+    const states = [];
+    const labels = [];
+    for (const caller of callers) {
+      const supplied = callerValues(caller, name) ?? [{ module: caller.module, owner: caller.owner, value: undefined }];
+      for (const entry of supplied) {
+        const label = `${relative(entry.module.file)} ${entry.owner} ${entry.value ? raw(entry.module, entry.value) : entry.value === null ? '(omitted)' : '(unknown spread)'}`;
+        if (entry.value === null) { states.push(omissionInert(module, owner, name) ? 'omitted' : 'unbound'); labels.push(label); continue; }
+        const flows = entry.value ? flowValues(entry.module, entry.owner, entry.value) : null;
+        if (!flows) { states.push('unbound'); labels.push(label); continue; }
+        for (const flow of flows) { states.push(flow.omitted ? (flow.inert ? 'omitted' : 'unbound') : terminalCallback(flow) ? 'bound' : 'unbound'); labels.push(label); }
+      }
+    }
+    if (process.env.PORTAL_INVENTORY_DEBUG && finalPass) states.forEach((state, index) => { if (state === 'unbound') console.error('unbound', keyFor(module.file, owner), name, '<-', labels[index]); });
+    const omitted = states.filter((state) => state === 'omitted').length;
+    return { callers: states.length, resolved: states.filter((state) => state === 'bound').length, ...(omitted ? { omitted } : {}) };
+  }
+  // Every value one JSX caller can supply for a prop, in attribute order: null when omitted, or
+  // null for the whole caller when a spread cannot be resolved to exact objects.
+  function callerValues(caller, name, seen = new Set()) {
+    let values = [{ module: caller.module, owner: caller.owner, value: null }];
+    for (const attribute of caller.attributes ?? []) {
+      if (attribute.type === 'JSXAttribute') {
+        if (raw(caller.module, attribute.name) === name) values = [{ module: caller.module, owner: caller.owner, value: attribute.value?.expression ?? attribute.value ?? attribute }];
+        continue;
+      }
+      const spread = spreadValues(caller.module, caller.owner, attribute.argument, name, seen);
+      if (!spread) return null;
+      values = values.flatMap((previous) => spread.map((next) => next.value === null ? previous : next));
+      if (values.length > 256) return null;
+    }
+    return values;
+  }
+  function spreadValues(module, owner, node, name, seen) {
+    if (node?.type === 'Identifier' && receiverWrites(module).has(node.name)) return null;
+    const object = resolveObjectValue(module, owner, node);
+    if (object) {
+      const property = object.node.properties.filter((item) => item.type === 'Property' && !item.computed && (item.key.name ?? item.key.value) === name).at(-1);
+      if (property && property.kind !== 'init') return null;
+      return [{ module: object.module, owner: object.owner, value: property ? property.value : null }];
+    }
+    const root = componentRoot(module, owner);
+    if (node?.type !== 'Identifier' || root?.params?.[0]?.type !== 'Identifier' || root.params[0].name !== node.name || lexicalBindings(module, owner, node).bindings.has(node.name)) return null;
+    const marker = `${module.file}#${owner}#${name}`;
+    if (seen.has(marker)) return null;
+    seen = new Set([...seen, marker]);
+    const jsx = callerProps.get(keyFor(module.file, owner)) ?? [];
+    const calls = directCallSites(module, owner);
+    if (!calls || !jsx.length && !calls.length) return null;
+    const values = [];
+    for (const caller of jsx) { const supplied = callerValues(caller, name, seen); if (!supplied) return null; values.push(...supplied); }
+    for (const { module: active, owner: activeOwner, call } of calls) {
+      const argument = resolveObjectValue(active, activeOwner, call.arguments[0]);
+      if (!argument) return null;
+      const property = argument.node.properties.filter((item) => item.type === 'Property' && !item.computed && (item.key.name ?? item.key.value) === name).at(-1);
+      if (property && property.kind !== 'init') return null;
+      values.push({ module: argument.module, owner: argument.owner, value: property ? property.value : null });
+    }
+    return values;
+  }
   function actionTraits(module, owner, container, attrs, gates) {
     const earlyGates = [];
     // Only unconditional owner-level early exits constrain every action. Nested
@@ -375,22 +677,26 @@ export function buildPortalActionInventory({ root = PORTAL_SOURCE_ROOT } = {}) {
     const eligibilityPermissionCalls = [];
     const earlyCallbackGuards = [];
     const unresolvedCallbacks = new Set();
+    const injectedProps = new Map();
     const bindInjected = (active, activeOwner, node, schedule = (resolved) => pending.push(resolved)) => {
       const resolved = resolveCallbackDeclaration(active, activeOwner, node, new Set(), active === module && activeOwner === owner ? { suppliedOnly } : {});
       if (!resolved) return false;
       schedule(resolved);
       return true;
     };
-    for (const node of callbackNodes) {
-      if (node.type === 'Identifier' && !bindings.has(node.name) && !lexicalBindings(module, owner).setterNames.has(node.name) && !module.imports.has(node.name) && !bindInjected(module, owner, node)) unresolvedCallbacks.add(node.name);
-      if (node.type === 'MemberExpression' && !resolveMemberCallback(module, owner, node)) unresolvedCallbacks.add(raw(module, node));
-    }
-    const callerBindings = Object.fromEntries(callbackNodes.filter((node) => node.type === 'Identifier' && unresolvedCallbacks.has(node.name)).map((node) => {
-      const callers = callerProps.get(keyFor(module.file, owner)) ?? [];
-      const resolved = callers.filter((caller) => !caller.spread && caller.props.get(node.name) && resolveCallbackDeclaration(caller.module, caller.owner, caller.props.get(node.name))).length;
-      return [node.name, { callers: callers.length, resolved }];
-    }));
     let localChange = false;
+    const flowResolved = (active, activeOwner, node, use) => {
+      const flow = flowCallback(active, activeOwner, node);
+      if (!flow) return false;
+      if (flow.setter) localChange = true;
+      if (flow.declaration) use(flow.declaration);
+      return true;
+    };
+    for (const node of callbackNodes) {
+      if (node.type === 'Identifier' && !bindings.has(node.name) && !lexicalBindings(module, owner).setterNames.has(node.name) && !module.imports.has(node.name) && !bindInjected(module, owner, node) && !flowResolved(module, owner, node, (declaration) => pending.push(declaration))) unresolvedCallbacks.add(node.name);
+      if (node.type === 'MemberExpression' && !resolveMemberCallback(module, owner, node) && !flowResolved(module, owner, node, (declaration) => pending.push(declaration))) unresolvedCallbacks.add(raw(module, node));
+    }
+    const callerBindings = Object.fromEntries(callbackNodes.filter((node) => node.type === 'Identifier' && unresolvedCallbacks.has(node.name)).map((node) => [node.name, callerBinding(module, owner, node.name)]));
     function argumentBinding(binding, seen = new Set()) {
       const node = binding?.node;
       if (node?.type !== 'Identifier') return binding;
@@ -507,8 +813,17 @@ export function buildPortalActionInventory({ root = PORTAL_SOURCE_ROOT } = {}) {
           const optionsBinding = boundArgument(child.arguments[callee === 'fetch' ? 1 : 3]);
           const endpoint = endpointBinding.node;
           const options = optionsBinding.node;
-          const method = options?.properties?.find((property) => (property.key?.name ?? property.key?.value) === 'method')?.value;
-          requests.push({ callee, endpoint: raw(endpointBinding.module, endpoint), endpointShape: endpoint?.type === 'TemplateLiteral' ? endpoint.quasis.map((part) => part.value.cooked).join(':id') : endpoint?.value ?? null, method: method?.value ?? (method ? raw(optionsBinding.module, method) : options && options.type !== 'ObjectExpression' ? null : 'GET') });
+          let method = options?.properties?.find((property) => (property.key?.name ?? property.key?.value) === 'method')?.value;
+          let methodModule = optionsBinding.module;
+          // `method: options.method` forwards the method of an exact bound options object; absent means GET.
+          if (method?.type === 'MemberExpression' && !method.computed && method.object.type === 'Identifier') {
+            const source = boundArgument(method.object);
+            if (source.node?.type === 'ObjectExpression' && !source.node.properties.some((property) => property.type !== 'Property' || property.computed)) {
+              method = source.node.properties.filter((property) => (property.key.name ?? property.key.value) === method.property.name).at(-1)?.value;
+              methodModule = source.module;
+            } else if (source.knownAbsent) method = undefined;
+          }
+          requests.push({ callee, endpoint: raw(endpointBinding.module, endpoint), endpointShape: endpoint?.type === 'TemplateLiteral' ? endpoint.quasis.map((part) => part.value.cooked).join(':id') : endpoint?.value ?? null, method: method?.value ?? (method ? raw(methodModule, method) : options && options.type !== 'ObjectExpression' ? null : 'GET') });
           beforeBoundary = false;
           sawBoundary = true;
           if (options && options.type !== 'ObjectExpression' || method && method.type !== 'Literal') unresolvedCallbacks.add(`${callee}: unresolved request options/method`);
@@ -519,13 +834,19 @@ export function buildPortalActionInventory({ root = PORTAL_SOURCE_ROOT } = {}) {
           if (declared) invokeTarget({ ...declared, argumentsByName: bound.argumentsByName }, child);
           else if (!(bound.knownAbsent && child.optional)) unresolvedCallbacks.add(`${callee}: unresolved invoked parameter`);
         } else if (child.callee.type === 'Identifier' && scope.parameterOwners.has(callee) && !scope.bindings.has(callee)) {
-          if (!bindInjected(active, activeOwner, child.callee, schedule)) unresolvedCallbacks.add(callee);
+          if (!bindInjected(active, activeOwner, child.callee, schedule) && !flowResolved(active, activeOwner, child.callee, (declaration) => invokeTarget(declaration, child))) {
+            unresolvedCallbacks.add(callee);
+            if (scope.parameterOwners.get(callee) === scope.functionRoot && !injectedProps.has(callee)) injectedProps.set(callee, { module: active, owner: activeOwner });
+          }
         } else if (child.callee.type === 'Identifier' && (scope.bindings.has(callee) || active.imports.has(callee))) {
           let target = scope.bindings.has(callee) ? { module: active, owner: active.values.get(callee) === scope.bindings.get(callee) ? callee : activeOwner, node: scope.bindings.get(callee) } : (() => { const imported = resolveValue(active.file, callee); return imported ? { module: imported.module, owner: imported.name, node: imported.node } : null; })();
           if (target?.node?.type === 'VariableDeclarator') target = { ...target, node: target.node.init };
+          // A local conditional callback runs one of its branches, like an inline conditional does.
+          const branches = target?.node?.type === 'ConditionalExpression' ? conditionalBranches(target.module, target.owner, target.node) : null;
+          if (branches?.length && branches.every(Boolean)) { for (const branch of branches) invokeTarget(branch, child); return; }
           if (target && !['FunctionDeclaration', 'FunctionExpression', 'ArrowFunctionExpression'].includes(target.node?.type)) target = resolveCallbackDeclaration(target.module, target.owner, target.node);
           if (target) invokeTarget(target, child);
-          else if (!isNativeCallable(active, activeOwner, child.callee)) unresolvedCallbacks.add(`${callee}: unresolved callable declaration`);
+          else if (!isNativeCallable(active, activeOwner, child.callee) && !promiseSettler(active, activeOwner, child.callee)) unresolvedCallbacks.add(`${callee}: unresolved callable declaration`);
         } else if (child.callee.type === 'Identifier' && /^(on[A-Z]|handle|submit|save|create|delete|retry|refresh)/.test(callee) && !scope.bindings.has(callee) && !scope.setterNames.has(callee) && !active.imports.has(callee) && !bindInjected(active, activeOwner, child.callee, schedule)) unresolvedCallbacks.add(callee);
         else if (child.callee.type === 'MemberExpression' && /^(?:export|verify|submit|save|create|delete|update|retry|refresh|on[A-Z])/.test(child.callee.property?.name ?? '')) {
           const target = resolveMemberCallback(active, activeOwner, child.callee);
@@ -533,7 +854,7 @@ export function buildPortalActionInventory({ root = PORTAL_SOURCE_ROOT } = {}) {
           const nativeDomCall = ['URL.createObjectURL', 'URL.revokeObjectURL', 'document.createElement'].includes(callee) && receiver.type === 'Identifier'
             && !scope.bindings.has(receiver.name) && !scope.parameterOwners.has(receiver.name) && !active.importBindings.has(receiver.name);
           if (target) invokeTarget(target, child);
-          else if (!isNativeCollectionMethod(active, activeOwner, child.callee) && !nativeDomCall) unresolvedCallbacks.add(callee);
+          else if (!isNativeCollectionMethod(active, activeOwner, child.callee) && !nativeDomCall && !flowResolved(active, activeOwner, child.callee, (declaration) => invokeTarget(declaration, child))) unresolvedCallbacks.add(callee);
         }
       });
       const effect = { alwaysBoundary: sawBoundary && beforeBoundary === false && !returnedBeforeBoundary, mayBoundary: sawBoundary };
@@ -541,6 +862,7 @@ export function buildPortalActionInventory({ root = PORTAL_SOURCE_ROOT } = {}) {
       return effect;
     }
     while (pending.length) visitEntry(pending.pop());
+    for (const [name, site] of injectedProps) if (!callerBindings[name]) callerBindings[name] = callerBinding(site.module, site.owner, name);
     // A directly forwarded callback is just as unresolved as onClick={() => onRefresh()}.
     const callbackSource = fragments.join('\n');
     const guardSource = gates.map((gate) => raw(module, gate)).join('\n');
@@ -678,12 +1000,12 @@ export function buildPortalActionInventory({ root = PORTAL_SOURCE_ROOT } = {}) {
         const published = /^usePublish([A-Z]\w*)$/.exec(child.callee.name);
         if (published) { if (!storePublishers.has(published[1])) storePublishers.set(published[1], new Set()); storePublishers.get(published[1]).add(key); }
       }
-      if (child.type === 'JSXOpeningElement') registerCaller(module, resolved.name, child);
+      if (child.type === 'JSXOpeningElement') registerCaller(module, resolved.name, child, gates);
       if (child.type === 'JSXOpeningElement') { const before = actions.length; recordAction(module, child, parent, resolved.name, gates); if (actions.length > before) actions[actions.length - 1].routeConstraint = constraint; }
       if (child.type === 'JSXIdentifier' && parent?.type === 'JSXOpeningElement' && parent.name === child) follow(module.file, child.name, key, constraint);
       if (child.type === 'Identifier') {
         const property = (parent?.type === 'MemberExpression' && parent.property === child && !parent.computed) || ((parent?.type === 'Property' || parent?.type === 'MethodDefinition') && parent.key === child && !parent.computed);
-        if (!property && (module.values.has(child.name) || module.imports.has(child.name))) follow(module.file, child.name, key, constraint);
+        if (!property && (module.values.has(child.name) || module.imports.has(child.name))) { registerReference(module, resolved.name, child, parent); follow(module.file, child.name, key, constraint); }
       }
       for (const next of children(child)) walk(next, child, constraint, gates);
     }
@@ -758,6 +1080,7 @@ export function buildPortalActionInventory({ root = PORTAL_SOURCE_ROOT } = {}) {
   }
   // All actual caller declarations are known only after reachability traversal.
   // Re-analyse effects with exact equivalent injected callback bindings now available.
+  finalPass = true;
   for (const action of actions) {
     const input = actionInputs.get(action.id);
     action.traits = { ...actionTraits(input.module, input.owner, input.container, input.attrs, input.gates), modalBoundary: /^(FormModal|ConfirmModal)$/.test(action.tag) };
@@ -782,12 +1105,48 @@ export function buildPortalActionInventory({ root = PORTAL_SOURCE_ROOT } = {}) {
     for (const gate of input.gates) scan(input.module, input.owner, gate, 0);
     return [...names].filter((name) => storePublishers.has(name));
   };
+  // A component rendered only behind resolvable identity guards inherits them: the OR over its
+  // callers of each caller element's gates AND the caller's early exits AND its own inheritance.
+  // Any caller path without a resolvable guard leaves the component unrestricted.
+  const inheritedCache = new Map();
+  function ownerEarlyGates(module, owner) {
+    return (componentRoot(module, owner)?.body?.body ?? []).filter((node) => {
+      if (node.type !== 'IfStatement') return false;
+      const exits = node.consequent.type === 'BlockStatement' ? node.consequent.body : [node.consequent];
+      return exits.some((child) => child.type === 'ReturnStatement' && (!child.argument || child.argument.type === 'Literal' && child.argument.value === null));
+    }).map((node) => node.test);
+  }
+  function inheritedGuard(module, owner, seen = new Set()) {
+    const key = keyFor(module.file, owner);
+    if (inheritedCache.has(key)) return inheritedCache.get(key);
+    if (seen.has(key)) return null;
+    seen = new Set([...seen, key]);
+    const callers = callerProps.get(key) ?? [];
+    let result = null;
+    if (callers.length) {
+      const paths = [];
+      for (const caller of callers) {
+        const parts = [
+          ...ownerEarlyGates(caller.module, caller.owner).map((gate) => permissionGuard(caller.module, caller.owner, gate, true)),
+          ...(caller.gates ?? []).map((gate) => permissionGuard(caller.module, caller.owner, gate)),
+          inheritedGuard(caller.module, caller.owner, seen),
+        ].filter(Boolean);
+        if (!parts.length) { paths.length = 0; break; }
+        paths.push(parts.reduce((left, right) => ({ operator: '&&', left, right })));
+      }
+      if (paths.length === callers.length) result = paths.reduce((left, right) => ({ operator: '||', left, right }));
+    }
+    if (seen.size === 1) inheritedCache.set(key, result);
+    return result;
+  }
   const unique = new Map();
   for (const item of actions) {
     const input = actionInputs.get(item.id);
     const reaching = sharedRoots.filter((root) => rootClosures.get(root).has(item.symbol));
     const mounted = reaching.length === 1 && !routes.some((route) => routeClosures.get(route).has(item.symbol)) ? hostMounts.get(reaching[0]) : null;
     if (mounted) item.traits.authorizationGuards = [...item.traits.authorizationGuards, ...mounted.gates.map((gate) => permissionGuard(mounted.module, mounted.owner, gate)).filter(Boolean)];
+    const inherited = input ? inheritedGuard(input.module, input.owner) : null;
+    if (inherited) item.traits.authorizationGuards = [...item.traits.authorizationGuards, inherited];
     item.routes = shellKeys.has(item.symbol) ? [...routes] : routes.filter((route) => routeClosures.get(route).has(item.symbol));
     if (item.symbol === `${UI_ROOT}/pages/router.tsx#RouteView`) item.routes = [...new Set(branchRanges.filter((range) => item.position >= range.start && item.position <= range.end).flatMap((range) => range.routes))];
     if (item.routeConstraint) item.routes = item.routes.filter((route) => item.routeConstraint.includes(route));

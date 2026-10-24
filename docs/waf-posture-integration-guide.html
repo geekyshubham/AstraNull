@@ -490,7 +490,7 @@
 
     <div class="callout warn">
       <strong>Not a separate product</strong>
-      <p>WAF Posture plugs into the existing validation loop — target groups, probes, agents, test runs, and findings. It is feature-gated and disabled by default. When off, <code>/v1/waf/*</code> returns <code>404 waf_feature_disabled</code>.</p>
+      <p>WAF Posture plugs into the existing validation loop — target groups, probes, agents, test runs, and findings. It is always on for every tenant; the <code>ASTRANULL_WAF_POSTURE_ENABLED</code> flag is still read but no longer changes the outcome, so <code>404 waf_feature_disabled</code> is unreachable.</p>
     </div>
   </section>
 

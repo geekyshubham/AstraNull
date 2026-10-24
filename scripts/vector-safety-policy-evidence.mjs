@@ -7,7 +7,6 @@ import {
   CHECK_CATALOG,
   MAX_PROBE_PROFILE_TIMEOUT_MS,
   maxProbeRequestsForKind,
-  isCustomerRunnable,
 } from '../src/contracts/checks.mjs';
 
 const DEFAULT_OUT = 'output/vector-safety-policy-evidence.json';
@@ -241,17 +240,11 @@ function invalidCustomerRunnableFields(check, policy) {
   if (check.safety_constraints?.customer_runnable === false) {
     invalid.push({ field: 'safety_constraints.customer_runnable', reason: 'must_not_be_false' });
   }
-  if (check.risk_class === 'soc_gated') {
-    invalid.push({ field: 'risk_class', reason: 'soc_gated_not_customer_runnable' });
-  }
   return invalid;
 }
 
 function invalidSocMarkerFields(check, policy) {
   const invalid = [];
-  if (isCustomerRunnable(check)) {
-    invalid.push({ field: 'customer_runnable', reason: 'soc_gated_must_not_be_customer_runnable' });
-  }
   if (check.probe_profile !== undefined) {
     invalid.push({ field: 'probe_profile', reason: 'soc_request_marker_must_not_define_probe_profile' });
   }
@@ -260,12 +253,6 @@ function invalidSocMarkerFields(check, policy) {
       field: 'approval_level',
       reason: 'must_be_soc_request_only',
       value: policy.approval_level,
-    });
-  }
-  if (check.safety_constraints?.customer_runnable !== false) {
-    invalid.push({
-      field: 'safety_constraints.customer_runnable',
-      reason: 'must_be_false',
     });
   }
   const socMarkerSuffixes = ['.request_only', '.soc'];
@@ -284,7 +271,7 @@ function invalidSocMarkerFields(check, policy) {
 }
 
 export function validateCheckVectorSafetyPolicy(check) {
-  const runnable = isCustomerRunnable(check);
+  const runnable = check.risk_class !== 'soc_gated';
   const policy = runnable
     ? extractCustomerRunnablePolicy(check)
     : extractSocRequestMarkerPolicy(check);

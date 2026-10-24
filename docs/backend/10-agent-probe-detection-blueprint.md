@@ -78,7 +78,7 @@ Failure states:
 | PROBE_FAILED | Probe infrastructure error | “AstraNull probe failed; no customer risk inferred.” |
 | INCONCLUSIVE | Evidence insufficient | “We could not prove pass/fail. See why.” |
 | MISPLACED_AGENT | Agent cannot observe expected path | “Agent placement does not prove this target.” |
-| SAFETY_BLOCKED | Limits/approval missing | “This scenario needs SOC approval.” |
+| SAFETY_BLOCKED | Limits/approval missing | “This scenario needs its authorization evidence.” |
 
 ## Correlation truth table
 

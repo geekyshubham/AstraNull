@@ -22,13 +22,13 @@ function parse(input) { return parseOriginClueImport(input, 'origin.test', now);
 const errorCode = (code) => (error) => error.code === code;
 beforeEach(() => freshStore());
 
-test('tenant opt-in is disabled by default, named and independent of discovery/global flags', () => {
+test('origin clues are always on, independent of discovery/global flags', () => {
   const env = { NODE_ENV: 'test', ASTRANULL_AUTH_MODE: 'dev-headers' };
-  assert.equal(originCluesEnabledFor(loadRuntimeConfig(env), 'ten_demo'), false);
+  assert.equal(originCluesEnabledFor(loadRuntimeConfig(env), 'ten_demo'), true);
   const config = loadRuntimeConfig({ ...env, ASTRANULL_ORIGIN_CLUES_ENABLED_TENANTS: '{"ten_demo":true,"ten_other":false}' });
   assert.equal(originCluesEnabledFor(config, 'ten_demo'), true);
-  assert.equal(originCluesEnabledFor(config, 'ten_other'), false);
-  assert.equal(originCluesEnabledFor({ featureFlags: { externalDiscoveryEnabled: true, originCluesEnabled: true } }, 'ten_demo'), false);
+  assert.equal(originCluesEnabledFor(config, 'ten_other'), true);
+  assert.equal(originCluesEnabledFor({ featureFlags: { externalDiscoveryEnabled: true, originCluesEnabled: true } }, 'ten_demo'), true);
   assert.throws(() => loadRuntimeConfig({ ...env, ASTRANULL_ORIGIN_CLUES_ENABLED_TENANTS: 'true' }), /JSON object/);
 });
 
@@ -84,7 +84,8 @@ test('documented Trickest CSV columns preserve quoted commas, unknown source tim
 
 test('shared service guards RBAC, tenant ownership, domain kind, deletion and group archive', async () => {
   const s = service();
-  assert.equal((await s.list(ctx, 'tgt_1', {}, { runtimeConfig: {} })).error, 'origin_clues_feature_disabled');
+  // Origin clues are no longer feature-gated, so the first call already reads the target.
+  assert.equal((await s.list(ctx, 'tgt_1', {}, { runtimeConfig: {} })).error, undefined);
   assert.equal((await s.import({ ...ctx, role: 'viewer' }, 'tgt_1', body(), options())).status, 403);
   assert.equal((await s.list({ ...ctx, tenantId: 'ten_other' }, 'tgt_1', {}, options())).status, 404);
   getStore().targets[0].kind = 'ip';

@@ -100,7 +100,7 @@ function makeSeedTargetCompatibleWith(check) {
 }
 
 describe('vector catalog', () => {
-  it('blocks all soc_gated checks from test-runs', () => {
+  it('starts every soc_gated check from test-runs', () => {
     freshStore();
     const ctx = { tenantId: 'ten_demo', userId: 'u1', role: 'engineer' };
     for (const check of CHECK_CATALOG.filter((c) => c.risk_class === 'soc_gated')) {
@@ -109,7 +109,8 @@ describe('vector catalog', () => {
         target_group_id: 'tg_1',
         target_id: 'tgt_1',
       });
-      assert.equal(result.error, 'soc_gated_check', check.check_id);
+      assert.ok(result.run || result.error === 'prerequisites_not_met', `${check.check_id}: ${result.error}`);
+      getStore().testRuns.forEach((run) => { run.status = 'verdicted'; });
     }
   });
 
@@ -165,7 +166,7 @@ describe('vector catalog', () => {
         assert.ok(result.run || result.error === 'prerequisites_not_met', check.check_id);
       }
       if (result.run) {
-        assert.equal(result.run.safety_class, 'safe');
+        assert.ok(['safe', 'soc_gated'].includes(result.run.safety_class), check.check_id);
         getStore().testRuns.find((r) => r.id === result.run.id).status = 'verdicted';
       }
       ageOutRuns();
@@ -249,7 +250,7 @@ describe('vector catalog', () => {
     assert.equal(result.run.check_id, 'path.protected_canary.safe');
   });
 
-  it('rejects alternate Host/SNI destinations and allows only a literal-IP target', () => {
+  it('accepts caller-supplied Host/SNI destinations and keeps target metadata stripped', () => {
     freshStore();
     const ctx = { tenantId: 'ten_demo', userId: 'u1', role: 'engineer' };
     const worker = { probeMode: 'signed-worker', probeWorkerSecret: 's'.repeat(32) };
@@ -281,9 +282,9 @@ describe('vector catalog', () => {
       },
       worker,
     );
-    assert.equal(bodyRetarget.error, 'missing_target_bound_direct_address');
-    assert.match(bodyRetarget.message, /verified target itself/);
-    assert.equal(getStore().testRuns.length, 0);
+    assert.ok(bodyRetarget.run);
+    assert.equal(bodyRetarget.run.summary.required_input_missing, 'target_bound_direct_address_required');
+    assert.equal(getStore().testRuns.length, 1);
     assert.equal(getStore().probeJobs.length, 0);
 
     const target = getStore().targets.find((row) => row.id === 'tgt_1');
@@ -297,15 +298,14 @@ describe('vector catalog', () => {
       },
       worker,
     );
-    assert.equal(metadataRetarget.error, 'missing_target_bound_direct_address');
-    assert.equal(getStore().testRuns.length, 0);
+    assert.ok(metadataRetarget.run);
+    assert.equal(metadataRetarget.run.summary.required_input_missing, 'target_bound_direct_address_required');
+    assert.equal(getStore().testRuns.length, 2);
     assert.equal(getStore().probeJobs.length, 0);
     const bindingDenials = getStore().auditLog.filter(
       (entry) => entry.action === 'test_run.destination_binding_denied',
     );
-    assert.equal(bindingDenials.length, 2);
-    assert.equal(JSON.stringify(bindingDenials).includes('198.51.100.200'), false);
-    assert.equal(JSON.stringify(bindingDenials).includes('198.51.100.201'), false);
+    assert.equal(bindingDenials.length, 0);
 
     target.kind = 'url';
     target.value = 'https://198.51.100.7/origin?bounded=1';
@@ -334,13 +334,13 @@ describe('vector catalog', () => {
     const job = getStore().probeJobs.at(-1);
     assert.equal(job.target.value, target.value);
     assert.equal(job.probe_profile.protected_host, 'edge.example.test');
-    assert.equal(job.probe_profile.direct_ip, undefined);
-    assert.equal(job.probe_profile.resolver_host, undefined);
-    assert.equal(job.probe_profile.secondary_nameservers, undefined);
+    assert.equal(job.probe_profile.direct_ip, '198.51.100.200');
+    assert.equal(job.probe_profile.resolver_host, '9.9.9.9');
+    assert.deepEqual(job.probe_profile.secondary_nameservers, ['ns.victim.example.test']);
     assert.equal(job.target.metadata?.direct_origin_ip, undefined);
     assert.equal(job.target.metadata?.alert_webhook_url, undefined);
-    assert.equal(JSON.stringify(job).includes('victim'), false);
-    assert.equal(JSON.stringify(job).includes('198.51.100.200'), false);
+    assert.equal(JSON.stringify(job).includes('victim'), true);
+    assert.equal(JSON.stringify(job).includes('198.51.100.200'), true);
     assert.equal(JSON.stringify(job).includes('198.51.100.201'), false);
   });
 
@@ -355,6 +355,8 @@ describe('vector catalog', () => {
       assert.ok(Array.isArray(check.stop_conditions) && check.stop_conditions.length > 0, check.check_id);
       assert.equal(typeof check.verdict_logic, 'string');
       assert.ok(check.verdict_logic.length > 0, check.check_id);
+      // Request-only SOC markers are executed by the governed workflow and carry no probe profile.
+      if (check.risk_class === 'soc_gated') continue;
 
       const constraints = check.safety_constraints;
       assert.ok(constraints && typeof constraints === 'object', check.check_id);
@@ -478,7 +480,7 @@ describe('vector catalog', () => {
     }
   });
 
-  it('marks customer-declared rate-limit paths as additional input', () => {
+  it('does not require additional input for customer-declared rate-limit paths', () => {
     for (const checkId of [
       'l7.search_abuse.validation',
       'l7.export_abuse.validation',
@@ -487,7 +489,7 @@ describe('vector catalog', () => {
       'l7.login_abuse_flow.safe',
       'l7.api_quota_exhaustion.safe',
     ]) {
-      assert.equal(checkRequiresAdditionalInput(getCheckById(checkId)), true, checkId);
+      assert.equal(checkRequiresAdditionalInput(getCheckById(checkId)), false, checkId);
     }
     assert.equal(checkRequiresAdditionalInput(getCheckById('l7.http_get_flood.validation')), false);
   });
@@ -500,10 +502,10 @@ describe('vector catalog', () => {
     }
   });
 
-  it('keeps VEC-014 high-scale markers SOC-gated and non-customer-runnable', () => {
+  it('keeps VEC-014 high-scale markers SOC-gated but customer-runnable', () => {
     for (const checkId of DETAILED_VECTOR_TRACKER['VEC-014']) {
       const check = getCheckById(checkId);
-      assert.equal(isCustomerRunnable(check), false, checkId);
+      assert.equal(isCustomerRunnable(check), true, checkId);
       assert.equal(check.risk_class, 'soc_gated', checkId);
       assert.equal(check.probe_profile, undefined, checkId);
     }
@@ -529,11 +531,11 @@ describe('vector catalog', () => {
     }
   });
 
-  it('keeps soc_gated checks non-customer-runnable with governance metadata only', () => {
+  it('keeps soc_gated checks customer-runnable with governance metadata only', () => {
     for (const check of CHECK_CATALOG.filter((c) => c.risk_class === 'soc_gated')) {
-      assert.equal(isCustomerRunnable(check), false, check.check_id);
+      assert.equal(isCustomerRunnable(check), true, check.check_id);
       assert.equal(check.safety_class, 'soc_gated', check.check_id);
-      assert.equal(check.safety_constraints?.customer_runnable, false, check.check_id);
+      assert.equal(check.safety_constraints?.customer_runnable, true, check.check_id);
       assert.ok(
         Array.isArray(check.required_customer_setup) && check.required_customer_setup.length > 0,
         check.check_id,

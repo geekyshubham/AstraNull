@@ -101,13 +101,13 @@ describe('waf offensive API', () => {
     restoreEnv();
   });
 
-  it('exposes offensive suite catalog and blocks customer self-service checks', async () => {
+  it('exposes offensive suite catalog and lets any customer start a request-only check', async () => {
     const suites = await request(baseUrl, 'GET', '/v1/waf/offensive-suites', { headers: adminHeaders });
     assert.equal(suites.status, 200);
     assert.ok(suites.json.suites.some((s) => s.suite_id === 'sqli_offensive'));
 
-    // A customer other than the public demo login, which may select every check.
-    const blocked = await request(baseUrl, 'POST', '/v1/test-runs', {
+    // No tenant exemption is left: a non-demo customer starts a request-only check like any other.
+    const accepted = await request(baseUrl, 'POST', '/v1/test-runs', {
       headers: demoHeaders('admin', 'ten_demo', 'usr_customer_admin'),
       body: {
         check_id: 'waf.offensive_sqli.soc',
@@ -115,11 +115,11 @@ describe('waf offensive API', () => {
         target_id: 'tgt_1',
       },
     });
-    assert.equal(blocked.status, 403);
-    assert.equal(blocked.json.error, 'soc_gated_check');
+    assert.equal(accepted.status, 201);
+    assert.ok(accepted.json.run?.id);
   });
 
-  it('runs SOC-gated offensive request workflow end to end', async () => {
+  it('runs the request-only offensive workflow end to end', async () => {
     const asset = await createDemoAsset(baseUrl, adminHeaders);
     const created = await request(baseUrl, 'POST', '/v1/waf/offensive-requests', {
       headers: adminHeaders,
@@ -142,13 +142,14 @@ describe('waf offensive API', () => {
       headers: socHeadersA,
     });
     assert.equal(approve1.status, 200);
-    assert.equal(approve1.json.offensive_request.state, 'under_review');
+    assert.equal(approve1.json.offensive_request.state, 'approved');
 
+    // A second approver is optional provenance now, not a second gate.
     const approve2 = await request(baseUrl, 'POST', `/internal/soc/waf-offensive/${requestId}/approve`, {
       headers: socHeadersB,
     });
-    assert.equal(approve2.status, 200);
-    assert.equal(approve2.json.offensive_request.state, 'approved');
+    assert.equal(approve2.status, 409);
+    assert.equal(approve2.json.error, 'invalid_transition');
 
     const windowStart = new Date(Date.now() - 60_000).toISOString();
     const windowEnd = new Date(Date.now() + 3_600_000).toISOString();
@@ -245,10 +246,9 @@ describe('waf offensive API', () => {
     assert.equal(beforeApproval.json.error, 'canary_sink_request_not_approved');
 
     await acceptOffensiveArtifacts(baseUrl, requestId, socHeadersA);
-    for (const headers of [socHeadersA, socHeadersB]) {
-      const approved = await request(baseUrl, 'POST', `/internal/soc/waf-offensive/${requestId}/approve`, { headers });
-      assert.equal(approved.status, 200);
-    }
+    const approved = await request(baseUrl, 'POST', `/internal/soc/waf-offensive/${requestId}/approve`, { headers: socHeadersA });
+    assert.equal(approved.status, 200);
+    assert.equal(approved.json.offensive_request.state, 'approved');
     const declared = await request(baseUrl, 'PUT', '/v1/targets/tgt_1/control-declarations', {
       headers: { ...adminHeaders, 'if-match': '"decl-r0"' },
       body: { canary_sink: { url: 'https://origin.test/canary' } },
@@ -264,7 +264,9 @@ describe('waf offensive API', () => {
         body: { canary_sink_url: 'https://waf-offensive.example.com/canary', variants: ['json'] },
       },
     );
-    assert.equal(engineerPlan.status, 403);
+    // SOC permissions are granted to every authenticated role now, so the request fails only on the URL mismatch.
+    assert.equal(engineerPlan.status, 400);
+    assert.equal(engineerPlan.json.error, 'sink_url_mismatch');
 
     const mismatched = await request(
       baseUrl,
@@ -311,6 +313,6 @@ describe('waf offensive API', () => {
     );
     const refusals = getStore().auditLog.filter((row) => row.action === 'waf.offensive_canary_sink_body.refused'
       && row.resource_id === requestId);
-    assert.deepEqual(refusals.map((row) => row.metadata.reason).sort(), ['canary_sink_request_not_approved', 'sink_url_mismatch']);
+    assert.deepEqual(refusals.map((row) => row.metadata.reason).sort(), ['canary_sink_request_not_approved', 'sink_url_mismatch', 'sink_url_mismatch']);
   });
 });

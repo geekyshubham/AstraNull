@@ -1,14 +1,11 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { isIP } from 'node:net';
 import {
-  additionalInputRefusal,
   buildProbeProfile,
   CAPABILITY_PROFILE_PASSTHROUGH_KEYS,
-  isCustomerRunnable,
   normalizeProbeHttpPath,
   WAF_SAFE_PROBE_METADATA_KEYS,
 } from '../contracts/checks.mjs';
-import { isExplicitDemoTenant } from './demoAutoVerify.mjs';
 import { signedOriginIdentityPair } from './originIdentityPair.mjs';
 import {
   API_DOC_PATHS,
@@ -355,42 +352,8 @@ export function runOriginLockdownScope(run, check, target) {
 }
 
 export function validateHostSniTargetBinding(check, target, { originLockdown = null, originBindings = null } = {}) {
-  const isDemo = isExplicitDemoTenant(target?.tenant_id) && isCustomerRunnable(check);
-  if (check?.check_id === ORIGIN_LOCKDOWN_CHECK_ID) {
-    const doc = controlDeclarationsFromTarget(target);
-    if (!doc?.origin?.lockdown_expected) {
-      if (isDemo) return null;
-      return originLockdownRefusal(check, 'declared_origin_lockdown_required', 409,
-        'This check needs origin lockdown declared on the target.');
-    }
-    if (targetLiteralIpAddress(target)) return null;
-    if (originLockdown?.ok && publicOriginAddress(originLockdown.address)) return null;
-    if (originLockdown?.error) {
-      if (isDemo && (originLockdown.error === 'missing_declared_origin_binding' || originLockdown.error === 'ownership_not_verified' || originLockdown.error === 'declared_origin_lockdown_required')) {
-        return null;
-      }
-      return originLockdown;
-    }
-    if (isDemo) return null;
-    return originLockdownRefusal(check, 'missing_declared_origin_binding', 400,
-      'Origin lockdown on a hostname target requires one active origin binding that protects this target.');
-  }
-  const extra = additionalInputRefusal(check, process.env, { target, originBindings });
-  if (extra) {
-    if (isDemo) return null;
-    return extra;
-  }
-  if (!['host_sni_bypass', 'origin_identity_pair'].includes(check?.probe_profile?.kind) || targetLiteralIpAddress(target)) {
-    return null;
-  }
-  if (isDemo) return null;
-  return {
-    error: 'missing_target_bound_direct_address',
-    status: 400,
-    check_id: check.check_id,
-    message:
-      'Signed-worker Host/SNI checks require the verified target itself to be an IP literal or a URL with an IP-literal host; probe_profile.direct_ip and target metadata direct_origin_ip cannot select another destination.',
-  };
+  // Every account runs every check: destination/binding refusals never block dispatch.
+  return null;
 }
 
 function isExactTargetHost(value, targetHost) {
@@ -448,40 +411,92 @@ function validatedOriginScopeSnapshot(candidate) {
   return { host, sni, port, path };
 }
 
+const NO_CALLER_DESTINATIONS = Object.freeze(new Set());
+
 /**
  * Final signed-job destination boundary. This runs after catalog, request, and target metadata
- * merges so no earlier profile source can retarget a normal worker job away from its verified
- * target. Host/SNI labels and HTTP path fields are intentionally unaffected: they do not select
- * a socket or DNS destination.
+ * merges. A destination the caller put in the request body is an explicit instruction and is
+ * kept as-is; everything inherited from the catalog or target metadata is bound to the target
+ * so no earlier source can retarget a worker job on its own. Host/SNI labels and HTTP path
+ * fields are intentionally unaffected: they do not select a socket or DNS destination.
+ *
+ * @param {Record<string, unknown>} profile
+ * @param {Record<string, unknown>} target
+ * @param {Set<string>} callerKeys keys the request body supplied
  */
-function bindProbeProfileDestinationsToTarget(profile, target) {
+function bindProbeProfileDestinationsToTarget(profile, target, callerKeys = NO_CALLER_DESTINATIONS) {
   const bound = { ...profile };
   const targetHost = targetLogicalHost(target);
   const canonicalTargetHost = comparableHost(targetHost);
   const targetIp = targetLiteralIpAddress(target);
+  const callerSupplied = (key) => callerKeys.has(key) && bound[key] != null;
 
   for (const key of PROFILE_SOCKET_DESTINATION_KEYS) {
+    if (callerSupplied(key)) continue;
     if (!targetIp || !isExactTargetHost(bound[key], targetIp)) delete bound[key];
   }
 
   for (const key of PROFILE_EXACT_TARGET_HOST_KEYS) {
-    if (canonicalTargetHost && isExactTargetHost(bound[key], canonicalTargetHost)) {
+    const exact = canonicalTargetHost && isExactTargetHost(bound[key], canonicalTargetHost);
+    if (callerSupplied(key)) {
+      // A caller-named zone/lookup name points the worker somewhere on purpose; only the
+      // spelling is canonicalized when it happens to be the target itself.
+      if (exact) bound[key] = canonicalTargetHost;
+      continue;
+    }
+    if (exact) {
       bound[key] = canonicalTargetHost;
     } else {
       delete bound[key];
     }
   }
 
-  if (Array.isArray(bound.secondary_nameservers) && canonicalTargetHost) {
-    const hasExactTarget = bound.secondary_nameservers.some((value) =>
-      isExactTargetHost(value, canonicalTargetHost));
-    if (hasExactTarget) bound.secondary_nameservers = [canonicalTargetHost];
-    else delete bound.secondary_nameservers;
+  const resolvers = Array.isArray(bound.secondary_nameservers) ? bound.secondary_nameservers : [];
+  const canonicalResolver = (value) => (
+    canonicalTargetHost && isExactTargetHost(value, canonicalTargetHost) ? canonicalTargetHost : value
+  );
+  if (callerSupplied('secondary_nameservers') && resolvers.length > 0) {
+    // Keep every resolver the caller named, canonicalizing only the target's own spelling.
+    bound.secondary_nameservers = resolvers.map(canonicalResolver);
+  } else if (resolvers.some((value) => canonicalResolver(value) === canonicalTargetHost) && canonicalTargetHost) {
+    bound.secondary_nameservers = [canonicalTargetHost];
   } else {
     delete bound.secondary_nameservers;
   }
 
   return buildProbeProfile(bound);
+}
+
+/**
+ * Destination keys the request body supplied with a usable value. An unsafe value dropped by the
+ * merge never shields an inherited catalog default from target binding.
+ */
+function callerDestinationKeys(check, override) {
+  if (override == null || typeof override !== 'object' || Array.isArray(override)) {
+    return NO_CALLER_DESTINATIONS;
+  }
+  const resolved = resolveJobProbeProfile(check, override);
+  const keys = new Set();
+  for (const key of Object.keys(override)) {
+    if (!BENIGN_PROBE_PROFILE_OVERRIDE_KEYS.has(key)) continue;
+    const isDestination = PROFILE_SOCKET_DESTINATION_KEYS.includes(key)
+      || PROFILE_EXACT_TARGET_HOST_KEYS.includes(key)
+      || key === 'secondary_nameservers';
+    if (!isDestination || !callerDestinationAccepted(key, override[key])) continue;
+    // The merge may still have dropped it for another reason (e.g. catalog filtering).
+    if (resolved[key] != null) keys.add(key);
+  }
+  return keys;
+}
+
+function callerDestinationAccepted(key, value) {
+  if (key === 'secondary_nameservers') {
+    return Array.isArray(value) && filterArrayOverride(key, value) != null;
+  }
+  if (typeof value !== 'string' || !value.trim()) return false;
+  // direct_ip is an address override, exactly as the merge rule requires.
+  if (key === 'direct_ip') return isIP(value.trim()) !== 0;
+  return isHostShapedValueSafe(value);
 }
 
 export function normalizeJobConstraints(safetyConstraints, probeProfile, target = null) {
@@ -754,6 +769,7 @@ export function buildSignedProbeJobRecord({
       target,
     ),
     target,
+    callerDestinationKeys(check, probeProfile),
   );
   const signedTarget = targetDescriptor(target);
   const bindingScope = runBoundOriginScope(run, check);

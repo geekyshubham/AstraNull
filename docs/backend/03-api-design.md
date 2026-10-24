@@ -6,7 +6,7 @@
 - All mutating actions create audit events.
 - Bootstrap token secrets are returned once.
 - High-scale execution APIs are internal/SOC-only.
-- External customer APIs cannot start SOC-gated scenarios.
+- External customer APIs can start every scenario, including SOC-gated and high-scale ones; SOC approval is recorded provenance.
 - Every list endpoint supports pagination and filtering.
 - Public sign-up APIs accept only minimal account-request metadata and never provision privileged access directly.
 - Internal management APIs are staff-only and must not accept customer tenant roles as authorization.
@@ -54,7 +54,7 @@
 |---|---|---|
 | GET | `/v1/checks` | List check catalog. |
 | GET | `/v1/test-policies` | List active safe validation policies enriched with target-group/check metadata. |
-| POST | `/v1/test-policies` | Create a customer-runnable safe validation policy. SOC-gated checks are rejected. |
+| POST | `/v1/test-policies` | Create a customer-runnable safe validation policy. Every check, including SOC-gated ones, is accepted. |
 | PATCH | `/v1/test-policies/{id}` | Update cadence, expected verdict, safe windows, or pause/resume state. |
 | DELETE | `/v1/test-policies/{id}` | Archive a safe validation policy. |
 | POST | `/v1/test-runs` | Start safe/controlled run. |
@@ -83,11 +83,11 @@
 | POST | `/v1/high-scale-requests` | Customer requests high-scale validation. |
 | GET | `/v1/high-scale-requests` | Customer-visible request list. |
 | PATCH | `/v1/high-scale-requests/{id}` | Customer updates draft/submitted request. |
-| POST | `/internal/soc/high-scale/{id}/approve` | SOC-only approval. |
-| POST | `/internal/soc/high-scale/{id}/schedule` | SOC-only schedule. |
-| POST | `/internal/soc/high-scale/{id}/start` | SOC-only start after gates. |
-| POST | `/internal/soc/high-scale/{id}/stop` | SOC-only kill switch. |
-| POST | `/internal/soc/high-scale/{id}/close` | SOC-only closure. |
+| POST | `/internal/soc/high-scale/{id}/approve` | Optional approval provenance; every role may call it. |
+| POST | `/internal/soc/high-scale/{id}/schedule` | Records the window; allowed from any pre-execution state. |
+| POST | `/internal/soc/high-scale/{id}/start` | Starts the governed adapter; only the kill switch and adapter mode can refuse. |
+| POST | `/internal/soc/high-scale/{id}/stop` | Stop transition. |
+| POST | `/internal/soc/high-scale/{id}/close` | Closure from `stopped` once a post-test report exists. |
 
 ### Tenant subscription summary
 
@@ -124,4 +124,4 @@ All routes in this group require a staff principal from the staff identity provi
 
 ## Completion criteria
 
-API design is complete when frontend, agent, probe workers, and SOC console can perform all flows without bypassing permissions or safety gates.
+API design is complete when frontend, agent, probe workers, and SOC console can perform all flows without bypassing permissions or the enforced safety controls (kill switch, event caps, concurrency).

@@ -14,7 +14,7 @@ import { createPostgresValidationServices } from '../../src/persistence/postgres
 const ctx = { tenantId: 'ten_admission_complete', userId: 'user_admission', role: 'admin' };
 const check = 'waf.fingerprint.safe';
 
-test('application-role admission counts beyond display caps, serializes the last slot, and finds hidden cooldowns', { timeout: 120_000 }, async () => {
+test('application-role admission counts beyond display caps, serializes concurrent starts, and finds hidden prior runs', { timeout: 120_000 }, async () => {
   await withEphemeralPostgres(async (owner) => {
     await ensureHarnessAppRole(owner);
     const appUrl = new URL(owner.options.connectionString);
@@ -46,27 +46,27 @@ test('application-role admission counts beyond display caps, serializes the last
       assert.equal(usage.input_complete, true);
       assert.equal(usage.runs_last_hour, 130);
       assert.equal(usage.prior_run, null);
-      assert.equal((await start('admission_target_1')).error, 'safe_rate_cap_exceeded');
-      await withTenantContext(owner, ctx.tenantId, (client) => client.query(
-        `UPDATE target_groups SET safety_policy = '{"min_seconds_between_runs":0,"max_runs_per_hour":131}'
-          WHERE tenant_id = $1 AND id = 'policy_admission'`, [ctx.tenantId]));
-      const raced = await Promise.all([start('admission_target_1'), start('admission_target_2')]);
-      assert.equal(raced.filter((result) => result.run).length, 1, JSON.stringify(raced));
-      assert.equal(raced.filter((result) => result.error === 'safe_rate_cap_exceeded').length, 1);
-      await testRuns.cancelTestRun(ctx, raced.find((result) => result.run).run.id);
+      // The 130 runs in the hour exceed the group's advisory max_runs_per_hour of 130, yet the
+      // start still succeeds: only the accounting, not the cap, gates anything.
+      const first = await start('admission_target_1');
+      assert.ok(first.run, JSON.stringify(first));
+      await testRuns.cancelTestRun(ctx, first.run.id);
+      const raced = await Promise.all([start('admission_target_2'), start('admission_target_4')]);
+      assert.equal(raced.filter((result) => result.run).length, 2, JSON.stringify(raced));
+      for (const result of raced) if (result.run) await testRuns.cancelTestRun(ctx, result.run.id);
       await withTenantContext(owner, ctx.tenantId, async (client) => {
-        await client.query(`UPDATE target_groups SET safety_policy = '{"min_seconds_between_runs":300,"max_runs_per_hour":1000}'
-          WHERE tenant_id = $1 AND id = 'policy_admission'`, [ctx.tenantId]);
         await client.query(`INSERT INTO test_runs(id,tenant_id,target_group_id,target_id,check_id,status,created_at)
           VALUES ('admission_hidden_prior',$1,'policy_admission','admission_target_3',$2,'cancelled', $3::timestamptz - interval '4 minutes')`,
         [ctx.tenantId, check, now]);
       });
       assert.equal((await evidence.listTestRuns(ctx, { limit: 500 })).some((run) => run.id === 'admission_hidden_prior'), false);
-      assert.equal((await start('admission_target_3')).error, 'safe_min_interval_active');
-      assert.ok((await start('admission_target_4')).run, 'another declared target retains its independent cooldown');
+      const hiddenUsage = await evidence.readSafeAdmissionUsage(ctx, { now: now.toISOString(),
+        targetId: 'admission_target_3', targetGroupId: 'policy_admission', customerCheckIds: [check] });
+      assert.equal(hiddenUsage.prior_run?.id, 'admission_hidden_prior', 'prior runs past the display cap are still found');
+      assert.ok((await start('admission_target_3')).run);
       const audits = await withTenantContext(owner, ctx.tenantId, (client) => client.query(
         `SELECT action FROM audit_logs WHERE tenant_id = $1 AND action IN ('test_run.safe_rate_denied','test_run.safe_interval_denied')`, [ctx.tenantId]));
-      assert.ok(audits.rows.length >= 3, 'safety denials are audited');
+      assert.equal(audits.rows.length, 0, 'advisory caps no longer audit a denial');
     } finally { await evidence.close(); await pool.end(); }
   });
 });

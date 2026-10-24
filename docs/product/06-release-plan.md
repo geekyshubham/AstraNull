@@ -31,17 +31,17 @@ A multi-team customer can operate AstraNull continuously with integrations and r
 | Backend | Queues, scheduling, report generator, audit evidence retention, DR, production notification operations, usage/accounting foundations, staff-only internal management, subscriptions, entitlements, and admin operations controls. |
 | Agent | Docker, Helm, package repos, upgrades, placement diagnostics, and agent confidence scoring. |
 | Detection | DNS, L3/L4, API, TLS/connection, HTTP/2/HTTP/3 readiness per the expanded vector backlog. |
-| SOC | High-scale request intake, SOC-009 authorization proof workflow, and approval gates (governed execution still SOC-only). |
+| SOC | High-scale request intake, SOC-009 authorization proof workflow, and the advisory operating procedure (nothing gates; every role can start). |
 
-## Release 3: SOC-gated high scale (GA for high-scale program)
+## Release 3: High-scale program (GA)
 
 ### Goal
 
-AstraNull safely manages approved high-scale readiness assessments with immutable authorization archives.
+AstraNull safely manages high-scale readiness assessments, recording authorization as provenance rather than a gate, with immutable authorization archives.
 
 | Area | Required features |
 |---|---|
-| SOC | Approval state machine, runbook, kill switch, provider approval tracking. |
+| SOC | Approval state machine (one approval is enough), runbook, kill switch, provider approval tracking. |
 | Execution | Partner/internal **governed** adapter interface with constraints — no raw attack recipes. |
 | Evidence | Live telemetry, post-test reports, immutable authorization archive, evidence chain-of-custody, and signed report hashes. |
 | Compliance | Audit, retention, customer authorization templates, legal review checklist, SOC 2/ISO/DORA/NIS2 report mappings. |

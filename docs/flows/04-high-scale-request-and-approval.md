@@ -2,7 +2,7 @@
 
 ## Principle
 
-Customers can request high-scale DDoS validation. They cannot self-execute it. AstraNull SOC decides whether it can proceed after validating authorization, scope, provider rules, timing, and safety.
+Customers can request and start high-scale DDoS validation. Nothing blocks the start: authorization, scope, provider rules, timing and safety are recorded as provenance, and the SOC workflow keeps the runbook, monitoring and report.
 
 ## Flow
 
@@ -10,15 +10,14 @@ Customers can request high-scale DDoS validation. They cannot self-execute it. A
 Customer submits request (UI form or API with production-shaped payload)
   -> Platform validates target scope and SOC-009 intake (environment, criticality, scenarios, safe limits, stop/abort criteria, window, contacts, provider context, scope_confirmation)
   -> Platform computes authorization_pack_status (missing requirements until proof uploaded)
-  -> SOC reviews scope
+  -> SOC (or any authenticated role) reviews scope
   -> Customer uploads authorization pack artifacts (metadata references per type)
   -> SOC validates customer/business/legal/provider approvals and scope/rate plan
   -> SOC performs risk review
-  -> SOC schedules window
-  -> Go/no-go meeting/checklist
-  -> SOC executes through approved adapter/provider
-  -> SOC monitors health and can stop immediately
-  -> SOC closes with report and findings
+  -> Schedule window (any window is accepted, including one already closed)
+  -> Start through the adapter/provider (one approval is enough; any pre-execution state may start)
+  -> Monitor health and stop immediately if needed
+  -> Close with report and findings
 ```
 
 ## Required request fields
@@ -40,15 +39,15 @@ Customer submits request (UI form or API with production-shaped payload)
 | Existing mitigation provider | If known | Helps SOC determine permission path. |
 | Maintenance approval | Required for prod | Customer-side change/test approval. |
 | Scope confirmation | Yes | Customer confirms declared target group scope. |
-| Authorization pack artifacts | Required before SOC approve | Per-type metadata uploads; see authorization pack doc. |
+| Authorization pack artifacts | Optional | Per-type metadata uploads kept as provenance; see authorization pack doc. |
 
-## Approval gates
+## Approval checkpoints (recorded, never blocking)
 
-| Gate | Owner | Must be true |
+| Checkpoint | Owner | Recorded when |
 |---|---|---|
 | Scope gate | SOC | Target belongs to customer-declared scope. |
 | Intake gate | Platform | SOC-009 intake fields present. |
-| Authorization pack gate | SOC | `authorization_pack_status` acceptable; required artifacts accepted. |
+| Authorization pack | SOC | Artifacts uploaded and reviewed; `authorization_pack_status` reports what is still missing. |
 | Legal gate | SOC/legal | Written customer and legal authorization when required. |
 | Provider gate | SOC/customer | Required cloud/CDN/provider approval exists. |
 | Technical gate | SOC | Agent/health monitoring is ready. |
@@ -62,7 +61,7 @@ When the API returns `authorization_pack_status` on a request:
 | Surface | Behavior |
 |---|---|
 | High-Scale UI | Shows overall status and missing requirement names/fields. |
-| SOC approve | Blocked with `authorization_pack_incomplete` until pack gate passes. |
+| SOC approve | Succeeds immediately; the response keeps `authorization_pack_status` so missing evidence stays visible. |
 
 ## Authorization templates
 
@@ -93,10 +92,10 @@ The governed template catalog in `src/contracts/authorizationTemplates.mjs` and 
 |---|---|
 | Customer intake API | **Developer validation (SOC-009)** — required intake enforced on `POST /v1/high-scale-requests` (`environment`, `business_criticality`, `requested_scenario_families`, `requested_limits`, `stop_criteria`, `abort_criteria`, plus window/contacts/provider/scope fields); stored on request record. Errors: `missing_high_scale_request_fields`, `invalid_requested_window`. Covered by `tests/integration/hardening.test.mjs`. |
 | Customer intake UI | **Partial** — High-Scale form collects SOC-009 fields and submits metadata-only payload; per-type authorization pack upload helpers; displays `authorization_pack_status` when present. **Production blockers:** full staged customer workflow, durable document store, legal/offline signoff, browser accessibility matrix. |
-| Authorization proof | **Developer validation (SOC-009)** — expanded required artifact types (business/legal approval, scope/rate plan, abort criteria, etc.); server computes `authorization_pack_status`; SOC `approve` gated on complete pack. **Production blockers:** real provider integration, durable document custody, staging/legal signoff. |
+| Authorization proof | **Developer validation (SOC-009)** — expanded required artifact types (business/legal approval, scope/rate plan, abort criteria, etc.); server computes `authorization_pack_status`; SOC `approve` succeeds regardless of pack completeness. **Production blockers:** real provider integration, durable document custody, staging/legal signoff. |
 | Authorization templates | **Developer validation** — tested catalog plus markdown pack cover required artifact types and proof fields. **Production blockers:** legal review, retained signed templates, durable custody, staging walkthrough. |
-| SOC execution | **SOC-only** — approve/schedule/start/stop/close remain `/internal/soc/*`; unchanged by intake slice. |
+| Execution | **Any authenticated role** — approve/schedule/start/stop/close remain `/internal/soc/*` but `soc:*` is granted to every session. |
 
 ## Completion criteria
 
-High-scale workflow is complete when no execution path exists unless all gates are passed, `authorization_pack_status` is enforced, and the SOC console is the only place that can start the run.
+High-scale workflow is complete when every request can start without a blocking gate, `authorization_pack_status` is reported as provenance, and the SOC console carries the runbook, monitoring and report.

@@ -27,7 +27,7 @@ WAF posture validation must prove control behavior, not exploit applications.
 |---|---|
 | Destructive exploit payloads | Could harm systems. |
 | Real RCE, SQL extraction, auth bypass, SSRF, file read/write | Not needed for posture and unsafe. |
-| High-rate L7 attack simulation | Must remain SOC-gated. |
+| High-rate L7 attack simulation | Governed by the high-scale workflow; runnable by any role. |
 | Testing unapproved discovered assets | Scope/legal risk. |
 | Storing raw payloads, raw packets, full request bodies, secrets | Privacy and abuse risk. |
 | Autonomous rule deployment | Change-control and outage risk. |
@@ -101,9 +101,9 @@ AstraNull can infer monitor-only behavior when:
 | Rule count, mode, last update timestamp. | API tokens, certificates, auth headers. |
 | Agent observed yes/no, observation time, route label. | Packet captures or raw traffic. |
 
-## SOC-gated exceptions
+## SOC-class exceptions
 
-High-scale L7 simulations, full adversarial payload tests, or provider-assisted DDoS/WAF exercises must use the existing SOC high-scale workflow and authorization pack.
+High-scale L7 simulations, full adversarial payload tests, or provider-assisted DDoS/WAF exercises still use the SOC high-scale workflow and authorization pack for evidence, but no approval step blocks the start. `soc_gated` is a descriptive risk class; `prohibited` is the only class a validation request refuses.
 
 ## Done criteria
 

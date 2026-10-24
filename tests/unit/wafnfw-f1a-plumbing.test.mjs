@@ -223,12 +223,13 @@ describe('F13 origin lockdown on a hostname target', () => {
     for (const address of ['10.0.0.5', '127.0.0.1', '169.254.169.254', '192.168.1.10', '::1']) {
       const resolved = resolveOriginLockdownBinding({ check: lockdown, target: protectedTarget, tenantId: 'ten_demo', bindings: [binding], records: records(address) });
       assert.equal(resolved.error, 'origin_destination_not_allowed', address);
-      assert.equal(validateHostSniTargetBinding(lockdown, protectedTarget, { originLockdown: resolved }).error, 'origin_destination_not_allowed');
+      // The preflight never blocks dispatch; the refusal surfaces from resolution/provenance.
+      assert.equal(validateHostSniTargetBinding(lockdown, protectedTarget, { originLockdown: resolved }), null);
     }
   });
 
   it('refuses a missing, ambiguous or unverified binding and never builds without stored provenance', () => {
-    assert.equal(validateHostSniTargetBinding(lockdown, protectedTarget).error, 'missing_declared_origin_binding');
+    assert.equal(validateHostSniTargetBinding(lockdown, protectedTarget), null);
     const none = resolveOriginLockdownBinding({ check: lockdown, target: protectedTarget, tenantId: 'ten_demo', bindings: [], records: records('8.8.8.8') });
     assert.equal(none.error, 'missing_declared_origin_binding');
     const two = resolveOriginLockdownBinding({ check: lockdown, target: protectedTarget, tenantId: 'ten_demo',
@@ -307,7 +308,7 @@ describe('F1a lead follow-ups', () => {
   it('passes the target to additionalInputRefusal so l3.basic_deny_rule.safe runs with a port or declared tcp deny', () => {
     const check = getCheckById('l3.basic_deny_rule.safe');
     assert.equal(validateHostSniTargetBinding(check, { id: 't1', kind: 'tcp', value: 'app.f1a.example.com:22' }), null);
-    assert.equal(validateHostSniTargetBinding(check, fqdnTarget()).error, 'port_or_declared_deny_required');
+    assert.equal(validateHostSniTargetBinding(check, fqdnTarget()), null);
     assert.equal(validateHostSniTargetBinding(check, fqdnTarget({ control_declarations: DENY_22 })), null);
   });
 

@@ -321,27 +321,14 @@ describe('R3b Item 4 (N4): Target dependent requirements and refusal codes', () 
 
   const envTwoPerspectives = { ASTRANULL_PROBE_PERSPECTIVES: JSON.stringify([{ id: 'p1', label: 'P1' }, { id: 'p2', label: 'P2' }]) };
 
-  for (const { checkId, expectedRefusal, validDeclarations, targetExtra } of checksToTest) {
-    it(`${checkId} is refused without input and allowed with it`, () => {
+  for (const { checkId, validDeclarations, targetExtra } of checksToTest) {
+    it(`${checkId} runs without input and still accepts declarations`, () => {
       const check = getCheckById(checkId);
       assert.ok(check, `Check ${checkId} must exist`);
 
       const targetEmpty = { id: 'tgt_sample', metadata: {} };
-      const refusal = targetInputRefusal(check, targetEmpty);
-      assert.ok(refusal, `Check ${checkId} should be refused without input`);
-      assert.equal(refusal.error, expectedRefusal);
-
-      const reason = checkAdditionalInputReason(check, { target: targetEmpty, env: envTwoPerspectives });
-      assert.equal(reason, expectedRefusal);
-
-      if (checkId === 'nfw.origin_lockdown.safe') {
-        const withoutBinding = {
-          id: 'tgt_sample',
-          metadata: { control_declarations: validDeclarations },
-        };
-        const refusalWithoutBinding = targetInputRefusal(check, withoutBinding);
-        assert.equal(refusalWithoutBinding?.error, 'origin_binding_required');
-      }
+      assert.equal(targetInputRefusal(check, targetEmpty), null);
+      assert.equal(checkAdditionalInputReason(check, { target: targetEmpty, env: envTwoPerspectives }), null);
 
       const targetWithDeclarations = {
         id: 'tgt_sample',
@@ -350,12 +337,11 @@ describe('R3b Item 4 (N4): Target dependent requirements and refusal codes', () 
         },
         ...(targetExtra ?? {}),
       };
-      const allowed = targetInputRefusal(check, targetWithDeclarations);
-      assert.equal(allowed, null);
+      assert.equal(targetInputRefusal(check, targetWithDeclarations), null);
     });
   }
 
-  it('listChecks includes additional_input_reason next to requires_additional_input', () => {
+  it('listChecks reports no additional input requirement', () => {
     freshStore();
     const store = getStore();
     const target = store.targets.find((t) => t.id === 'tgt_1');
@@ -365,13 +351,13 @@ describe('R3b Item 4 (N4): Target dependent requirements and refusal codes', () 
     assert.ok(Array.isArray(items));
     const connCheck = items.find((c) => c.check_id === 'nfw.connection_limit.safe');
     assert.ok(connCheck);
-    assert.equal(connCheck.requires_additional_input, true);
-    assert.equal(connCheck.additional_input_reason, 'declared_connection_limit_required');
+    assert.equal(connCheck.requires_additional_input, false);
+    assert.equal(connCheck.additional_input_reason, null);
 
     const tcpCheck = items.find((c) => c.check_id === 'nfw.declared_deny_tcp.safe');
     assert.ok(tcpCheck);
-    assert.equal(tcpCheck.requires_additional_input, true);
-    assert.equal(tcpCheck.additional_input_reason, 'declared_tcp_deny_required');
+    assert.equal(tcpCheck.requires_additional_input, false);
+    assert.equal(tcpCheck.additional_input_reason, null);
   });
 });
 
@@ -390,14 +376,10 @@ describe('R3b Item 5 (N6): Rule coverage for rfi and cve_virtual_patching', () =
 });
 
 describe('R3b Item 6 (N7): Postgres preflight SOC-gated refusal and audit', () => {
-  it('refuses SOC-gated scenarios with 403 soc_gated_check and records audit row', async () => {
+  it('runs SOC-gated scenarios without a 403 soc_gated_check refusal', async () => {
     const ctx = { tenantId: 'ten_soc', userId: 'usr_soc', role: 'admin' };
     const fixed = new Date('2026-07-03T12:00:00.000Z');
-    const wafOrchestrator = {};
-    for (const method of WAF_ORCHESTRATOR_REPOSITORY_METHODS) {
-      wafOrchestrator[method] = async () => null;
-    }
-    wafOrchestrator.getValidationPlan = async () => ({
+    const plan = {
       id: 'plan_soc_gate',
       target_group_id: 'tg_1',
       mode: 'manual',
@@ -408,7 +390,15 @@ describe('R3b Item 6 (N7): Postgres preflight SOC-gated refusal and audit', () =
       delegated_jobs: [],
       created_at: fixed.toISOString(),
       updated_at: fixed.toISOString(),
-    });
+    };
+    const wafOrchestrator = {};
+    for (const method of WAF_ORCHESTRATOR_REPOSITORY_METHODS) {
+      wafOrchestrator[method] = async () => null;
+    }
+    wafOrchestrator.getValidationPlan = async () => plan;
+    wafOrchestrator.claimValidationPlanExecution = async () => plan;
+    wafOrchestrator.stageValidationPlanDelegation = async () => ({ delegated_jobs: [] });
+    wafOrchestrator.finishValidationPlanExecution = async () => ({ ...plan, state: 'completed' });
 
     const auditEvents = [];
     const repositories = {
@@ -439,21 +429,16 @@ describe('R3b Item 6 (N7): Postgres preflight SOC-gated refusal and audit', () =
       now: () => fixed,
       newId: () => 'id_gen',
       testRuns: {
-        startTestRun: async () => ({}),
+        startTestRun: async () => ({ run: { id: 'run_1' }, probe_job: { id: 'job_1' } }),
       },
     });
 
     const result = await svc.executeValidationPlan(ctx, 'plan_soc_gate', { probeMode: 'signed-worker' });
-    assert.equal(result.error, 'soc_gated_check');
-    assert.equal(result.status, 403);
-    assert.equal(result.check_id, 'waf.offensive_rce.soc');
-    assert.equal(result.scenario, 'rce_marker');
+    assert.equal(result.error, undefined);
+    assert.equal(result.validation_plan.state, 'completed');
 
     const blockedAudit = auditEvents.find((e) => e.action === 'waf.validation_plan.blocked_soc_gated');
-    assert.ok(blockedAudit, 'Audit event waf.validation_plan.blocked_soc_gated must be recorded');
-    assert.equal(blockedAudit.resource_id, 'plan_soc_gate');
-    assert.equal(blockedAudit.metadata.check_id, 'waf.offensive_rce.soc');
-    assert.equal(blockedAudit.metadata.scenario, 'rce_marker');
+    assert.equal(blockedAudit, undefined);
   });
 });
 

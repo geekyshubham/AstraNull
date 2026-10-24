@@ -100,7 +100,7 @@ describe('dashboard first-run setup steps', () => {
     assert.doesNotMatch(DASHBOARD, /PENALTY_FACTOR_KEYS/, 'no factor is a penalty by key alone');
     assert.match(DASHBOARD, /if \(Number\(factor\.score\) < 0\) return 'penalty';\s*return 'context';/);
     assert.match(DASHBOARD, /<span className="factor-score" role="img" aria-label=\{`\$\{label\}: penalty of \$\{points\} points`\}>/);
-    assert.match(DASHBOARD, /: gate\.packComplete \? '' : 'Authorization pack incomplete',\s*`SOC approvals \$\{gate\.approvals\}\/2`/);
+    assert.match(DASHBOARD, /: gate\.packComplete \? '' : 'Authorization pack incomplete',\s*gate\.approvals \? `\$\{formatNumber\(gate\.approvals\)\} SOC \$\{pluralize\(gate\.approvals, 'approval'\)\} recorded` : 'SOC approval not recorded'/);
     assert.match(DASHBOARD, /typeof gate\.pack_complete === 'boolean'/);
   });
 

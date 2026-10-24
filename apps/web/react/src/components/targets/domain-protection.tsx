@@ -441,7 +441,7 @@ function CheckQueueRow({
                       })}
                     </span>
                   ) : null}
-                  {prerequisite.state === 'soc_only' ? <span className="td-prereq-actions"><AnchorButton size="sm" variant="secondary" href="#support">Request through SOC</AnchorButton></span> : null}
+                  {prerequisite.state === 'soc_only' ? <span className="td-prereq-actions"><AnchorButton size="sm" variant="secondary" href={buildDetailHref('check-detail', row.checkId)}>Open request-only check</AnchorButton></span> : null}
                 </dd>
               </div>
             ) : null}

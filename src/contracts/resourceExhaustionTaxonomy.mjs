@@ -17,7 +17,7 @@ import {
 export const COVERAGE_STATUS_SEMANTICS = Object.freeze({
   implemented: 'A live semantic probe or inline validator establishes the mapped check evidence model.',
   partial: 'Only metadata, transport/liveness, posture, or otherwise incomplete semantic evidence is implemented.',
-  soc_only: 'Coverage exists only through SOC-gated governed execution; no customer-runnable safe check is mapped.',
+  soc_only: 'Coverage exists only through request-only governed execution; no inline probe check is mapped.',
   pending: 'No mapped implementation exists yet.',
 });
 

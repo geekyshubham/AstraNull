@@ -93,7 +93,7 @@ function NextStep({ category, mode, targetId, canWrite }: { category: CoverageCa
   }
   if (mode === 'target' && category.missingWithoutCta) return <span className="rc-reason">Needs {category.missingWithoutCta} on this target.</span>;
   if (mode === 'catalog' && category.requiredSentence) return <span className="rc-reason">Needs on each target: {category.requiredSentence}.</span>;
-  if (category.assurance === 'soc_only') return <span className="rc-reason">Request through AstraNull SOC. <a className="detail-entity-link" href="#support">Contact SOC</a></span>;
+  if (category.assurance === 'soc_only') return <span className="rc-reason">Covered by a request-only check: start it and the governed workflow records the outcome.</span>;
   const validateHref = `${buildDetailHref('target-detail', targetId)}&tab=validate`;
   if (mode === 'target' && category.status === 'not_run') return <a className="rc-link" href={validateHref}>Run covering checks<ArrowRight size={13} aria-hidden="true" /></a>;
   if (mode === 'target' && category.status === 'covered_fail') return <a className="rc-link" href={validateHref}>Review failing check<ArrowRight size={13} aria-hidden="true" /></a>;

@@ -411,7 +411,8 @@ describe('postgres validation scan service adapter', () => {
     assert.equal(scan.status, 'running');
     assert.equal(scan.steps.length, 1);
     assert.equal(scan.steps[0].status, 'deferred');
-    assert.equal(scan.steps[0].eligible_at, new Date(NOW.getTime() + 30_000).toISOString());
+    // No minimum interval is enforced any more, so a min-interval denial clears on the next tick.
+    assert.equal(scan.steps[0].eligible_at, new Date(NOW.getTime() + 1_000).toISOString());
     assert.equal(scan.next_eligible_at, scan.steps[0].eligible_at);
     const notYet = await harness.services.advanceScan(CTX, scan.id, { runtimeConfig: RUNTIME_CONFIG, now: NOW });
     assert.equal(notYet.waiting, true);

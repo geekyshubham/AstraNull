@@ -227,7 +227,7 @@ function PendingGateLines({ gates }: { gates: PendingGate[] }) {
           gate.missingArtifacts > 0
             ? `${formatNumber(gate.missingArtifacts)} authorization ${pluralize(gate.missingArtifacts, 'artifact')} missing`
             : gate.packComplete ? '' : 'Authorization pack incomplete',
-          `SOC approvals ${gate.approvals}/2`
+          gate.approvals ? `${formatNumber(gate.approvals)} SOC ${pluralize(gate.approvals, 'approval')} recorded` : 'SOC approval not recorded'
         ].filter(Boolean);
         return (
           <li key={gate.requestId}>

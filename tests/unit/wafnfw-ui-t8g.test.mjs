@@ -67,20 +67,15 @@ describe('T8g demo tenants follow the server runnability answer for dedicated-in
     assert.deepEqual(assessmentChecks(refused, DEMO_TARGET, context), []);
   });
 
-  it('still excludes the checks for a non-demo tenant, even if a runnable answer is present', () => {
+  it('treats a non-demo tenant the same way: the server runnable answer decides', () => {
     const catalog = serverTargetCatalog(CUSTOMER_TARGET);
-    assert.ok(catalog.every((check) => check.requires_additional_input === true));
+    assert.ok(catalog.every((check) => check.requires_additional_input === false));
     const context = contextFor(catalog, false);
-    assert.deepEqual(withTargetRunnableChecks([], catalog), []);
-    assert.deepEqual(individualChecks(catalog, CUSTOMER_TARGET, context), []);
-    assert.deepEqual(assessmentChecks(catalog, CUSTOMER_TARGET, context), []);
-    const forged = catalog.map((check) => ({ ...check, requires_additional_input: false, additional_input_reason: undefined }));
-    const forgedContext = contextFor(forged, false);
-    assert.deepEqual(withTargetRunnableChecks([], forged), []);
-    assert.deepEqual(individualChecks(forged, CUSTOMER_TARGET, forgedContext), []);
-    assert.deepEqual(assessmentChecks(forged, CUSTOMER_TARGET, forgedContext), []);
-    const alert = forged.find((check) => check.check_id === 'ops.alert_workflow_marker.safe');
-    assert.match(targetCheckRequirement(alert, CUSTOMER_TARGET, forgedContext), /approved signed alert-webhook scope/);
+    assert.deepEqual(ids(withTargetRunnableChecks([], catalog)), [...GATED_IDS].sort());
+    assert.deepEqual(ids(individualChecks(catalog, CUSTOMER_TARGET, context)), [...GATED_IDS].sort());
+    assert.deepEqual(ids(assessmentChecks(catalog, CUSTOMER_TARGET, context)), [...GATED_IDS].sort());
+    const alert = catalog.find((check) => check.check_id === 'ops.alert_workflow_marker.safe');
+    assert.match(targetCheckRequirement(alert, CUSTOMER_TARGET, context), /approved signed alert-webhook scope/);
   });
 });
 

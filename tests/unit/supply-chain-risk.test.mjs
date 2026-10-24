@@ -350,12 +350,11 @@ describe('supply chain risk service', () => {
     assert.ok(audit);
   });
 
-  it('returns waf_feature_disabled when feature flag is off', () => {
+  it('works even when the WAF feature flag is off', () => {
     disableWafFeature();
-    const result = listSupplyChainRisks(adminCtx);
-    assert.deepEqual(result, { error: 'waf_feature_disabled' });
-    assert.deepEqual(createSupplyChainRiskService(adminCtx, baseRiskFields()), { error: 'waf_feature_disabled' });
-    assert.deepEqual(assessDanglingCname(adminCtx, { hostname: 'x.example.com' }), { error: 'waf_feature_disabled' });
+    assert.equal(listSupplyChainRisks(adminCtx).error, undefined);
+    assert.equal(createSupplyChainRiskService(adminCtx, baseRiskFields()).error, undefined);
+    assert.equal(assessDanglingCname(adminCtx, { hostname: 'x.example.com' }).error, undefined);
   });
 
   it('rejects prohibited acquisition fields and contains no acquisition code paths', () => {

@@ -158,7 +158,12 @@ describe('Ticket R7: demo tenant runs every customer check with no access or inp
         headers: prodAdmin(),
       });
       assert.equal(prodRes.status, 200);
-      assert.ok(prodRes.json.items.length < customerRunnableTotal);
+      // No gate is demo-only any more: a non-demo tenant browses and selects the same catalog.
+      assert.equal(prodRes.json.items.filter(isCustomerRunnable).length, customerRunnableTotal);
+      for (const item of prodRes.json.items) {
+        assert.equal(item.requires_additional_input, false);
+        assert.equal(item.additional_input_reason, null);
+      }
 
       const prodAllRes = await request(baseUrl, 'GET', `/v1/checks?target_id=${PROD_TARGET}&scope=all`, {
         headers: prodAdmin(),
@@ -166,8 +171,8 @@ describe('Ticket R7: demo tenant runs every customer check with no access or inp
       assert.equal(prodAllRes.status, 200);
       const tcpCheck = prodAllRes.json.items.find((item) => item.check_id === 'nfw.declared_deny_tcp.safe');
       assert.ok(tcpCheck);
-      assert.equal(tcpCheck.requires_additional_input, true);
-      assert.equal(tcpCheck.additional_input_reason, 'declared_tcp_deny_required');
+      assert.equal(tcpCheck.requires_additional_input, false);
+      assert.equal(tcpCheck.additional_input_reason, null);
 
       // (b) Full-catalog scan plan excludes no customer-runnable check for missing input; SOC checks still excluded
       const customerChecks = CHECK_CATALOG.filter(isCustomerRunnable);
@@ -187,8 +192,7 @@ describe('Ticket R7: demo tenant runs every customer check with no access or inp
         tenantId: PROD_TENANT,
       });
       const prodMissingInputExclusions = prodPlan.excluded.filter((e) => e.reason !== 'target_kind_not_supported');
-      assert.ok(prodMissingInputExclusions.length > 0);
-      assert.ok(prodMissingInputExclusions.some((e) => e.reason === 'declared_tcp_deny_required'));
+      assert.equal(prodMissingInputExclusions.length, 0);
 
       const demoScanRes = await request(baseUrl, 'POST', '/v1/validation-scans', {
         headers: demoAdmin(),
@@ -201,8 +205,10 @@ describe('Ticket R7: demo tenant runs every customer check with no access or inp
       assert.equal(demoScanRes.status, 201);
       assert.equal(demoScanRes.json.steps.length, 1);
       assert.equal(demoScanRes.json.steps[0].check_id, 'nfw.declared_deny_tcp.safe');
+      // Scans still hold their group's single slot, so free it before the next one.
+      await request(baseUrl, 'POST', `/v1/validation-scans/${demoScanRes.json.id}/cancel`, { headers: demoAdmin(), body: {} });
 
-      const socCheck = CHECK_CATALOG.find((c) => !isCustomerRunnable(c));
+      const socCheck = CHECK_CATALOG.find((c) => c.risk_class === 'soc_gated');
       assert.ok(socCheck);
       const prodSocScanRes = await request(baseUrl, 'POST', '/v1/validation-scans', {
         headers: prodAdmin(),
@@ -212,8 +218,8 @@ describe('Ticket R7: demo tenant runs every customer check with no access or inp
           check_ids: [socCheck.check_id],
         },
       });
-      assert.equal(prodSocScanRes.status, 403);
-      assert.equal(prodSocScanRes.json.error, 'soc_gated_check');
+      assert.equal(prodSocScanRes.status, 201, 'SOC-class checks are accepted for every tenant');
+      await request(baseUrl, 'POST', `/v1/validation-scans/${prodSocScanRes.json.id}/cancel`, { headers: prodAdmin(), body: {} });
 
       const prodScanRes = await request(baseUrl, 'POST', '/v1/validation-scans', {
         headers: prodAdmin(),
@@ -223,8 +229,8 @@ describe('Ticket R7: demo tenant runs every customer check with no access or inp
           check_ids: ['nfw.declared_deny_tcp.safe'],
         },
       });
-      assert.equal(prodScanRes.status, 400);
-      assert.equal(prodScanRes.json.error, 'check_requires_additional_input');
+      assert.equal(prodScanRes.status, 201);
+      await request(baseUrl, 'POST', `/v1/validation-scans/${prodScanRes.json.id}/cancel`, { headers: prodAdmin(), body: {} });
 
       // (c) Starting nfw.declared_deny_tcp.safe on demo target finishes inconclusive with required_input_missing
       const res = await request(baseUrl, 'POST', '/v1/test-runs', {
@@ -259,7 +265,11 @@ describe('Ticket R7: demo tenant runs every customer check with no access or inp
       assert.equal(eventsRes.status, 200);
       assert.equal(eventsRes.json.items.length, 0);
 
-      // (d) Demo hourly cap is dropped by default (uncapped) and env override works; non-demo keeps 60
+      const verdictRuns = (tenantId) => withTenantContext(ownerPool, tenantId, async (client) => {
+        await client.query(`UPDATE test_runs SET status = 'verdicted' WHERE tenant_id = $1`, [tenantId]);
+      });
+
+      // (d) The hourly cap is advisory: 60 runs in the hour no longer refuse a start for either tenant
       assert.equal(demoMaxRunsPerHour({}), Infinity);
       assert.equal(demoMaxRunsPerHour({ ASTRANULL_DEMO_MAX_RUNS_PER_HOUR: '2500' }), 2500);
 
@@ -281,8 +291,8 @@ describe('Ticket R7: demo tenant runs every customer check with no access or inp
           check_id: 'dns.authoritative_response.safe',
         },
       });
-      assert.equal(prodBlockRes.status, 429);
-      assert.equal(prodBlockRes.json.error, 'safe_rate_cap_exceeded');
+      assert.equal(prodBlockRes.status, 201);
+      await verdictRuns(PROD_TENANT);
 
       await withTenantContext(ownerPool, DEMO_TENANT, async (client) => {
         for (let i = 0; i < 60; i += 1) {
@@ -304,7 +314,7 @@ describe('Ticket R7: demo tenant runs every customer check with no access or inp
       });
       assert.equal(demoAllowRes.status, 201);
 
-      // (e) Closed safe window does not block demo but still blocks non-demo
+      // (e) A closed safe window no longer blocks either tenant
       const closedWindow = JSON.stringify([{ day: 'Mon', start_at: '2020-01-01T00:00:00Z', end_at: '2020-01-01T01:00:00Z' }]);
       await withTenantContext(ownerPool, PROD_TENANT, async (client) => {
         await client.query(`UPDATE target_groups SET safe_test_windows = $1::jsonb WHERE id = $2`, [closedWindow, PROD_GROUP]);
@@ -322,8 +332,8 @@ describe('Ticket R7: demo tenant runs every customer check with no access or inp
           check_id: 'dns.authoritative_response.safe',
         },
       });
-      assert.equal(prodWindowBlockRes.status, 429);
-      assert.equal(prodWindowBlockRes.json.error, 'safe_window_closed');
+      assert.equal(prodWindowBlockRes.status, 201);
+      await verdictRuns(PROD_TENANT);
 
       const demoWindowAllowRes = await request(baseUrl, 'POST', '/v1/test-runs', {
         headers: demoAdmin(),
@@ -334,8 +344,9 @@ describe('Ticket R7: demo tenant runs every customer check with no access or inp
         },
       });
       assert.equal(demoWindowAllowRes.status, 201);
+      await verdictRuns(PROD_TENANT);
 
-      // (f) SOC-gated checks give 403 soc_gated_check for non-demo; demo runs without SOC gates; kill switch blocks demo
+      // (f) SOC-class checks run for every tenant; kill switch still blocks
       const prodSocRes = await request(baseUrl, 'POST', '/v1/test-runs', {
         headers: prodAdmin(),
         body: {
@@ -344,8 +355,7 @@ describe('Ticket R7: demo tenant runs every customer check with no access or inp
           check_id: socCheck.check_id,
         },
       });
-      assert.equal(prodSocRes.status, 403);
-      assert.equal(prodSocRes.json.error, 'soc_gated_check');
+      assert.equal(prodSocRes.status, 201);
 
       await withTenantContext(ownerPool, DEMO_TENANT, async (client) => {
         await client.query(`UPDATE test_runs SET status = 'verdicted' WHERE tenant_id = $1`, [DEMO_TENANT]);
@@ -365,7 +375,7 @@ describe('Ticket R7: demo tenant runs every customer check with no access or inp
         await client.query(`UPDATE test_runs SET status = 'verdicted' WHERE tenant_id = $1`, [DEMO_TENANT]);
       });
 
-      // Generic user in demo tenant without admin identity is blocked by SOC gate
+      // Generic user in the demo tenant runs it too
       const demoGenericRes = await request(baseUrl, 'POST', '/v1/test-runs', {
         headers: demoHeaders('admin', DEMO_TENANT, 'usr_generic_demo'),
         body: {
@@ -374,8 +384,7 @@ describe('Ticket R7: demo tenant runs every customer check with no access or inp
           check_id: socCheck.check_id,
         },
       });
-      assert.equal(demoGenericRes.status, 403);
-      assert.equal(demoGenericRes.json.error, 'soc_gated_check');
+      assert.equal(demoGenericRes.status, 201);
 
       await withTenantContext(ownerPool, DEMO_TENANT, async (client) => {
         await client.query(`UPDATE test_runs SET status = 'verdicted' WHERE tenant_id = $1`, [DEMO_TENANT]);
@@ -434,8 +443,8 @@ describe('Ticket R7: demo tenant runs every customer check with no access or inp
         assert.equal(cleanRows.length, 0);
       });
 
-      // (h) Ticket R11: route-level feature flags in Postgres runtime honour demo and gate non-demo
-      const r11DemoRoutes = [
+      // (h) Ticket R11: route-level feature surfaces are open to every tenant in Postgres runtime
+      const r11Routes = [
         ['GET', '/v1/waf/validation-plans'],
         ['GET', '/v1/waf/validation-plans/scheduled'],
         ['GET', '/v1/waf/retests'],
@@ -444,17 +453,15 @@ describe('Ticket R7: demo tenant runs every customer check with no access or inp
         ['GET', '/v1/waf/supply-chain/risks'],
       ];
 
-      for (const [method, path] of r11DemoRoutes) {
-        const demoRes = await request(baseUrl, method, path, { headers: demoAdmin() });
-        assert.equal(demoRes.status, 200, `Expected ${method} ${path} to return 200 for demo in Postgres, got ${demoRes.status}`);
-        assert.notEqual(demoRes.json?.error, 'waf_feature_disabled');
-
-        const prodRes = await request(baseUrl, method, path, { headers: prodAdmin() });
-        assert.equal(prodRes.status, 404, `Expected ${method} ${path} to return 404 for prod in Postgres, got ${prodRes.status}`);
-        assert.equal(prodRes.json?.error, 'waf_feature_disabled');
+      for (const [method, path] of r11Routes) {
+        for (const [label, headers] of [['demo', demoAdmin()], ['non-demo', prodAdmin()]]) {
+          const res = await request(baseUrl, method, path, { headers });
+          assert.equal(res.status, 200, `Expected ${method} ${path} to return 200 for ${label} in Postgres, got ${res.status}`);
+          assert.notEqual(res.json?.error, 'waf_feature_disabled');
+        }
       }
 
-      // Bulk import with connector_id in Postgres mode
+      // Bulk import with connector_id in Postgres mode: the connector store decides, not a flag
       const demoBulk = await request(baseUrl, 'POST', `/v1/target-groups/${DEMO_GROUP}/targets:bulk-import`, {
         headers: demoAdmin(),
         body: { connector_id: 'conn_nonexistent', targets: [] },
@@ -467,7 +474,7 @@ describe('Ticket R7: demo tenant runs every customer check with no access or inp
         body: { connector_id: 'conn_test', targets: [] },
       });
       assert.equal(prodBulk.status, 404);
-      assert.equal(prodBulk.json?.error, 'connector_feature_disabled');
+      assert.equal(prodBulk.json?.error, 'connector_not_found');
 
       // Deployment features matching route authorization in Postgres mode
       const demoFeat = await request(baseUrl, 'GET', '/v1/tenant/deployment-features', { headers: demoAdmin() });
@@ -479,7 +486,7 @@ describe('Ticket R7: demo tenant runs every customer check with no access or inp
         external_discovery: true,
         connectors: true,
         protection_validation: true,
-        origin_clues: false,
+        origin_clues: true,
         assistant: false,
       });
 
@@ -487,39 +494,38 @@ describe('Ticket R7: demo tenant runs every customer check with no access or inp
       assert.equal(prodFeat.status, 200);
       assert.deepEqual(prodFeat.json, {
         demo_tenant: false,
-        all_checks_customer_runnable: false,
-        waf_posture: false,
-        external_discovery: false,
-        connectors: false,
-        protection_validation: false,
-        origin_clues: false,
+        all_checks_customer_runnable: true,
+        waf_posture: true,
+        external_discovery: true,
+        connectors: true,
+        protection_validation: true,
+        origin_clues: true,
         assistant: false,
       });
 
-      // Wildcard demo does not bypass feature gates in Postgres mode
+      // A wildcard demo marker changes nothing: the surfaces are already open
       process.env.ASTRANULL_DEMO_AUTO_VERIFY_TENANTS = '*';
       try {
         const wildcardPlans = await request(baseUrl, 'GET', '/v1/waf/validation-plans', { headers: demoHeaders('admin', DEMO_TENANT, 'usr_generic_demo') });
-        assert.equal(wildcardPlans.status, 404);
-        assert.equal(wildcardPlans.json?.error, 'waf_feature_disabled');
+        assert.equal(wildcardPlans.status, 200);
 
         const wildcardBulk = await request(baseUrl, 'POST', `/v1/target-groups/${DEMO_GROUP}/targets:bulk-import`, {
           headers: demoHeaders('admin', DEMO_TENANT, 'usr_generic_demo'),
           body: { connector_id: 'conn_test', targets: [] },
         });
         assert.equal(wildcardBulk.status, 404);
-        assert.equal(wildcardBulk.json?.error, 'connector_feature_disabled');
+        assert.equal(wildcardBulk.json?.error, 'connector_not_found');
 
         const wildcardFeat = await request(baseUrl, 'GET', '/v1/tenant/deployment-features', { headers: demoHeaders('admin', DEMO_TENANT, 'usr_generic_demo') });
         assert.equal(wildcardFeat.status, 200);
         assert.deepEqual(wildcardFeat.json, {
           demo_tenant: false,
-          all_checks_customer_runnable: false,
-          waf_posture: false,
-          external_discovery: false,
-          connectors: false,
-          protection_validation: false,
-          origin_clues: false,
+          all_checks_customer_runnable: true,
+          waf_posture: true,
+          external_discovery: true,
+          connectors: true,
+          protection_validation: true,
+          origin_clues: true,
           assistant: false,
         });
       } finally {

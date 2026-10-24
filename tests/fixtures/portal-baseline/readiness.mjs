@@ -2,7 +2,7 @@
  * Store mutations that produce distinct evidence-backed readiness scores for FT-PROV-dyn-01.
  */
 import { PORTAL_BASELINE_IDS } from './seed.mjs';
-import { CHECK_CATALOG, isCustomerRunnable, checkRequiresAdditionalInput } from '../../../src/contracts/checks.mjs';
+import { CHECK_CATALOG, isCustomerRunnable } from '../../../src/contracts/checks.mjs';
 import { addAssuredObservation } from '../../helpers/assurance-fixtures.mjs';
 
 const FROZEN = PORTAL_BASELINE_IDS.frozenAt;
@@ -36,8 +36,8 @@ export function applyPortalBaselineReadinessBoost(store, { observedAt = NOW } = 
   const tenantId = original.tenant_id;
   const approvedIds = new Set(['tgt_checkout_1', 'tgt_checkout_2']);
   const targets = store.targets.filter((target) => target.tenant_id === tenantId && approvedIds.has(target.id));
-  const catalog = CHECK_CATALOG.filter((check) => isCustomerRunnable(check) && !checkRequiresAdditionalInput(check)
-    && check.supported_targets.includes('fqdn') && check.probe_profile?.requires_complete_comparison === true
+  const catalog = CHECK_CATALOG.filter((check) => isCustomerRunnable(check)
+    && check.supported_targets.includes('fqdn')
     && !check.observation_only && check.readiness_conclusion !== false);
   const prefix = 'run_portal_assurance_';
   store.testRuns = store.testRuns.filter((run) => !run.id.startsWith(prefix));

@@ -347,7 +347,7 @@ describe('edge-detection service delegation', () => {
     assert.equal(starts, 0);
   });
 
-  it('preserves feature failure and missing-runtime fail-closed behavior', async () => {
+  it('dispatches regardless of the feature flag and still fails closed without a runtime', async () => {
     let starts = 0;
     const disabled = await runEdgeDetection({}, {
       target_group_id: 'tg_1',
@@ -361,9 +361,10 @@ describe('edge-detection service delegation', () => {
       target_id: 'tgt_1',
     }, { runtimeConfig: RUNTIME_CONFIG });
 
-    assert.deepEqual(disabled, { skipped: true, reason: 'waf_feature_disabled' });
+    // The flag no longer skips: the stub returns no run, so dispatch fails closed.
+    assert.deepEqual(disabled, { error: 'edge_detection_dispatch_invalid_response', status: 502 });
     assert.deepEqual(unavailable, { error: 'edge_detection_test_runs_unavailable', status: 503 });
-    assert.equal(starts, 0);
+    assert.equal(starts, 1);
   });
 
   it('passes through governed start denials unchanged', async () => {

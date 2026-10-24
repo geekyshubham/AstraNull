@@ -140,41 +140,35 @@ describe('check prerequisites', () => {
   };
   const answerFor = (entry, declarations, perspectiveCount) => targetRunnableIndex([served(entry, declarations, perspectiveCount)]);
 
-  it('waits for the server answer, then reports the declared TCP deny rule it names', () => {
+  it('waits for the server answer, then unlocks the check', () => {
     const deny = check('nfw.declared_deny_tcp.safe');
     assert.equal(checkPrerequisite(deny, { declarations: STORED, target: TARGET }).state, 'checking', 'no client guess before the server answers');
-    const unmet = checkPrerequisite(deny, { declarations: { version: 1 }, serverRunnableIndex: answerFor(deny, { version: 1 }) });
-    assert.equal(unmet.reason, 'declared_tcp_deny_required');
-    assert.equal(unmet.label, 'Needs a declared TCP deny rule');
-    assert.equal(unmet.section, 'network');
-    assert.deepEqual(unmet.missing, ['network_policy']);
+    assert.equal(checkPrerequisite(deny, { declarations: { version: 1 }, serverRunnableIndex: answerFor(deny, { version: 1 }) }).state, 'ready');
     assert.equal(checkPrerequisite(deny, { declarations: STORED, serverRunnableIndex: answerFor(deny, STORED) }).state, 'ready');
   });
 
-  it('reports needs a port from the server reason and SOC only for SOC body checks', () => {
+  it('never withholds a check: ports, perspectives and body checks are all runnable', () => {
     const portless = check('l3.tcp_flag_anomaly.readiness');
-    const unmet = checkPrerequisite(portless, { serverRunnableIndex: answerFor(portless, { version: 1 }) });
-    assert.equal(unmet.state, 'needs_port');
-    assert.equal(unmet.label, 'Needs a port');
+    assert.equal(checkPrerequisite(portless, { serverRunnableIndex: answerFor(portless, { version: 1 }) }).state, 'ready');
     assert.equal(checkPrerequisite(portless, { serverRunnableIndex: answerFor(portless, STORED) }).state, 'ready', 'a declared TCP rule with a port satisfies it on the server');
-    assert.equal(checkPrerequisite(check('waf.body_json_marker.soc'), { declarations: STORED, target: TARGET }).state, 'soc_only');
+    // SOC body checks still show their required declaration as a hint, but never block.
+    assert.equal(checkPrerequisite(check('waf.body_json_marker.soc'), { declarations: STORED, target: TARGET }).state, 'ready');
   });
 
-  it('needs two perspectives for the allowlist check, as the server says', () => {
+  it('never withholds the allowlist check for perspectives', () => {
     const allowlist = check('nfw.perspective_allowlist.safe');
     const denied = { ...STORED, perspectives: { allowlisted_perspective_ids: [], denied_perspective_ids: ['default'] } };
-    assert.equal(checkPrerequisite(allowlist, { serverRunnableIndex: answerFor(allowlist, denied, 1) }).state, 'needs_perspectives');
-    assert.equal(checkPrerequisite(allowlist, { serverRunnableIndex: answerFor(allowlist, STORED, 2) }).reason, 'declared_perspectives_required');
+    assert.equal(checkPrerequisite(allowlist, { serverRunnableIndex: answerFor(allowlist, denied, 1) }).state, 'ready');
     assert.equal(checkPrerequisite(allowlist, { serverRunnableIndex: answerFor(allowlist, denied, 2) }).state, 'ready');
   });
 
-  it('keeps unmet checks out of run-all and the assessment set', () => {
+  it('keeps checks without a server answer out of run-all and the assessment set', () => {
     const deny = check('nfw.declared_deny_tcp.safe');
     const withoutAnswer = assessmentChecks(CHECK_CATALOG, TARGET, { declarations: STORED, perspectiveCount: 1 }).map((entry) => entry.check_id);
     assert.ok(!withoutAnswer.includes(deny.check_id), 'a target-answered check waits for the server');
     const unmetCatalog = CHECK_CATALOG.map((entry) => entry.check_id === deny.check_id ? served(entry, { version: 1 }) : entry);
     const unmet = { declarations: { version: 1 }, perspectiveCount: 1, serverRunnableIndex: targetRunnableIndex(unmetCatalog) };
-    assert.ok(!assessmentChecks(unmetCatalog, TARGET, unmet).some((entry) => entry.check_id === deny.check_id));
+    assert.ok(assessmentChecks(unmetCatalog, TARGET, unmet).some((entry) => entry.check_id === deny.check_id), 'the server answer unlocks it');
     const metCatalog = CHECK_CATALOG.map((entry) => entry.check_id === deny.check_id ? served(entry, STORED) : entry);
     const met = { declarations: STORED, perspectiveCount: 1, serverRunnableIndex: targetRunnableIndex(metCatalog) };
     assert.ok(assessmentChecks(metCatalog, TARGET, met).some((entry) => entry.check_id === deny.check_id));
@@ -191,8 +185,7 @@ describe('check prerequisites', () => {
       assert.deepEqual(selected.map((entry) => entry.check_id).sort(), expected.map((entry) => entry.check_id).sort(), 'no eligible definition may be display-only');
       assert.equal(new Set(selected.map((entry) => entry.check_id)).size, selected.length);
       assert.ok(selected.some((entry) => entry.evidence_tier === 'E2'), 'observations run too, without readiness credit');
-      if (declarations.network_policy) assert.ok(selected.some((entry) => entry.check_id === 'l3.forbidden_udp_port.safe'), 'the server-approved UDP deny check must be evaluated');
-      else assert.ok(!selected.some((entry) => entry.check_id === 'l3.forbidden_udp_port.safe'), 'missing declarations still block dispatch');
+      assert.ok(selected.some((entry) => entry.check_id === 'l3.forbidden_udp_port.safe'), 'the UDP deny check is evaluated even without declarations');
     }
   });
 

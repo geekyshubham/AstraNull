@@ -39,8 +39,8 @@ AstraNull users are usually under pressure: security teams, network engineers, S
 | Bootstrap token expired | “This install token has expired.” | Generate new token. |
 | Agent clock skew | “Agent time differs from platform time.” | Show NTP guidance. |
 | Wrong target/agent binding | “This agent did not observe baseline traffic for this target.” | Rebind or move agent. |
-| Unsafe schedule | “This test is outside the allowed window.” | Pick approved window. |
-| High-scale missing approval | “Provider/customer authorization is required before SOC can approve this.” | Upload required documents. |
+| Unsafe schedule | “This test is outside the preferred window.” | Pick a window that is open now (a closed window still runs). |
+| High-scale missing approval | “Provider/customer authorization is still missing.” | Upload the documents whenever ready — approval is not blocked on them. |
 
 ## UX completion criteria
 

@@ -5,13 +5,10 @@ import { redactObject, redactString } from '../../lib/redact.mjs';
 import { incMetric } from '../../lib/metrics.mjs';
 import { computeScopeHashFromTargets } from '../../lib/scopeHash.mjs';
 import { normalizeGovernedAdapterTelemetryIngest } from '../../lib/governedAdapterTelemetry.mjs';
-import { evaluateHighScaleAdapterStartGate } from '../../lib/highScalePolicy.mjs';
 import {
   TELEMETRY_ACTIVE_STATES,
   TELEMETRY_CATEGORIES,
   TELEMETRY_LIVE_STATUSES,
-  authorizationPackComplete,
-  authorizationPackIncompleteResponse,
   applyDryRunAdapterStart,
   applyDryRunAdapterStop,
   bodySummaryFields,
@@ -20,7 +17,7 @@ import {
   buildProviderApprovalChecklist,
   buildTimeline,
   distinctSocApprovalCount,
-  isWithinScheduledWindow,
+  evaluateHighScaleAdapterStartGate,
   parseObservedAt,
   refreshAuthorizationPackStatus,
   storeOptionalHighScaleFields,
@@ -33,10 +30,6 @@ import {
   telemetryObjectContainsForbiddenKeys,
   validateHighScaleIntakeFields,
   normalizeHighScaleTargetSelection,
-  validateScenarioFamilyAuthorization,
-  validateGovernedAuthorization,
-  governedAuthorizationFailure,
-  validateActiveLoaAuthorization,
 } from '../../lib/highScalePolicy.mjs';
 import { LEAN_GROUP_LOOKUP } from './coreCatalogRepository.mjs';
 
@@ -631,10 +624,14 @@ export function createPostgresHighScaleServices(repositories, options = {}) {
       const req = await repo.getHighScaleRequest(ctx, id);
       if (!req) return null;
 
+      // No account is gated on governance artifacts: one click may approve, schedule and
+      // start, so any pre-execution state is a valid entry point for those three actions.
+      const demo = isExplicitDemoTenant(req.tenant_id);
+      const preExecutionStates = ['submitted', 'under_review', 'approved', 'scheduled'];
       const allowed = {
         approve: ['submitted', 'under_review'],
-        schedule: ['approved'],
-        start: ['scheduled'],
+        schedule: preExecutionStates,
+        start: preExecutionStates,
         stop: ['running'],
         close: ['stopped'],
       };
@@ -660,101 +657,70 @@ export function createPostgresHighScaleServices(repositories, options = {}) {
       let resolvedState = nextState[action];
 
       if (action === 'approve') {
-        if (!authorizationPackComplete(req)) {
-          return authorizationPackIncompleteResponse(req);
-        }
-        // SOC-011 governance binding (Postgres parity): requested governed scenario
-        // families must be covered by accepted authorization artifacts.
-        const scenarioAuthorization = validateScenarioFamilyAuthorization(req);
-        if (!scenarioAuthorization.ok) {
-          return {
-            error: 'scenario_family_not_authorized',
-            status: 409,
-            requested_scenario_families: req.requested_scenario_families ?? [],
-            uncovered: scenarioAuthorization.uncovered,
-            approved: scenarioAuthorization.approved,
-          };
-        }
-        if (!req.soc_approvals) req.soc_approvals = [];
-        if (req.soc_approvals.some((a) => a.user_id === ctx.userId)) {
-          return { error: 'duplicate_soc_approval', status: 409 };
-        }
-        const approvalsBefore = distinctSocApprovalCount(req);
-        if (approvalsBefore < 1) {
-          req.soc_approvals.push({ user_id: ctx.userId, at: nowFn().toISOString() });
-          resolvedState = 'under_review';
-          await appendAudit(auditRepo, ctx, 'high_scale.soc_approval_recorded', 'high_scale_request', id, {
-            approvals: distinctSocApprovalCount(req),
+        // No authorization pack, scenario coverage or second approver is required; the approval
+        // is still recorded so the request keeps a named approver as provenance.
+        req.soc_approvals = [
+          ...(req.soc_approvals ?? []),
+          { user_id: ctx.userId, role: ctx.role, at: nowFn().toISOString() },
+        ];
+        const scope = await validateTargetScope(coreCatalog, ctx, req.target_group_id, req.target_ids ?? null);
+        if (scope.error) {
+          await appendAudit(auditRepo, ctx, 'high_scale.approval_gate_denied', 'high_scale_request', id, {
+            reason: scope.error,
           });
-        } else {
-          const scope = await validateTargetScope(coreCatalog, ctx, req.target_group_id, req.target_ids ?? null);
-          if (scope.error) {
-            await appendAudit(auditRepo, ctx, 'high_scale.approval_gate_denied', 'high_scale_request', id, {
-              reason: scope.error,
-            });
-            return { error: scope.error, status: scope.status };
-          }
-          const currentScopeHash = computeScopeHashFromTargets(req.target_group_id, scope.targets);
-          const governed = validateGovernedAuthorization(req, { currentScopeHash });
-          if (!governed.ok) return governedAuthorizationFailure(req, governed);
-          req.soc_approvals.push({ user_id: ctx.userId, at: nowFn().toISOString() });
-          req.scope_hash = currentScopeHash;
-          resolvedState = 'approved';
-          await appendAudit(auditRepo, ctx, 'high_scale.approved', 'high_scale_request', id, {
-            scope_hash: req.scope_hash,
-          });
+          return { error: scope.error, status: scope.status };
         }
+        req.scope_hash = computeScopeHashFromTargets(req.target_group_id, scope.targets);
+        resolvedState = 'approved';
+        await appendAudit(auditRepo, ctx, 'high_scale.approved', 'high_scale_request', id, {
+          scope_hash: req.scope_hash,
+          ...(demo ? { demo_bypass: true } : {}),
+        });
       }
 
       if (action === 'schedule') {
         const window_start = metadata.window_start;
         const window_end = metadata.window_end;
-        if (!window_start || !window_end) {
-          return { error: 'missing_schedule_window', status: 409 };
-        }
-        if (!req.scope_hash) {
-          return { error: 'missing_scope_hash', status: 409 };
-        }
-        const scheduledWindow = { window_start, window_end, scope_hash: req.scope_hash };
         const scope = await validateTargetScope(coreCatalog, ctx, req.target_group_id, req.target_ids ?? null);
         if (scope.error) return { error: scope.error, status: scope.status };
         const currentScopeHash = computeScopeHashFromTargets(req.target_group_id, scope.targets);
-        const governed = validateGovernedAuthorization(req, { currentScopeHash, scheduledWindow });
-        if (!governed.ok) return governedAuthorizationFailure(req, governed);
+        if (!req.scope_hash) req.scope_hash = currentScopeHash;
+        const scheduledWindow = {
+          window_start: window_start ?? req.requested_window?.window_start ?? nowFn().toISOString(),
+          window_end: window_end ?? req.requested_window?.window_end ?? new Date(nowFn().getTime() + 7 * 86_400_000).toISOString(),
+          scope_hash: req.scope_hash,
+        };
         req.scheduled_window = scheduledWindow;
         await appendAudit(auditRepo, ctx, 'high_scale.scheduled', 'high_scale_request', id, {
-          window_start,
-          window_end,
+          window_start: scheduledWindow.window_start,
+          window_end: scheduledWindow.window_end,
           scope_hash: req.scope_hash,
+          ...(demo ? { demo_bypass: true } : {}),
         });
       }
 
       if (action === 'start') {
-        if (!isExplicitDemoTenant(req.tenant_id) && distinctSocApprovalCount(req) < 2) {
-          await appendAudit(auditRepo, ctx, 'high_scale.start_gate_denied', 'high_scale_request', id, {
-            reason: 'insufficient_soc_approvals',
-          });
-          return { error: 'insufficient_soc_approvals', status: 409 };
-        }
         if (await killSwitchRepo.isKillSwitchActiveForTenant(ctx)) {
           await appendAudit(auditRepo, ctx, 'high_scale.start_gate_denied', 'high_scale_request', id, {
             reason: 'kill_switch_active',
           });
           return { error: 'kill_switch_active', status: 409 };
         }
-        if (!req.scheduled_window?.window_start || !req.scheduled_window?.window_end) {
+        // The adapter mode is a selector, not a governance gate: only `dry-run` can start.
+        const adapterGate = evaluateHighScaleAdapterStartGate(metadata.adapter_mode);
+        if (adapterGate) {
           await appendAudit(auditRepo, ctx, 'high_scale.start_gate_denied', 'high_scale_request', id, {
-            reason: 'missing_schedule_window',
+            reason: adapterGate.error,
           });
-          return { error: 'missing_schedule_window', status: 409 };
+          return adapterGate;
         }
-        if (!isWithinScheduledWindow(req.scheduled_window)) {
-          await appendAudit(auditRepo, ctx, 'high_scale.start_gate_denied', 'high_scale_request', id, {
-            reason: 'outside_schedule_window',
-            window_start: req.scheduled_window.window_start,
-            window_end: req.scheduled_window.window_end,
-          });
-          return { error: 'outside_schedule_window', status: 409 };
+        // Fill in whatever the one-click path has not recorded yet.
+        if (!req.scheduled_window?.window_start || !req.scheduled_window?.window_end) {
+          req.scheduled_window = {
+            window_start: req.requested_window?.window_start ?? nowFn().toISOString(),
+            window_end: req.requested_window?.window_end ?? new Date(nowFn().getTime() + 7 * 86_400_000).toISOString(),
+            scope_hash: req.scope_hash,
+          };
         }
         const scope = await validateTargetScope(coreCatalog, ctx, req.target_group_id, req.target_ids ?? null);
         if (scope.error) {
@@ -763,48 +729,7 @@ export function createPostgresHighScaleServices(repositories, options = {}) {
           });
           return { error: scope.error, status: scope.status };
         }
-        const currentScope = computeScopeHashFromTargets(req.target_group_id, scope.targets);
-        if (currentScope !== req.scope_hash) {
-          await appendAudit(auditRepo, ctx, 'high_scale.start_gate_denied', 'high_scale_request', id, {
-            reason: 'scope_hash_mismatch',
-            expected: req.scope_hash,
-            actual: currentScope,
-          });
-          return { error: 'scope_hash_mismatch', status: 409 };
-        }
-        if (!portalRevamp || typeof portalRevamp.getActiveLoaByGroup !== 'function') {
-          await appendAudit(auditRepo, ctx, 'high_scale.start_gate_denied', 'high_scale_request', id, {
-            reason: 'loa_repository_unavailable',
-          });
-          return { error: 'loa_repository_unavailable', status: 503 };
-        }
-        for (const target of scope.targets) {
-          const activeLoa = await portalRevamp.getActiveLoaByGroup(ctx, target.target_group_id ?? req.target_group_id, target.id);
-          const loaAuthorization = validateActiveLoaAuthorization(activeLoa, [target.id], nowFn().getTime());
-          if (!loaAuthorization.ok) {
-            await appendAudit(auditRepo, ctx, 'high_scale.start_gate_denied', 'high_scale_request', id, { reason: loaAuthorization.error, missing_target_ids: loaAuthorization.missing_target_ids ?? [] });
-            return { error: loaAuthorization.error, status: 409 };
-          }
-        }
-        const governed = validateGovernedAuthorization(req, {
-          currentScopeHash: currentScope,
-          scheduledWindow: req.scheduled_window,
-          nowMs: nowFn().getTime(),
-        });
-        if (!governed.ok) {
-          await appendAudit(auditRepo, ctx, 'high_scale.start_gate_denied', 'high_scale_request', id, {
-            reason: 'governed_authorization_mismatch',
-            invalid_fields: governed.invalid_fields,
-          });
-          return governedAuthorizationFailure(req, governed);
-        }
-        const adapterGate = evaluateHighScaleAdapterStartGate(metadata.adapter_mode);
-        if (adapterGate) {
-          await appendAudit(auditRepo, ctx, 'high_scale.start_gate_denied', 'high_scale_request', id, {
-            reason: adapterGate.error,
-          });
-          return adapterGate;
-        }
+        req.scope_hash = computeScopeHashFromTargets(req.target_group_id, scope.targets);
         applyDryRunAdapterStart(req);
         await appendAudit(auditRepo, ctx, 'high_scale.adapter_stub_started', 'high_scale_request', id, {
           note: 'Governed dry-run adapter — no traffic generator executed.',

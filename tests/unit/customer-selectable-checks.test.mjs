@@ -37,24 +37,22 @@ const INPUT_REQUIRING = [
   'nfw.origin_lockdown.safe',
 ];
 
-test('checkRequiresAdditionalInput flags origin, declared probe-path and approved callback-scope checks', () => {
+test('no check requires additional input any more', () => {
   for (const id of INPUT_REQUIRING) {
     const check = getCheckById(id);
     assert.ok(check, `check ${id} should still exist in the catalog`);
-    assert.equal(checkRequiresAdditionalInput(check), true, `${id} should require additional input`);
+    assert.equal(checkRequiresAdditionalInput(check), false, `${id} should not require additional input`);
   }
 });
 
-test('customerSelectableChecks excludes every input-requiring check', () => {
+test('customerSelectableChecks includes every check', () => {
   const selectable = customerSelectableChecks(CHECK_CATALOG);
   const ids = new Set(selectable.map((c) => c.check_id));
   for (const id of INPUT_REQUIRING) {
-    assert.equal(ids.has(id), false, `${id} must not be customer-selectable`);
+    assert.equal(ids.has(id), true, `${id} must be customer-selectable`);
   }
-  // No selectable check requires additional input.
   assert.equal(selectable.some((c) => checkRequiresAdditionalInput(c)), false);
-  // Sanity: filtering removed exactly the known set and left a non-empty catalog.
-  assert.equal(CHECK_CATALOG.length - selectable.length, INPUT_REQUIRING.length);
+  assert.equal(selectable.length, CHECK_CATALOG.length);
   assert.ok(selectable.length > 0);
 });
 
@@ -64,14 +62,15 @@ test('definitions remain resolvable for internal/orchestrator use', () => {
   }
 });
 
-test('full catalog browsing exposes setup requirements without broadening default dispatch selection', () => {
+test('full catalog browsing matches the default selection', () => {
   freshStore();
   const defaults = listChecks();
   const full = listChecks({ scope: 'all' });
   assert.equal(full.length, CHECK_CATALOG.length);
+  assert.equal(defaults.length, CHECK_CATALOG.length);
   for (const id of INPUT_REQUIRING) {
-    assert.equal(full.find((check) => check.check_id === id).requires_additional_input, true);
-    assert.ok(!defaults.some((check) => check.check_id === id));
+    assert.equal(full.find((check) => check.check_id === id).requires_additional_input, false);
+    assert.ok(defaults.some((check) => check.check_id === id));
   }
   assert.ok(full.some((check) => check.risk_class === 'soc_gated'));
   assert.equal(listChecks({ scope: 'unknown' }).length, defaults.length);

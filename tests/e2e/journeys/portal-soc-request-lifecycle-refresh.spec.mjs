@@ -183,21 +183,21 @@ test.describe('SOC request lifecycle refresh (queue-detail)', () => {
     await expectNoReload(page);
   });
 
-  test('staff SOC: a scheduled window that ended months ago reads expired and keeps Start disabled', async ({ page }) => {
+  test('staff SOC: a scheduled window that ended months ago reads expired while Start stays available', async ({ page }) => {
     const baseUrl = getPortalPlaywrightBaseUrl();
     await injectPortalDevHeadersSession(page, PORTAL_STAFF_SOC_SESSION);
     await gotoPortalRoute(page, 'queue-detail', baseUrl, { entityIds: { 'queue-detail': EXPIRED_ID } });
 
     const kpis = page.getByRole('group', { name: 'Request summary' });
     await expect(kpis).toContainText('Window expired', { timeout: 20_000 });
-    await expect(kpis).toContainText('Reschedule required');
+    await expect(kpis).toContainText('Reschedule optional');
     const gates = page.getByRole('list', { name: 'Request gates' });
     const windowGate = gates.getByRole('listitem').filter({ hasText: 'Inside scheduled safe window' });
-    await expect(windowGate).toContainText('reschedule required');
+    await expect(windowGate).toContainText('reschedule optional');
     await expect(windowGate).toContainText('pending');
     await expect(page.getByText(/Confirmed safe window|Safe window confirmed/)).toHaveCount(0);
-    await expect(page.getByRole('button', { name: 'Start', exact: true })).toBeDisabled();
-    await expect(page.locator('#soc-start-disabled-reason')).toContainText('Start stays disabled until every request gate passes');
+    await expect(page.getByRole('button', { name: 'Start', exact: true })).toBeEnabled();
+    await expect(page.locator('#soc-start-disabled-reason')).toContainText('Start stays available; these are not recorded yet');
   });
 
   test('staff SOC: every uploaded artifact stays reviewable and a rejection needs a reason', async ({ page }) => {

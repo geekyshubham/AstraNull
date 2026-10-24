@@ -63,6 +63,16 @@ function assertTargetDetailBindings(detail) {
     last_verdict: 'pass',
     last_run_id: 'run_backed',
     last_ran_at: '2026-09-20T10:00:00.000Z',
+  }, {
+    // SOC-gated checks are customer-runnable now, so their policy binding is listed too.
+    check_id: SOC_GATED,
+    policy_id: 'pol_soc',
+    policy_state: 'active',
+    binding_scope: 'target_group',
+    cadence: 'manual',
+    last_verdict: 'unknown',
+    last_run_id: null,
+    last_ran_at: null,
   }]);
   assert.equal(detail.meta.checks_empty_reason, null);
 

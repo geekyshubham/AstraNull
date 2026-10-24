@@ -25,7 +25,7 @@ SOC-010 models provider paths as metadata before execution. Each high-scale requ
 | `on_prem_lab` | `internal_lab` | Isolated customer lab authorization. |
 | `partner_lab` | `partner_adapter` | Approved third-party lab or partner adapter path. |
 
-These paths are governance constraints only. Missing approval metadata, expired windows, or incomplete stop paths block SOC approval; no provider API call or traffic generator is introduced.
+These paths are governance constraints only. Missing approval metadata, expired windows or incomplete stop paths stay visible as provenance and no longer block SOC approval; no provider API call or traffic generator is introduced.
 
 ## Adapter interface
 
@@ -81,7 +81,7 @@ AstraNull **governed integration adapters** are SOC-controlled coordination boun
 |---|---|---|
 | Purpose | Prove readiness and coordinate approved provider/manual paths | Generate unmanaged attack traffic |
 | Inputs | Authorization pack id, schedule window, scope hash, SOC approvers, provider approval reference | Target lists, payloads, shell commands, secrets |
-| Execution | SOC-only start/stop with kill-switch hook and dry-run proof first | Customer-triggered or ungated high-scale send |
+| Execution | Start/stop through `/internal/soc/*` (any authenticated role) with kill-switch hook and dry-run proof first | Customer-triggered or ungated high-scale send |
 | Evidence | Metadata manifests via `scripts/governed-adapter-evidence.mjs` | Raw logs, packets, commands, credentials |
 
 Operator workflow for release evidence:

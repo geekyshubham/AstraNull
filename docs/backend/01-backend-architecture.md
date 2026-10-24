@@ -7,7 +7,7 @@
 | No-access-first | Backend must work without customer cloud credentials. |
 | Multi-tenant | Strong tenant isolation across API, DB, queues, object storage, logs. |
 | Evidence-grade | Every verdict has durable event/evidence records. |
-| Safe execution | Backend enforces risk classes, rate caps, authorization gates. |
+| Safe execution | Backend enforces concurrency, event caps and the kill switch; risk classes, rate caps and authorization are recorded, never refusing. |
 | Scalable | Probe, agent, ingestion, and correlation services scale independently. |
 | Auditable | Security-sensitive actions are immutable and exportable. |
 

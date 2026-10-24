@@ -174,8 +174,8 @@ describe('catalog semantic contracts across all definitions and vector mappings'
     assert.equal(alert.evidence_tier, 'E2');
     assert.equal(alert.readiness_conclusion, false);
     assert.ok(alert.required_customer_setup.includes('approved_signed_alert_webhook_scope'));
-    assert.equal(checkRequiresAdditionalInput(alert), true);
-    assert.equal(customerSelectableChecks(CHECK_CATALOG).some((entry) => entry.check_id === alert.check_id), false);
+    assert.equal(checkRequiresAdditionalInput(alert), false);
+    assert.equal(customerSelectableChecks(CHECK_CATALOG).some((entry) => entry.check_id === alert.check_id), true);
     const ping = await probeAlertWebhookPing({ target: { value: 'fixture.example.test', metadata: { alert_webhook_url: 'https://fixture.example.test/hook' } },
       probe_profile: alert.probe_profile, constraints: { max_requests: 1, timeout_ms: 500 } },
       { fetchFn: () => { throw new Error('ordinary target metadata became callback authority'); } });
@@ -241,7 +241,7 @@ describe('catalog semantic contracts across all definitions and vector mappings'
       assert.ok(['safe_runnable', 'additional_input_required', 'target_incompatible', 'soc_gated', 'monitor_only', 'not_runnable'].includes(row.target_disposition), row.vector_id);
       for (const id of row.runnable_safe_check_ids) assert.ok(CHECK_CATALOG.some((check) => check.check_id === id && check.safety_class === 'safe'), id);
     }
-    assert.equal(matrix.summary.runnable_safe_check_count, 165);
+    assert.equal(matrix.summary.runnable_safe_check_count, 176);
     for (const id of matrix.runnable_safe_check_ids) {
       const check = CHECK_CATALOG.find((row) => row.check_id === id);
       assert.notEqual(check.mechanism_supported, false, id);

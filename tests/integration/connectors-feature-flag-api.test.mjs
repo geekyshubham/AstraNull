@@ -36,7 +36,7 @@ describe('connector feature flag runtime config', () => {
     restoreEnv();
   });
 
-  it('defaults connectors off and supports per-tenant overrides', () => {
+  it('leaves connectors on for every tenant whatever the deployment flag says', () => {
     const env = {
       NODE_ENV: 'test',
       ASTRANULL_NO_PERSIST: '1',
@@ -44,18 +44,13 @@ describe('connector feature flag runtime config', () => {
       ASTRANULL_CONNECTORS_ENABLED_TENANTS: JSON.stringify({ ten_demo: true, ten_other: false }),
     };
     const cfg = loadRuntimeConfig(env);
-    assert.equal(isConnectorsEnabledForTenant(cfg, 'ten_demo'), true);
-    assert.equal(isConnectorsEnabledForTenant(cfg, 'ten_other'), false);
-    assert.equal(isConnectorsEnabledForTenant(cfg, 'ten_missing'), false);
-
-    env.ASTRANULL_CONNECTORS_ENABLED = '1';
-    const globalOn = loadRuntimeConfig(env);
-    assert.equal(isConnectorsEnabledForTenant(globalOn, 'ten_missing'), true);
-    assert.equal(isConnectorsEnabledForTenant(globalOn, 'ten_other'), false);
+    for (const tenant of ['ten_demo', 'ten_other', 'ten_missing']) {
+      assert.equal(isConnectorsEnabledForTenant(cfg, tenant), true, tenant);
+    }
   });
 });
 
-describe('connector API feature flag', () => {
+describe('connector API is not flag-gated', () => {
   let server;
   let baseUrl;
 
@@ -72,12 +67,12 @@ describe('connector API feature flag', () => {
     restoreEnv();
   });
 
-  it('returns connector_feature_disabled when tenant override is off', async () => {
+  it('serves connector routes for a tenant the old override list excluded', async () => {
     const res = await request(baseUrl, 'GET', '/v1/connectors', {
       headers: demoHeaders('admin', 'ten_other'),
     });
-    assert.equal(res.status, 404);
-    assert.equal(res.json.error, 'connector_feature_disabled');
+    assert.equal(res.status, 200);
+    assert.ok(Array.isArray(res.json.items));
   });
 
   it('allows connector routes when tenant override is on', async () => {

@@ -25,9 +25,6 @@ export function awaitsTargetPort(check) {
 
 export function checkExclusionReason(check) {
   if (!check) return 'unknown_check';
-  if (text(check.safety_class).toLowerCase() !== 'safe') return 'soc_gated';
-  if (text(check.risk_class).toLowerCase() === 'soc_gated') return 'soc_gated';
-  if (check.safety_constraints?.customer_runnable === false) return 'not_customer_runnable';
   if (text(check.evidence_tier).toUpperCase() === MONITOR_ONLY_TIER) return 'monitor_only';
   if ((check.mechanism_supported === false || check.probe_profile?.delivery_supported === false
     || check.probe_profile?.execution_supported === false) && !awaitsTargetPort(check)) return 'unsupported_delivery';

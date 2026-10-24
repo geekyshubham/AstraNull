@@ -91,13 +91,13 @@ describe('per-target runnability follows the server', () => {
     assert.equal(targetRequirementForReason('incompatible_target'), null);
   });
 
-  it('unlocks target-dependent checks in the runnable list only when the target-scoped catalog says so', () => {
+  it('unlocks target-dependent checks in the runnable list from the target-scoped catalog', () => {
     const portless = getCheckById('l3.tcp_flag_anomaly.readiness');
     const runnable = [serverItem(portless, FQDN, DENY_TCP)];
     const blocked = [serverItem(portless, FQDN, EMPTY)];
     assert.deepEqual(targetRunnableIndex(runnable).get(portless.check_id), { runnable: true, reason: '' });
     assert.deepEqual(individualChecks(withTargetRunnableChecks([], runnable), FQDN).map((check) => check.check_id), [portless.check_id]);
-    assert.deepEqual(individualChecks(withTargetRunnableChecks([], blocked), FQDN), []);
+    assert.deepEqual(individualChecks(withTargetRunnableChecks([], blocked), FQDN).map((check) => check.check_id), [portless.check_id]);
     assert.deepEqual(individualChecks([portless], FQDN), [], 'without the server answer the check waits');
     const merged = withTargetDependentChecks([], [blocked, runnable]);
     assert.equal(merged.length, 1);

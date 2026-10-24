@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { getCheckById, isCustomerRunnable } from '../contracts/checks.mjs';
+import { getCheckById } from '../contracts/checks.mjs';
 // Reuse the existing launcher selection rules; this read-only proposal is not server admission.
 import { checkExclusionReason, checkSupportsTarget } from '../../apps/web/react/src/lib/check-picker.mjs';
 import { redactSecrets, wrapUntrusted } from '../lib/assistantSafety.mjs';
@@ -94,7 +94,6 @@ export async function buildRiskPlan(ctx, request, purpose, readers, { now = Date
     const published = getCheckById(row.check_id);
     let reason = null;
     if (!published || published.version !== row.version) reason = 'not_published';
-    else if (!isCustomerRunnable(published, ctx)) reason = 'soc_gated_check';
     else if (checkExclusionReason(published)) reason = checkExclusionReason(published);
     else if (!checkSupportsTarget(published, target)) reason = 'target_kind_not_supported';
     else if (row.requires_additional_input !== false) reason = safeText(row.additional_input_reason, 100) || 'target_eligibility_unknown';

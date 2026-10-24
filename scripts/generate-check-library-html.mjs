@@ -18,7 +18,7 @@ const GLOSSARY = {
   'Evidence tier': 'E1 is declaration-only, E2 is transport/observation-only, E3 is a bounded semantic-safe result, and E4 is SOC-governed.',
   'external_result': 'Probe outcome: blocked, timeout, connected, error, or not_run. Error/not_run and signed execution timeouts cannot establish readiness.',
   'metadata_marker': 'E1 declaration-only record. It performs zero network I/O and always remains inconclusive until customer evidence or a SOC-governed test exists.',
-  'soc_gated': 'Not runnable from customer UI — requires SOC approval, authorization pack, and governed execution.',
+  'soc_gated': 'Disruptive, high-scale or offensive class. Runnable by any customer role; authorization pack and SOC governance are recorded evidence, not a gate.',
   nonce_hash: 'Correlation token linking a probe job to its bounded external result without sending raw payloads.',
   'direct_origin_ip': 'Legacy metadata candidate; normal signed jobs bind egress to the verified target and discard alternate destination values.',
 };
@@ -249,7 +249,7 @@ const html = `<!DOCTYPE html>
   <header class="page">
     <h1>AstraNull Check Library</h1>
     <p>Reference for every check in <code>CHECK_CATALOG</code> (${CHECK_CATALOG.length} entries).
-    Safe checks use either signed bounded probes or explicit E1 declaration-only records; E1 never means live-tested. SOC-gated checks require authorization and SOC execution.
+    Safe checks use either signed bounded probes or explicit E1 declaration-only records; E1 never means live-tested. SOC-gated checks are runnable by every role; their authorization pack and SOC governance are recorded, not required.
     Generated from the repo catalog — re-run <code>node scripts/generate-check-library-html.mjs</code> after catalog changes.</p>
   </header>
   <nav class="toc">

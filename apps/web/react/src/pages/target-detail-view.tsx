@@ -2074,7 +2074,7 @@ export function TargetDetailView({
                       {prerequisite.state !== 'ready' ? <Badge tone={prerequisiteTone(prerequisite)}>{prerequisite.label}</Badge> : null}
                     </span>
                     <p>{targetCheckRequirement(check, target, prerequisiteContext)}</p>
-                    {prerequisite.state === 'soc_only' ? <p><a className="td-inline-link" href="#support">Request it through AstraNull SOC</a></p> : null}
+                    {prerequisite.state === 'soc_only' ? <p><a className="td-inline-link" href={buildDetailHref('check-detail', getString(check, ['check_id'], ''))}>Open the request-only check to start it</a></p> : null}
                     {section ? <p><a className="td-inline-link" href={controlsHref(entityId, section)}>{prerequisiteCta(prerequisite)}</a></p> : null}
                     {Array.isArray(check.required_customer_setup) && check.required_customer_setup.length ? <p className="td-muted">Required setup: {(check.required_customer_setup as string[]).map((value) => formatLabel(value)).join(', ')}</p> : null}
                   </li>;
@@ -2330,7 +2330,7 @@ export function TargetDetailView({
                     {impactSentence(selectedInvasiveCount, reviewSelectedRows.length)}
                   </>
                 )}
-                <p>They run one at a time within your safe-run limits and hold this target&apos;s execution slot until finished; if an hourly limit is reached the scan pauses and shows when it resumes. You can stop it any time. The server re-checks ownership, safe windows, rate and concurrency gates when you start.</p>
+                <p>They hold this target&apos;s execution slot until finished; the scan pauses to show when a subscribed allowance or another run clears. You can stop it any time. The server re-checks ownership, and safe windows and rate limits are advisory, so they never refuse a start.</p>
                 <p className="td-review-traffic"><strong>What your team will see:</strong> {trafficNotice(`at most ${review.mode === 'all' ? runAllRequestBound : selectedRequestBound} requests`)}</p>
                 {!ownershipDone ? <p className="td-form-error" role="alert">{OWNERSHIP_LOCKED_REASON}</p> : reviewSlotReason ? <p className="td-form-error" role="alert">{reviewSlotReason}</p> : null}
               </>

@@ -24,4 +24,4 @@ Modern protocols can change DDoS behavior. AstraNull should validate whether the
 
 ## Completion criteria
 
-Protocol readiness is complete when AstraNull can show which protocols are exposed, whether safe limits are configured, and whether high-scale testing requires SOC approval.
+Protocol readiness is complete when AstraNull can show which protocols are exposed, whether safe limits are configured, and whether high-scale testing stays inside the SOC workflow (recorded, not gated).

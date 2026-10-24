@@ -96,7 +96,8 @@ test('empty source set is unknown evidence, never a pass, and unavailable reader
 });
 
 test('recommender uses canonical publication, customer runnability, target kind and target-scoped eligibility', async () => {
-  const soc = CHECK_CATALOG.find((check) => !isCustomerRunnable(check, ctx));
+  // SOC request markers are no longer excluded by runnability; they are ordinary candidates.
+  const soc = CHECK_CATALOG.find((check) => check.risk_class === 'soc_gated');
   const incompatible = CHECK_CATALOG.find((check) => isCustomerRunnable(check, ctx) && !checkExclusionReason(check) && !checkSupportsTarget(check, target));
   assert.ok(soc && incompatible);
   const catalog = [
@@ -108,8 +109,8 @@ test('recommender uses canonical publication, customer runnability, target kind 
     { ...first, check_id: 'invented.safe', requires_additional_input: false },
   ];
   const { computed } = await buildRiskPlan(ctx, request, 'validation_plan', readers({ listTargetChecks: async () => catalog }));
-  assert.deepEqual(computed.check_ids, [first.check_id]);
-  assert.deepEqual(computed.excluded.map((row) => row.reason), ['declared_probe_path_required', 'target_eligibility_unknown', 'soc_gated_check', 'target_kind_not_supported', 'not_published']);
+  assert.deepEqual(computed.check_ids, [first.check_id, soc.check_id]);
+  assert.deepEqual(computed.excluded.map((row) => row.reason), ['declared_probe_path_required', 'target_eligibility_unknown', 'target_kind_not_supported', 'not_published']);
   assert.equal(computed.requires_review, true);
   assert.match(computed.admission, /server admission/);
 });

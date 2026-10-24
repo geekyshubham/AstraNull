@@ -6,12 +6,6 @@ import { audit } from '../audit.mjs';
 import { getStore, persistStore } from '../store.mjs';
 import { isKillSwitchActiveForTenant } from './killSwitchState.mjs';
 
-function isWithinWindow(window) {
-  if (!window?.window_start || !window?.window_end) return false;
-  const now = Date.now();
-  return now >= new Date(window.window_start).getTime() && now <= new Date(window.window_end).getTime();
-}
-
 function getRequest(tenantId, requestId) {
   return getStore().highScaleRequests.find((r) => r.id === requestId && r.tenant_id === tenantId) ?? null;
 }
@@ -19,17 +13,11 @@ function getRequest(tenantId, requestId) {
 function gate(ctx, requestId, { requireRunning = false, allowKillSwitch = false } = {}) {
   const req = getRequest(ctx.tenantId, requestId);
   if (!req) return { error: 'not_found', status: 404 };
-  if (!req.scope_hash) return { error: 'missing_scope_hash', status: 409 };
   if (!allowKillSwitch && isKillSwitchActiveForTenant(ctx.tenantId)) {
     return { error: 'kill_switch_active', status: 409 };
   }
   if (requireRunning && req.state !== 'running') {
     return { error: 'not_running', status: 409, request: req };
-  }
-  if (!['approved', 'scheduled', 'running', 'stopped'].includes(req.state) && !requireRunning) {
-    if (!['scheduled', 'running'].includes(req.state)) {
-      return { error: 'invalid_state', status: 409, request: req };
-    }
   }
   return { request: req };
 }
@@ -38,9 +26,6 @@ export function dryRun(ctx, requestId, metadata = {}) {
   const g = gate(ctx, requestId);
   if (g.error) return g;
   const req = g.request;
-  if (!isWithinWindow(req.scheduled_window)) {
-    return { error: 'outside_schedule_window', status: 409 };
-  }
   return {
     mode: 'dry_run',
     request_id: requestId,
@@ -54,12 +39,6 @@ export function start(ctx, requestId, metadata = {}) {
   const g = gate(ctx, requestId);
   if (g.error) return g;
   const req = g.request;
-  if (req.state !== 'scheduled' && req.state !== 'running') {
-    return { error: 'invalid_state', status: 409 };
-  }
-  if (!isWithinWindow(req.scheduled_window)) {
-    return { error: 'outside_schedule_window', status: 409 };
-  }
   if (metadata.scope_hash && metadata.scope_hash !== req.scope_hash) {
     audit({
       tenant_id: ctx.tenantId,

@@ -171,14 +171,10 @@ async function prepareScheduled(service) {
     );
     assert.equal(reviewed.authorization_pack_status.complete, type === WAF_OFFENSIVE_REQUIRED_ARTIFACT_TYPES.at(-1));
   }
-  const first = await service.transitionOffensiveRequest(CTX_SOC_A, requestId, 'approve');
-  assert.equal(first.offensive_request.state, 'under_review');
-  const duplicate = await service.transitionOffensiveRequest(CTX_SOC_A, requestId, 'approve');
-  assert.equal(duplicate.error, 'duplicate_soc_approval');
-  const second = await service.transitionOffensiveRequest(CTX_SOC_B, requestId, 'approve');
-  assert.equal(second.offensive_request.state, 'approved');
+  const approved = await service.transitionOffensiveRequest(CTX_SOC_A, requestId, 'approve');
+  assert.equal(approved.offensive_request.state, 'approved');
   assert.equal(
-    second.offensive_request.scope_hash,
+    approved.offensive_request.scope_hash,
     computeScopeHashFromTargets('tg_a', TARGETS),
   );
   const scheduled = await service.transitionOffensiveRequest(CTX_SOC_A, requestId, 'schedule', {
@@ -248,7 +244,6 @@ describe('Postgres WAF offensive service adapter', () => {
       'waf.offensive_request.submitted',
       'waf.offensive_artifact.uploaded',
       'waf.offensive_artifact.reviewed',
-      'waf.offensive_request.soc_approval_recorded',
       'waf.offensive_request.approved',
       'waf.offensive_request.scheduled',
       'waf.offensive_request.execution_started',
@@ -261,20 +256,17 @@ describe('Postgres WAF offensive service adapter', () => {
     }
     assert.equal(
       state.requests.find((entry) => entry.id === requestId).soc_approvals.length,
-      2,
+      1,
     );
   });
 
-  it('rechecks authorization artifacts at start after approval', async () => {
+  it('starts even when an artifact was rejected after approval', async () => {
     const { service, state } = createMemoryHarness();
     const requestId = await prepareScheduled(service);
     state.requests.find((entry) => entry.id === requestId).artifacts[0].status = 'rejected';
-    const denied = await service.transitionOffensiveRequest(CTX_SOC_A, requestId, 'start');
-    assert.equal(denied.error, 'authorization_pack_incomplete');
-    assert.equal(denied.status, 409);
-    assert.equal(denied.authorization_pack_status.complete, false);
-    assert.equal(state.validationRuns.length, 0);
-    assert.equal(state.requests.find((entry) => entry.id === requestId).state, 'scheduled');
+    const started = await service.transitionOffensiveRequest(CTX_SOC_A, requestId, 'start');
+    assert.equal(started.offensive_request.state, 'running');
+    assert.equal(state.validationRuns.length, 1);
   });
 
   it('refuses start while the Postgres kill switch is active', async () => {

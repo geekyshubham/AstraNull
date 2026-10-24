@@ -135,6 +135,19 @@ async function withRuntime(t, runtimeConfig, callback) {
   });
 }
 
+function blockBudget(runtime) {
+  // The group safety policy is advisory; the only deferring denial left is the tenant allowance.
+  // Postgres admissions do not read the store-backed subscription yet, so simulate the denial.
+  const real = runtime.services.testRuns.startTestRun.bind(runtime.services.testRuns);
+  const state = { blocked: true };
+  runtime.services.testRuns.startTestRun = async (ctx, body, options, extra) => (
+    state.blocked && body.target_id === 'tgt_epc_alt'
+      ? { error: 'entitlement_limit_exceeded', status: 403 }
+      : real(ctx, body, options, extra)
+  );
+  return state;
+}
+
 function requestBody(ids, mode, extra = {}) {
   return {
     mode,
@@ -314,10 +327,10 @@ describe('postgres entry-path comparison lifecycle', () => {
     });
   });
 
-  it('defers on budgets, advances exactly once under concurrent ticks, and honors the feature gate', { timeout: 180_000 }, async (t) => {
+  it('defers on the allowance, advances exactly once under concurrent ticks, and ignores the parked feature flag', { timeout: 180_000 }, async (t) => {
     await withRuntime(t, SIMULATION, async ({ runtime, ownerPool, pv, comparisons, ids }) => {
       const pair = { entry_path_ids: [ids.tgt_epc_app, ids.tgt_epc_alt] };
-      await ownerPool.query(`UPDATE target_groups SET safety_policy = '{"max_runs_per_hour": 1}'::jsonb WHERE id = 'tg_epc_alt'`);
+      const budget = blockBudget(runtime);
       const { started } = await start(pv, ids, SIMULATION, {}, pair);
       assert.equal(started.status, 'running');
       const alt = started.items.find((row) => row.entry_path_id === ids.tgt_epc_alt);
@@ -331,7 +344,7 @@ describe('postgres entry-path comparison lifecycle', () => {
       assert.equal(await runs(ownerPool, 'tgt_epc_alt'), 0);
       assert.equal(executionState(await pv.getEntryPathComparison(CTX, started.id), ids.tgt_epc_alt).execution_state, 'deferred');
 
-      await ownerPool.query(`UPDATE target_groups SET safety_policy = '{}'::jsonb WHERE id = 'tg_epc_alt'`);
+      budget.blocked = false;
       await Promise.all(Array.from({ length: 4 }, () => comparisons.advanceDueEntryPathComparisons(CTX, { runtimeConfig: SIMULATION, now: alt.deferred_until })));
       assert.equal(await runs(ownerPool, 'tgt_epc_alt'), 1);
       const done = await finalizeOpenRuns(runtime, pv, started.id);
@@ -340,26 +353,28 @@ describe('postgres entry-path comparison lifecycle', () => {
       assert.equal(await audits(ownerPool, 'entry_path_comparison.completed'), 1);
       assert.equal(await audits(ownerPool, 'entry_path_comparison.evaluated'), 1);
 
-      await ownerPool.query(`UPDATE target_groups SET safety_policy = '{"max_runs_per_hour": 1}'::jsonb WHERE id = 'tg_epc_alt'`);
+      budget.blocked = true;
       const gated = await start(pv, ids, SIMULATION, {}, pair);
       const gatedAlt = gated.started.items.find((row) => row.entry_path_id === ids.tgt_epc_alt);
       assert.equal(gatedAlt.execution_state, 'deferred');
       const before = await runs(ownerPool);
+      // The feature flag is a deployment switch that is always on, so the deferred item still runs.
       comparisons.configureEntryPathComparisonRuntime(GATE_OFF);
+      budget.blocked = false;
       await comparisons.advanceDueEntryPathComparisons(CTX, { now: gatedAlt.deferred_until });
       const waiting = await pv.getEntryPathComparison(CTX, gated.started.id);
       assert.equal(waiting.status, 'running');
-      assert.equal(waiting.cancel_reason, 'protection_validation_disabled');
-      assert.equal(executionState(waiting, ids.tgt_epc_alt).skip_reason, 'protection_validation_disabled');
-      assert.equal(executionState(waiting, ids.tgt_epc_alt).test_run_id, null);
+      assert.equal(waiting.cancel_reason, null);
+      assert.equal(executionState(waiting, ids.tgt_epc_alt).execution_state, 'started');
+      assert.ok(executionState(waiting, ids.tgt_epc_alt).test_run_id);
+      assert.equal(await runs(ownerPool), before + 1);
       const off = await finalizeOpenRuns(runtime, pv, gated.started.id);
-      assert.equal(off.status, 'cancelled');
-      assert.equal(await runs(ownerPool), before);
+      assert.equal(off.status, 'completed');
       const row = await ownerPool.query(
         `SELECT status FROM entry_path_comparison_items WHERE tenant_id = $1 AND comparison_id = $2 AND entry_path_id = $3`,
         [TENANT, gated.started.id, ids.tgt_epc_alt],
       );
-      assert.equal(row.rows[0].status, 'cancelled');
+      assert.equal(row.rows[0].status, 'completed');
     });
   });
 
@@ -414,7 +429,7 @@ describe('postgres entry-path comparison lifecycle', () => {
   it('resumes deferred items and orphaned reconcile requests from the runner tick alone, and bounds repeated deferrals', { timeout: 180_000 }, async (t) => {
     await withRuntime(t, SIMULATION, async ({ runtime, ownerPool, pv, comparisons, ids }) => {
       const pair = { entry_path_ids: [ids.tgt_epc_app, ids.tgt_epc_alt] };
-      await ownerPool.query(`UPDATE target_groups SET safety_policy = '{"max_runs_per_hour": 1}'::jsonb WHERE id = 'tg_epc_alt'`);
+      const budget = blockBudget(runtime);
       const { started } = await start(pv, ids, SIMULATION, {}, pair);
       const primary = started.items.find((row) => row.entry_path_id === ids.tgt_epc_app);
       assert.equal(executionState({ execution: started.items }, ids.tgt_epc_alt).execution_state, 'deferred');
@@ -433,7 +448,7 @@ describe('postgres entry-path comparison lifecycle', () => {
       assert.equal(attempts.rows[0].attempts, 0);
       assert.equal(await runs(ownerPool, 'tgt_epc_alt'), 0);
 
-      await ownerPool.query(`UPDATE target_groups SET safety_policy = '{}'::jsonb WHERE id = 'tg_epc_alt'`);
+      budget.blocked = false;
       await ownerPool.query(
         `UPDATE entry_path_comparison_items SET deferred_until = NOW() - interval '1 second'
          WHERE tenant_id = $1 AND comparison_id = $2 AND entry_path_id = $3`,
@@ -463,7 +478,7 @@ describe('postgres entry-path comparison lifecycle', () => {
       assert.ok(done.execution.every((row) => row.execution_state === 'finalized'));
       assert.ok(done.evaluation_id, 'runner tick also links the evaluation');
 
-      await ownerPool.query(`UPDATE target_groups SET safety_policy = '{"max_runs_per_hour": 1}'::jsonb WHERE id = 'tg_epc_alt'`);
+      budget.blocked = true;
       const capped = await start(pv, ids, SIMULATION, {}, pair);
       const startedAt = Date.parse(capped.started.items.find((row) => row.entry_path_id === ids.tgt_epc_app).deferred_until ?? new Date().toISOString());
       const later = new Date(Math.max(startedAt, Date.now()) + 25 * 60 * 60 * 1000).toISOString();
