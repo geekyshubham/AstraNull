@@ -5,7 +5,8 @@ Tracks implementation of the [resource-exhaustion taxonomy](19-resource-exhausti
 **Source of truth:** `src/contracts/resourceExhaustionTaxonomy.mjs`<br>
 **Validate:** `npm run vector:taxonomy:validate`<br>
 **Progress tracker:** `PROGRESS.md` §4.1<br>
-**Full family build spec:** [21-resource-exhaustion-family-build-spec.md](21-resource-exhaustion-family-build-spec.md)
+**Full family build spec:** [21-resource-exhaustion-family-build-spec.md](21-resource-exhaustion-family-build-spec.md)<br>
+**Current gap register:** [26-check-and-detection-gap-analysis-2026-10-24.md](26-check-and-detection-gap-analysis-2026-10-24.md) — the 2026-10-24 audit of hollow checks, detection defects and missing families (DET-027–DET-047, `PROGRESS.md` §4.2).
 
 ## Task summary
 

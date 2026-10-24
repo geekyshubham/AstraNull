@@ -204,6 +204,16 @@ Framer edge-hosting and both Fastly cache-node header formats have separate CDN 
 Typed positive DNS provider evidence survives an HTTP deadline as an explicitly partial,
 inconclusive observation; WAF remains unknown and effectiveness untested.
 
+## Known divergences from this document
+
+The 2026-10-24 audit found that several promises below are not implemented, and that the confidence
+table does not match the code. The authoritative list, with file:line evidence and the fixing task, is
+[Check and Detection Gap Analysis §2.6](26-check-and-detection-gap-analysis-2026-10-24.md#26-doccode-divergence).
+In short: TLS issuer/SAN is never collected, one spoofable header is enough for a CDN claim, the
+weights differ from the table above, the conflict penalty is multiplicative, the direct-origin term
+does not exist, and the corpus is wafw00f plugin data rather than AstraNull plugin data. DET-030,
+DET-041 and DET-047 close these.
+
 ## Done criteria
 
 - Product catalog is versioned and testable.

@@ -1,5 +1,10 @@
 # Check Library
 
+> **Current gap register:** the 2026-10-24 audit found 49 hollow checks, 28 evasion checks that send
+> zero requests and 15 class-marker checks that always return `not_run`. See
+> [Check and Detection Gap Analysis](26-check-and-detection-gap-analysis-2026-10-24.md) and
+> `PROGRESS.md` §4.2 (DET-027–DET-047).
+
 ## Check object schema
 
 | Field | Description |
